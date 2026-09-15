@@ -28,6 +28,9 @@ jobs:
         with:
           gradle-version: '8.10.2'
 
+      - name: Restore stable debug signing key
+        run: base64 --decode .github/balancepoint-debug.keystore.b64 > .github/balancepoint-debug.keystore
+
       - name: Build debug APK
         run: gradle assembleDebug
 
