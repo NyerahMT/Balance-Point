@@ -10,11 +10,23 @@ android {
         applicationId 'com.nyerahworks.balancepoint'
         minSdk 23
         targetSdk 35
-        versionCode 1
-        versionName '0.1.0'
+        versionCode 2
+        versionName '0.1.1'
+    }
+
+    signingConfigs {
+        debug {
+            storeFile rootProject.file('.github/balancepoint-debug.keystore')
+            storePassword 'balancepoint'
+            keyAlias 'balancepoint'
+            keyPassword 'balancepoint'
+        }
     }
 
     buildTypes {
+        debug {
+            signingConfig signingConfigs.debug
+        }
         release {
             minifyEnabled true
             shrinkResources true
