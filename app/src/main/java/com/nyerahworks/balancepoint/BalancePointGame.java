@@ -40,7 +40,7 @@ public final class BalancePointGame extends ApplicationAdapter {
     private static final float MASS = 212f;
     private static final float GRAVITY = 9.81f;
     private static final float PITCH_INERTIA = 126f;
-    private static final float COM_FORWARD = 0.66f;
+    private static final float COM_FORWARD = 0.60f;
     private static final float COM_HEIGHT = 0.70f;
     private static final float RIDER_SHIFT = 0.14f;
 
