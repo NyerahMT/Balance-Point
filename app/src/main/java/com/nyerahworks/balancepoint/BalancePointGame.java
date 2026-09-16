@@ -296,16 +296,11 @@ public final class BalancePointGame extends ApplicationAdapter {
         boolean cameraTouch = false;
         boolean throttleTouch = false;
         boolean brakeTouch = false;
-        boolean joystickTouch = false;
+        boolean leftArrowTouch = false;
+        boolean rightArrowTouch = false;
         boolean lookTouch = false;
         float requestedThrottle = 0f;
         float requestedBrake = 0f;
-        float requestedSteer = 0f;
-        float requestedRiderLean = 0f;
-
-        float joyCX = w * 0.82f;
-        float joyCYFromTop = h * 0.74f;
-        float joyRadius = Math.min(w, h) * 0.16f;
 
         for (int pointer = 0; pointer < 8; pointer++) {
             if (!Gdx.input.isTouched(pointer)) continue;
@@ -320,46 +315,33 @@ public final class BalancePointGame extends ApplicationAdapter {
                 continue;
             }
 
-            // Left vertical throttle slider.
-            if (x < 0.19f && y > 0.46f && y < 0.90f) {
+            // Right-side vertical throttle slider.
+            if (x > 0.82f && y > 0.46f && y < 0.90f) {
                 throttleTouch = true;
                 requestedThrottle = Math.max(requestedThrottle,
                         MathUtils.clamp((0.88f - y) / 0.40f, 0f, 1f));
                 continue;
             }
 
-            // Rear brake sits right beside the throttle slider for quick catches.
-            if (x >= 0.19f && x < 0.32f && y > 0.70f) {
+            // Rear brake sits just left of the throttle for the right thumb.
+            if (x >= 0.70f && x <= 0.82f && y > 0.70f) {
                 brakeTouch = true;
                 float brake = MathUtils.clamp((y - 0.70f) / 0.24f, 0.35f, 1f);
                 requestedBrake = Math.max(requestedBrake, brake);
                 continue;
             }
 
-            // Right joystick: X = steering / side lean, Y = rider fore-aft weight shift.
-            float jx = (px - joyCX) / joyRadius;
-            float jy = (joyCYFromTop - py) / joyRadius;
-            float jLen2 = jx * jx + jy * jy;
-            if (x > 0.63f && y > 0.48f && jLen2 < 2.25f) {
-                joystickTouch = true;
-                float len = (float) Math.sqrt(jLen2);
-                if (len > 1f) {
-                    jx /= len;
-                    jy /= len;
-                }
-                float steerMagnitude = Math.abs(jx);
-                if (steerMagnitude <= 0.16f) {
-                    requestedSteer = 0f;
-                } else {
-                    float normalized = (steerMagnitude - 0.16f) / 0.84f;
-                    float shaped = normalized * normalized;
-                    requestedSteer = -Math.signum(jx) * shaped;
-                }
-                requestedRiderLean = Math.abs(jy) < 0.08f ? 0f : jy;
+            // Left/right steering arrows. Digital touch, analog filtered steering.
+            if (x >= 0.03f && x < 0.16f && y > 0.66f && y < 0.91f) {
+                leftArrowTouch = true;
+                continue;
+            }
+            if (x >= 0.17f && x < 0.30f && y > 0.66f && y < 0.91f) {
+                rightArrowTouch = true;
                 continue;
             }
 
-            // Middle-screen drag is free-look and never feeds the bike controls.
+            // Middle-screen drag remains free-look and never feeds steering.
             if (x > 0.30f && x < 0.70f && y > 0.10f && y < 0.66f) {
                 lookTouch = true;
                 lookYaw -= Gdx.input.getDeltaX(pointer) * 0.0048f;
@@ -377,19 +359,27 @@ public final class BalancePointGame extends ApplicationAdapter {
 
         throttleTarget = throttleTouch ? requestedThrottle : 0f;
         rearBrakeTarget = brakeTouch ? requestedBrake : 0f;
-        steerTarget = joystickTouch ? requestedSteer : 0f;
-        riderLeanTarget = joystickTouch ? requestedRiderLean : 0f;
+
+        if (leftArrowTouch == rightArrowTouch) {
+            steerTarget = 0f;
+        } else {
+            // Positive steer is screen-left in the current motorcycle model.
+            steerTarget = leftArrowTouch ? 0.65f : -0.65f;
+        }
+
+        // Fore/aft rider lean is intentionally disabled.
+        riderLean = 0f;
+        riderLeanTarget = 0f;
 
         throttle = approach(throttle, throttleTarget,
                 (throttleTarget > throttle ? 7.0f : 11f) * dt);
         rearBrake = approach(rearBrake, rearBrakeTarget,
                 (rearBrakeTarget > rearBrake ? 16f : 20f) * dt);
 
-        float steerResponse = 2.0f + Math.min(speed * 0.025f, 0.8f);
+        // Digital arrows feed a damped analog steering state.
+        float steerResponse = 1.65f + Math.min(speed * 0.018f, 0.55f);
         steer += (steerTarget - steer) * Math.min(1f, dt * steerResponse);
-        riderLean += (riderLeanTarget - riderLean) * Math.min(1f, dt * 5.0f);
 
-        // Free-look recenters gently after release instead of snapping back.
         if (!looking) {
             lookYaw *= Math.max(0f, 1f - dt * 1.65f);
             lookPitch *= Math.max(0f, 1f - dt * 1.65f);
@@ -698,8 +688,8 @@ public final class BalancePointGame extends ApplicationAdapter {
         shapes.setColor(0f, 0f, 0f, 0.45f);
         shapes.rect(18f, h - 142f, 300f, 120f);
 
-        // Left throttle slider.
-        float sliderX = w * 0.09f;
+        // Right-side throttle slider.
+        float sliderX = w * 0.91f;
         float sliderBottom = h * 0.12f;
         float sliderTop = h * 0.52f;
         shapes.setColor(1f, 1f, 1f, 0.14f);
@@ -708,22 +698,31 @@ public final class BalancePointGame extends ApplicationAdapter {
         shapes.setColor(1f, 1f, 1f, 0.48f);
         shapes.circle(sliderX, knobY, min * 0.045f, 20);
 
-        // Rear brake button beside throttle.
-        float brakeX = w * 0.245f;
+        // Rear brake beside throttle.
+        float brakeX = w * 0.755f;
         float brakeY = h * 0.17f;
         shapes.setColor(1f, 1f, 1f, rearBrakeTarget > 0f ? 0.50f : 0.16f);
         shapes.circle(brakeX, brakeY, min * 0.065f, 24);
 
-        // Right lean joystick.
-        float joyX = w * 0.82f;
-        float joyY = h * 0.26f;
-        float joyR = min * 0.16f;
-        shapes.setColor(1f, 1f, 1f, 0.13f);
-        shapes.circle(joyX, joyY, joyR, 30);
-        shapes.setColor(1f, 1f, 1f, 0.40f);
-        shapes.circle(joyX - steerTarget * joyR * 0.72f,
-                joyY + riderLeanTarget * joyR * 0.72f,
-                joyR * 0.33f, 24);
+        // Left-side steering arrows.
+        float steerLeftX = w * 0.095f;
+        float steerRightX = w * 0.235f;
+        float steerY = h * 0.18f;
+        float steerR = min * 0.072f;
+
+        shapes.setColor(1f, 1f, 1f, steerTarget > 0.05f ? 0.46f : 0.14f);
+        shapes.circle(steerLeftX, steerY, steerR, 24);
+        shapes.setColor(1f, 1f, 1f, 0.78f);
+        shapes.triangle(steerLeftX - steerR * 0.38f, steerY,
+                steerLeftX + steerR * 0.26f, steerY + steerR * 0.42f,
+                steerLeftX + steerR * 0.26f, steerY - steerR * 0.42f);
+
+        shapes.setColor(1f, 1f, 1f, steerTarget < -0.05f ? 0.46f : 0.14f);
+        shapes.circle(steerRightX, steerY, steerR, 24);
+        shapes.setColor(1f, 1f, 1f, 0.78f);
+        shapes.triangle(steerRightX + steerR * 0.38f, steerY,
+                steerRightX - steerR * 0.26f, steerY + steerR * 0.42f,
+                steerRightX - steerR * 0.26f, steerY - steerR * 0.42f);
 
         shapes.setColor(0f, 0f, 0f, 0.42f);
         shapes.rect(w - 145f, h - 66f, 125f, 45f);
@@ -759,7 +758,7 @@ public final class BalancePointGame extends ApplicationAdapter {
 
         font.draw(spriteBatch, "THROTTLE", sliderX - 31f, sliderTop + 22f);
         font.draw(spriteBatch, "BRAKE", brakeX - 23f, brakeY + 5f);
-        font.draw(spriteBatch, "LEAN", joyX - 21f, joyY + 5f);
+        font.draw(spriteBatch, "STEER", w * 0.145f, steerY + steerR + 20f);
         font.draw(spriteBatch, "DRAG CENTER TO LOOK", w * 0.405f, h * 0.62f);
         font.draw(spriteBatch, cockpitCamera ? "CAM: HELMET" : "CAM: CHASE", w - 133f, h - 39f);
 
