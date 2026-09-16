@@ -27,7 +27,7 @@ import java.util.zip.InflaterInputStream;
  * model-loader dependency on the low-end GMEE target.
  */
 final class DirtBikeMeshLoader {
-    private static final int CHUNK_COUNT = 7;
+    private static final int CHUNK_COUNT = 4;
     private static final int MAGIC = 0x42505131; // "BPQ1"
 
     private DirtBikeMeshLoader() {}
@@ -36,7 +36,7 @@ final class DirtBikeMeshLoader {
                                 Material bodyMaterial,
                                 Material engineMaterial,
                                 Material wheelMaterial) throws IOException {
-        StringBuilder encoded = new StringBuilder(112000);
+        StringBuilder encoded = new StringBuilder(56000);
         for (int i = 0; i < CHUNK_COUNT; i++) {
             // Each chunk is a raw slice of one Base64 stream. trim() protects the
             // decoder from an accidental trailing newline in a repository asset.
