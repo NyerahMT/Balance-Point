@@ -51,10 +51,12 @@ public final class BalancePointGame extends ApplicationAdapter {
     private static final float ROLLING_RESISTANCE = 0.017f;
     private static final float AERO_DRAG = 0.34f;
 
-    private static final float PITCH_DAMPING_BASE = 150f;
-    private static final float PITCH_DAMPING_BALANCE = 700f;
-    private static final float BALANCE_RATE_DECAY = 7.5f;
-    private static final float BALANCE_DAMPING_BAND = 26f * MathUtils.degreesToRadians;
+    private static final float PITCH_DAMPING_BASE = 85f;
+    private static final float PITCH_DAMPING_BALANCE = 360f;
+    private static final float BALANCE_RATE_DECAY = 3.2f;
+    private static final float BALANCE_FREE_RATE = 0.20f;
+    private static final float BALANCE_FULL_RATE = 0.95f;
+    private static final float BALANCE_DAMPING_BAND = 18f * MathUtils.degreesToRadians;
     private static final float LOOP_ANGLE = 103f * MathUtils.degreesToRadians;
 
     private final Array<Model> ownedModels = new Array<>();
@@ -463,8 +465,18 @@ public final class BalancePointGame extends ApplicationAdapter {
             float comWorldHeight = effectiveComForward * sinPitch + COM_HEIGHT * cosPitch;
             float balanceAngle = (float) Math.atan2(effectiveComForward, COM_HEIGHT);
             float balanceDistance = Math.abs(pitch - balanceAngle);
-            float proximity = 1f - MathUtils.clamp(balanceDistance / BALANCE_DAMPING_BAND, 0f, 1f);
-            float angularDamping = PITCH_DAMPING_BASE + proximity * PITCH_DAMPING_BALANCE;
+            float proximityLinear = 1f - MathUtils.clamp(balanceDistance / BALANCE_DAMPING_BAND, 0f, 1f);
+            float proximity = proximityLinear * proximityLinear;
+
+            // Slow, deliberate corrections receive almost no assist. Damping ramps
+            // in only when pitch rate gets large near the balance region.
+            float rateMagnitude = Math.abs(pitchVelocity);
+            float rateAssist = MathUtils.clamp(
+                    (rateMagnitude - BALANCE_FREE_RATE) / (BALANCE_FULL_RATE - BALANCE_FREE_RATE),
+                    0f, 1f);
+            rateAssist *= rateAssist;
+            float assist = proximity * rateAssist;
+            float angularDamping = PITCH_DAMPING_BASE + assist * PITCH_DAMPING_BALANCE;
 
             float pitchTorque = MASS * longitudinalAcceleration * comWorldHeight
                     - MASS * GRAVITY * comWorldForward
@@ -472,13 +484,12 @@ public final class BalancePointGame extends ApplicationAdapter {
 
             pitchVelocity += (pitchTorque / PITCH_INERTIA) * dt;
 
-            // True angular-rate damper: near balance point, rotational velocity is
-            // dissipated aggressively while gravity/drive/brake torque still decide
-            // which direction the bike moves. This stabilizes corrections without
-            // auto-holding a target wheelie angle.
-            float rateDecay = 1.15f + proximity * BALANCE_RATE_DECAY;
+            // Progressive safety net rather than an auto-balance system: normal
+            // balance-point movement stays in the rider's hands, while fast pitch
+            // excursions are softened enough to remain recoverable.
+            float rateDecay = 0.45f + assist * BALANCE_RATE_DECAY;
             pitchVelocity *= (float) Math.exp(-rateDecay * dt);
-            pitchVelocity = MathUtils.clamp(pitchVelocity, -1.65f, 1.65f);
+            pitchVelocity = MathUtils.clamp(pitchVelocity, -1.90f, 1.90f);
             pitch += pitchVelocity * dt;
 
             if (pitch <= 0f) {
