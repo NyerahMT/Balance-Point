@@ -98,6 +98,12 @@ public final class BalancePointGame extends ApplicationAdapter {
     private ModelInstance riderArmRight;
     private ModelInstance frontNumberPlate;
 
+    private ModelInstance importedBody;
+    private ModelInstance importedEngine;
+    private ModelInstance importedFrontWheel;
+    private ModelInstance importedRearWheel;
+    private boolean importedBikeLoaded;
+
     private float speed;
     private float bikeZ;
     private float bikeX;
@@ -253,6 +259,23 @@ public final class BalancePointGame extends ApplicationAdapter {
         riderArmLeft = new ModelInstance(limbM);
         riderArmRight = new ModelInstance(limbM);
         frontNumberPlate = new ModelInstance(plateM);
+
+        // Load the optimized DirtBike.blend geometry. The procedural bike remains
+        // available as a no-crash fallback if an asset is ever missing or corrupt.
+        try {
+            ModelInstance[] imported = DirtBikeMeshLoader.load(ownedModels,
+                    material(0.08f, 0.52f, 0.12f),
+                    material(0.16f, 0.17f, 0.18f),
+                    material(0.045f, 0.048f, 0.052f));
+            importedBody = imported[0];
+            importedEngine = imported[1];
+            importedFrontWheel = imported[2];
+            importedRearWheel = imported[3];
+            importedBikeLoaded = true;
+        } catch (Exception e) {
+            importedBikeLoaded = false;
+            Gdx.app.error("BalancePoint", "Could not load imported dirt bike; using fallback", e);
+        }
     }
 
     @Override
@@ -619,6 +642,22 @@ public final class BalancePointGame extends ApplicationAdapter {
         setPart(riderArmRight, 0.20f, 0.97f, 0.82f);
         riderArmLeft.transform.rotate(Vector3.X, 69f);
         riderArmRight.transform.rotate(Vector3.X, 69f);
+
+        if (importedBikeLoaded) {
+            importedBody.transform.set(bikeRoot);
+            importedEngine.transform.set(bikeRoot);
+
+            float importedSpinDeg = -wheelSpin * MathUtils.radiansToDegrees;
+            importedRearWheel.transform.set(bikeRoot)
+                    .rotate(Vector3.X, importedSpinDeg);
+
+            float visualSteerDeg = -steer * MathUtils.lerp(13f, 5f,
+                    MathUtils.clamp(speed / 30f, 0f, 1f));
+            importedFrontWheel.transform.set(bikeRoot)
+                    .translate(0f, 0f, WHEELBASE)
+                    .rotate(Vector3.Y, visualSteerDeg)
+                    .rotate(Vector3.X, importedSpinDeg);
+        }
     }
 
     private void setPart(ModelInstance m, float x, float y, float z) {
@@ -663,6 +702,22 @@ public final class BalancePointGame extends ApplicationAdapter {
     }
 
     private void renderBike() {
+        if (importedBikeLoaded) {
+            modelBatch.render(importedBody, environment);
+            modelBatch.render(importedEngine, environment);
+            modelBatch.render(importedRearWheel, environment);
+            modelBatch.render(importedFrontWheel, environment);
+
+            // Keep the lightweight existing rider and steering hardware for this
+            // first import pass; the source model has these as separate pieces too.
+            modelBatch.render(forkLeft, environment); modelBatch.render(forkRight, environment);
+            modelBatch.render(handlebar, environment);
+            modelBatch.render(riderTorso, environment); modelBatch.render(riderHead, environment);
+            modelBatch.render(riderLegLeft, environment); modelBatch.render(riderLegRight, environment);
+            modelBatch.render(riderArmLeft, environment); modelBatch.render(riderArmRight, environment);
+            return;
+        }
+
         modelBatch.render(rearWheel, environment); modelBatch.render(frontWheel, environment);
         modelBatch.render(rearHub, environment); modelBatch.render(frontHub, environment);
         modelBatch.render(frame, environment); modelBatch.render(tank, environment);
