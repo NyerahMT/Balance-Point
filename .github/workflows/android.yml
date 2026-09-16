@@ -28,45 +28,6 @@ jobs:
         with:
           gradle-version: '8.11.1'
 
-      - name: Apply progressive wheelie assist tuning
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path('app/src/main/java/com/nyerahworks/balancepoint/BalancePointGame.java')
-          text = path.read_text()
-
-          old_constants = '''    private static final float PITCH_DAMPING_BASE = 150f;\n    private static final float PITCH_DAMPING_BALANCE = 700f;\n    private static final float BALANCE_RATE_DECAY = 7.5f;\n    private static final float BALANCE_DAMPING_BAND = 26f * MathUtils.degreesToRadians;'''
-          new_constants = '''    private static final float PITCH_DAMPING_BASE = 85f;\n    private static final float PITCH_DAMPING_BALANCE = 360f;\n    private static final float BALANCE_RATE_DECAY = 3.2f;\n    private static final float BALANCE_FREE_RATE = 0.20f;\n    private static final float BALANCE_FULL_RATE = 0.95f;\n    private static final float BALANCE_DAMPING_BAND = 18f * MathUtils.degreesToRadians;'''
-
-          old_proximity = '''            float balanceDistance = Math.abs(pitch - balanceAngle);\n            float proximity = 1f - MathUtils.clamp(balanceDistance / BALANCE_DAMPING_BAND, 0f, 1f);\n            float angularDamping = PITCH_DAMPING_BASE + proximity * PITCH_DAMPING_BALANCE;'''
-          new_proximity = '''            float balanceDistance = Math.abs(pitch - balanceAngle);\n            float proximityLinear = 1f - MathUtils.clamp(balanceDistance / BALANCE_DAMPING_BAND, 0f, 1f);\n            float proximity = proximityLinear * proximityLinear;\n\n            // Slow, deliberate corrections receive almost no assist. Damping ramps\n            // in only when pitch rate gets large near the balance region.\n            float rateMagnitude = Math.abs(pitchVelocity);\n            float rateAssist = MathUtils.clamp(\n                    (rateMagnitude - BALANCE_FREE_RATE) / (BALANCE_FULL_RATE - BALANCE_FREE_RATE),\n                    0f, 1f);\n            rateAssist *= rateAssist;\n            float assist = proximity * rateAssist;\n            float angularDamping = PITCH_DAMPING_BASE + assist * PITCH_DAMPING_BALANCE;'''
-
-          old_rate = '''            // True angular-rate damper: near balance point, rotational velocity is\n            // dissipated aggressively while gravity/drive/brake torque still decide\n            // which direction the bike moves. This stabilizes corrections without\n            // auto-holding a target wheelie angle.\n            float rateDecay = 1.15f + proximity * BALANCE_RATE_DECAY;\n            pitchVelocity *= (float) Math.exp(-rateDecay * dt);\n            pitchVelocity = MathUtils.clamp(pitchVelocity, -1.65f, 1.65f);'''
-          new_rate = '''            // Progressive safety net rather than an auto-balance system: normal\n            // balance-point movement stays in the rider's hands, while fast pitch\n            // excursions are softened enough to remain recoverable.\n            float rateDecay = 0.45f + assist * BALANCE_RATE_DECAY;\n            pitchVelocity *= (float) Math.exp(-rateDecay * dt);\n            pitchVelocity = MathUtils.clamp(pitchVelocity, -1.90f, 1.90f);'''
-
-          for old, new in ((old_constants, new_constants), (old_proximity, new_proximity), (old_rate, new_rate)):
-              if old not in text:
-                  if new in text:
-                      continue
-                  raise SystemExit('Expected source pattern not found:\n' + old)
-              text = text.replace(old, new, 1)
-
-          path.write_text(text)
-          PY
-
-      - name: Commit progressive wheelie tuning
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: |
-          if ! git diff --quiet -- app/src/main/java/com/nyerahworks/balancepoint/BalancePointGame.java; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add app/src/main/java/com/nyerahworks/balancepoint/BalancePointGame.java
-            git commit -m "Make balance-point damping skill-based [skip ci]"
-            git push
-          fi
-
       - name: Restore stable debug signing key
         run: base64 --decode .github/balancepoint-debug.keystore.b64 > .github/balancepoint-debug.keystore
 
