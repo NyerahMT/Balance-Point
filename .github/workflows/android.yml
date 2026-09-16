@@ -18,33 +18,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Repair invalid DirtBike Base64 tail
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          path = Path('app/src/main/assets/models/dirtbike_qmesh_3.txt')
-          text = path.read_text().strip()
-          alphabet = set('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=')
-          bad = next((i for i, ch in enumerate(text) if ch not in alphabet), None)
-          if bad is not None:
-              tail = text[bad:]
-              if len(tail) > 64:
-                  raise SystemExit(f'Refusing to truncate {len(tail)} chars from DirtBike chunk 3')
-              print(f'Removing invalid DirtBike tail at char {bad}: {tail!r}')
-              path.write_text(text[:bad])
-          else:
-              print('DirtBike chunk 3 contains only Base64 characters')
-          PY
-          if ! git diff --quiet -- app/src/main/assets/models/dirtbike_qmesh_3.txt; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add app/src/main/assets/models/dirtbike_qmesh_3.txt
-            git commit -m "Repair DirtBike mesh Base64 tail"
-            git push origin HEAD:main || echo "Another runner already pushed the repaired asset; continuing with local repair"
-          fi
-
       - name: Validate DirtBike mesh payload
         run: python3 tools/validate_dirtbike.py
 
@@ -93,33 +66,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Repair invalid DirtBike Base64 tail
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          path = Path('app/src/main/assets/models/dirtbike_qmesh_3.txt')
-          text = path.read_text().strip()
-          alphabet = set('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=')
-          bad = next((i for i, ch in enumerate(text) if ch not in alphabet), None)
-          if bad is not None:
-              tail = text[bad:]
-              if len(tail) > 64:
-                  raise SystemExit(f'Refusing to truncate {len(tail)} chars from DirtBike chunk 3')
-              print(f'Removing invalid DirtBike tail at char {bad}: {tail!r}')
-              path.write_text(text[:bad])
-          else:
-              print('DirtBike chunk 3 contains only Base64 characters')
-          PY
-          if ! git diff --quiet -- app/src/main/assets/models/dirtbike_qmesh_3.txt; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add app/src/main/assets/models/dirtbike_qmesh_3.txt
-            git commit -m "Repair DirtBike mesh Base64 tail"
-            git push origin HEAD:main || echo "Another runner already pushed the repaired asset; continuing with local repair"
-          fi
 
       - name: Validate DirtBike mesh payload
         run: python3 tools/validate_dirtbike.py
