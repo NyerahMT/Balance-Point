@@ -28,7 +28,7 @@ import java.util.zip.InflaterInputStream;
  * model-loader dependency on the low-end GMEE target.
  */
 final class DirtBikeMeshLoader {
-    private static final int CHUNK_COUNT = 8;
+    private static final int CHUNK_COUNT = 7;
     private static final int MAGIC = 0x42505131; // "BPQ1"
 
     private DirtBikeMeshLoader() {}
