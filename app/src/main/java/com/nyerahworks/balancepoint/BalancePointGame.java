@@ -46,7 +46,7 @@ public final class BalancePointGame extends ApplicationAdapter {
 
     private static final float TIRE_MU = 1.05f;
     private static final float MAX_ENGINE_FORCE = 2500f;
-    private static final float MAX_REAR_BRAKE_FORCE = 3200f;
+    private static final float MAX_REAR_BRAKE_FORCE = 3800f;
     private static final float ENGINE_POWER = 44000f;
     private static final float ROLLING_RESISTANCE = 0.017f;
     private static final float AERO_DRAG = 0.34f;
@@ -326,7 +326,7 @@ public final class BalancePointGame extends ApplicationAdapter {
             // Rear brake sits just left of the throttle for the right thumb.
             if (x >= 0.70f && x <= 0.82f && y > 0.70f) {
                 brakeTouch = true;
-                float brake = MathUtils.clamp((y - 0.70f) / 0.24f, 0.35f, 1f);
+                float brake = MathUtils.clamp((y - 0.70f) / 0.24f, 0.50f, 1f);
                 requestedBrake = Math.max(requestedBrake, brake);
                 continue;
             }
@@ -374,7 +374,7 @@ public final class BalancePointGame extends ApplicationAdapter {
         throttle = approach(throttle, throttleTarget,
                 (throttleTarget > throttle ? 7.0f : 11f) * dt);
         rearBrake = approach(rearBrake, rearBrakeTarget,
-                (rearBrakeTarget > rearBrake ? 16f : 20f) * dt);
+                (rearBrakeTarget > rearBrake ? 24f : 22f) * dt);
 
         // Digital arrows feed a damped analog steering state.
         float steerResponse = 1.65f + Math.min(speed * 0.018f, 0.55f);
@@ -415,7 +415,7 @@ public final class BalancePointGame extends ApplicationAdapter {
             rearNormalEstimate = MASS * GRAVITY * (WHEELBASE - effectiveComForward) / WHEELBASE
                     + MASS * longitudinalAcceleration * COM_HEIGHT / WHEELBASE;
         } else {
-            rearNormalEstimate = MASS * GRAVITY * Math.max(0.20f, MathUtils.cos(pitch));
+            rearNormalEstimate = MASS * GRAVITY;
         }
         rearNormalEstimate = Math.max(0f, rearNormalEstimate);
         float tractionLimit = TIRE_MU * rearNormalEstimate;
@@ -425,7 +425,7 @@ public final class BalancePointGame extends ApplicationAdapter {
 
         float brakeForce = 0f;
         if (rearBrake > 0f && absSpeed > 0.03f) {
-            brakeForce = Math.min(MAX_REAR_BRAKE_FORCE * rearBrake, tractionLimit * 0.95f);
+            brakeForce = Math.min(MAX_REAR_BRAKE_FORCE * rearBrake, tractionLimit * 0.98f);
             brakeForce = Math.min(brakeForce, absSpeed * MASS / Math.max(dt, 0.001f));
         }
 
