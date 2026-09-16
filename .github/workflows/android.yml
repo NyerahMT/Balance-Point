@@ -28,6 +28,77 @@ jobs:
         with:
           gradle-version: '8.11.1'
 
+      - name: Apply control and balance-point tuning
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('app/src/main/java/com/nyerahworks/balancepoint/BalancePointGame.java')
+          text = path.read_text()
+
+          replacements = [
+              (
+                  '''    private static final float PITCH_DAMPING_BASE = 105f;\n    private static final float PITCH_DAMPING_BALANCE = 170f;\n    private static final float BALANCE_DAMPING_BAND = 30f * MathUtils.degreesToRadians;''',
+                  '''    private static final float PITCH_DAMPING_BASE = 150f;\n    private static final float PITCH_DAMPING_BALANCE = 700f;\n    private static final float BALANCE_RATE_DECAY = 7.5f;\n    private static final float BALANCE_DAMPING_BAND = 26f * MathUtils.degreesToRadians;'''
+              ),
+              (
+                  '''            if (x < 0.19f && y > 0.24f && y < 0.90f) {\n                throttleTouch = true;\n                requestedThrottle = Math.max(requestedThrottle,\n                        MathUtils.clamp((0.88f - y) / 0.58f, 0f, 1f));''',
+                  '''            if (x < 0.19f && y > 0.46f && y < 0.90f) {\n                throttleTouch = true;\n                requestedThrottle = Math.max(requestedThrottle,\n                        MathUtils.clamp((0.88f - y) / 0.40f, 0f, 1f));'''
+              ),
+              (
+                  '''                requestedSteer = Math.abs(jx) < 0.06f ? 0f : jx;\n                requestedRiderLean = Math.abs(jy) < 0.06f ? 0f : jy;''',
+                  '''                float steerMagnitude = Math.abs(jx);\n                if (steerMagnitude <= 0.16f) {\n                    requestedSteer = 0f;\n                } else {\n                    float normalized = (steerMagnitude - 0.16f) / 0.84f;\n                    float shaped = normalized * normalized;\n                    requestedSteer = -Math.signum(jx) * shaped;\n                }\n                requestedRiderLean = Math.abs(jy) < 0.08f ? 0f : jy;'''
+              ),
+              (
+                  '''        float steerResponse = 3.2f + Math.min(speed * 0.045f, 1.6f);''',
+                  '''        float steerResponse = 2.0f + Math.min(speed * 0.025f, 0.8f);'''
+              ),
+              (
+                  '''            pitchVelocity += (pitchTorque / PITCH_INERTIA) * dt;\n            pitchVelocity = MathUtils.clamp(pitchVelocity, -2.2f, 2.2f);''',
+                  '''            pitchVelocity += (pitchTorque / PITCH_INERTIA) * dt;\n\n            // True angular-rate damper: near balance point, rotational velocity is\n            // dissipated aggressively while gravity/drive/brake torque still decide\n            // which direction the bike moves. This stabilizes corrections without\n            // auto-holding a target wheelie angle.\n            float rateDecay = 1.15f + proximity * BALANCE_RATE_DECAY;\n            pitchVelocity *= (float) Math.exp(-rateDecay * dt);\n            pitchVelocity = MathUtils.clamp(pitchVelocity, -1.65f, 1.65f);'''
+              ),
+              (
+                  '''        float maxSteerDeg = MathUtils.lerp(25f, 7f, speedBlend);''',
+                  '''        float maxSteerDeg = MathUtils.lerp(16f, 4.5f, speedBlend);'''
+              ),
+              (
+                  '''        float steeringAuthority = frontGrounded ? 1f : 0.24f;''',
+                  '''        float steeringAuthority = frontGrounded ? 1f : 0.14f;'''
+              ),
+              (
+                  '''        float sliderTop = h * 0.72f;''',
+                  '''        float sliderTop = h * 0.52f;'''
+              ),
+              (
+                  '''        shapes.circle(joyX + steerTarget * joyR * 0.72f,''',
+                  '''        shapes.circle(joyX - steerTarget * joyR * 0.72f,'''
+              ),
+          ]
+
+          changed = False
+          for old, new in replacements:
+              if old in text:
+                  text = text.replace(old, new, 1)
+                  changed = True
+              elif new not in text:
+                  raise SystemExit('Expected source pattern not found:\n' + old)
+
+          if changed:
+              path.write_text(text)
+          PY
+
+      - name: Commit tuned gameplay source
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          if ! git diff --quiet -- app/src/main/java/com/nyerahworks/balancepoint/BalancePointGame.java; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add app/src/main/java/com/nyerahworks/balancepoint/BalancePointGame.java
+            git commit -m "Tune throttle, steering and balance-point damping [skip ci]"
+            git push
+          fi
+
       - name: Restore stable debug signing key
         run: base64 --decode .github/balancepoint-debug.keystore.b64 > .github/balancepoint-debug.keystore
 
