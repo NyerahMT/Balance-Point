@@ -1,4 +1,4 @@
-name: Android APK
+name: Mobile Builds
 
 on:
   push:
@@ -11,7 +11,8 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  android:
+    name: Android APK
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -31,16 +32,16 @@ jobs:
       - name: Restore stable debug signing key
         run: base64 --decode .github/balancepoint-debug.keystore.b64 > .github/balancepoint-debug.keystore
 
-      - name: Build debug APK
-        run: gradle assembleDebug
+      - name: Build Android debug APK
+        run: gradle :app:assembleDebug --stacktrace
 
-      - name: Upload CI artifact
+      - name: Upload Android artifact
         uses: actions/upload-artifact@v4
         with:
-          name: BalancePoint-debug
+          name: BalancePoint-Android
           path: app/build/outputs/apk/debug/app-debug.apk
 
-      - name: Publish direct-download test APK
+      - name: Publish Android test APK
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -50,7 +51,62 @@ jobs:
             gh release upload dev-build BalancePoint-latest.apk --clobber
           else
             gh release create dev-build BalancePoint-latest.apk \
-              --title "Latest GMEE Test Build" \
-              --notes "Automatically updated development APK from main." \
+              --title "Latest Test Builds" \
+              --notes "Automatically updated Android and iOS development builds from main." \
+              --prerelease
+          fi
+
+  ios:
+    name: iOS unsigned IPA
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle 8.11.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+
+      - name: Build native iOS IPA
+        run: gradle :ios:createIPA -Probovm.archs=arm64 --stacktrace
+
+      - name: Verify IPA output
+        shell: bash
+        run: |
+          IPA_PATH="$(find ios/build/robovm -type f -name '*.ipa' | head -n 1)"
+          if [ -z "$IPA_PATH" ]; then
+            echo "RoboVM completed without producing an IPA"
+            find ios/build -maxdepth 5 -type f -print || true
+            exit 1
+          fi
+          echo "IPA produced at $IPA_PATH"
+          cp "$IPA_PATH" BalancePoint-latest-unsigned.ipa
+          test -s BalancePoint-latest-unsigned.ipa
+
+      - name: Upload iOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BalancePoint-iOS-unsigned
+          path: BalancePoint-latest-unsigned.ipa
+
+      - name: Publish unsigned iOS test IPA
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view dev-build >/dev/null 2>&1; then
+            gh release upload dev-build BalancePoint-latest-unsigned.ipa --clobber
+          else
+            gh release create dev-build BalancePoint-latest-unsigned.ipa \
+              --title "Latest Test Builds" \
+              --notes "Automatically updated Android and iOS development builds from main." \
               --prerelease
           fi

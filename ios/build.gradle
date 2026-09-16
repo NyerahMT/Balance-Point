@@ -1,0 +1,40 @@
+buildscript {
+    repositories {
+        mavenCentral()
+    }
+    dependencies {
+        classpath "com.mobidevelop.robovm:robovm-gradle-plugin:$robovmVersion"
+    }
+}
+
+apply plugin: 'java-library'
+apply plugin: 'robovm'
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_1_8
+    targetCompatibility = JavaVersion.VERSION_1_8
+}
+
+[compileJava, compileTestJava]*.options*.encoding = 'UTF-8'
+
+ext {
+    mainClassName = "com.nyerahworks.balancepoint.IOSLauncher"
+}
+
+launchIPhoneSimulator.dependsOn build
+launchIPadSimulator.dependsOn build
+launchIOSDevice.dependsOn build
+createIPA.dependsOn build
+
+robovm {
+    archs = "arm64"
+    iosSkipSigning = true
+}
+
+dependencies {
+    implementation "com.badlogicgames.gdx:gdx-backend-robovm-metalangle:$gdxVersion"
+    implementation "com.badlogicgames.gdx:gdx-platform:$gdxVersion:natives-ios"
+    implementation "com.mobidevelop.robovm:robovm-cocoatouch:$robovmVersion"
+    implementation "com.mobidevelop.robovm:robovm-rt:$robovmVersion"
+    implementation project(':core')
+}

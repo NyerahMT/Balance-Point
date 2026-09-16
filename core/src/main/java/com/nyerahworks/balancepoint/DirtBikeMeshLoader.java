@@ -1,7 +1,5 @@
 package com.nyerahworks.balancepoint;
 
-import android.util.Base64;
-
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.graphics.GL20;
 import com.badlogic.gdx.graphics.Mesh;
@@ -12,6 +10,7 @@ import com.badlogic.gdx.graphics.g3d.Model;
 import com.badlogic.gdx.graphics.g3d.ModelInstance;
 import com.badlogic.gdx.graphics.g3d.utils.ModelBuilder;
 import com.badlogic.gdx.utils.Array;
+import com.badlogic.gdx.utils.Base64Coder;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -42,7 +41,7 @@ final class DirtBikeMeshLoader {
             encoded.append(Gdx.files.internal("models/dirtbike_qmesh_" + i + ".txt").readString());
         }
 
-        byte[] compressed = Base64.decode(encoded.toString(), Base64.DEFAULT);
+        byte[] compressed = Base64Coder.decode(encoded.toString());
         byte[] unpacked = inflate(compressed);
         DataInputStream in = new DataInputStream(new ByteArrayInputStream(unpacked));
 
@@ -71,7 +70,6 @@ final class DirtBikeMeshLoader {
             float rangeY = maxY - minY;
             float rangeZ = maxZ - minZ;
 
-            // Positions are grouped before normals in BPQ1.
             for (int i = 0; i < vertexCount; i++) {
                 int base = i * 6;
                 vertices[base] = minX + (in.readUnsignedShort() / 65535f) * rangeX;
