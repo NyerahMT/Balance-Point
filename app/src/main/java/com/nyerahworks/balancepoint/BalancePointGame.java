@@ -51,9 +51,10 @@ public final class BalancePointGame extends ApplicationAdapter {
     private static final float ROLLING_RESISTANCE = 0.017f;
     private static final float AERO_DRAG = 0.34f;
 
-    private static final float PITCH_DAMPING_BASE = 105f;
-    private static final float PITCH_DAMPING_BALANCE = 170f;
-    private static final float BALANCE_DAMPING_BAND = 30f * MathUtils.degreesToRadians;
+    private static final float PITCH_DAMPING_BASE = 150f;
+    private static final float PITCH_DAMPING_BALANCE = 700f;
+    private static final float BALANCE_RATE_DECAY = 7.5f;
+    private static final float BALANCE_DAMPING_BAND = 26f * MathUtils.degreesToRadians;
     private static final float LOOP_ANGLE = 103f * MathUtils.degreesToRadians;
 
     private final Array<Model> ownedModels = new Array<>();
@@ -318,10 +319,10 @@ public final class BalancePointGame extends ApplicationAdapter {
             }
 
             // Left vertical throttle slider.
-            if (x < 0.19f && y > 0.24f && y < 0.90f) {
+            if (x < 0.19f && y > 0.46f && y < 0.90f) {
                 throttleTouch = true;
                 requestedThrottle = Math.max(requestedThrottle,
-                        MathUtils.clamp((0.88f - y) / 0.58f, 0f, 1f));
+                        MathUtils.clamp((0.88f - y) / 0.40f, 0f, 1f));
                 continue;
             }
 
@@ -344,8 +345,15 @@ public final class BalancePointGame extends ApplicationAdapter {
                     jx /= len;
                     jy /= len;
                 }
-                requestedSteer = Math.abs(jx) < 0.06f ? 0f : jx;
-                requestedRiderLean = Math.abs(jy) < 0.06f ? 0f : jy;
+                float steerMagnitude = Math.abs(jx);
+                if (steerMagnitude <= 0.16f) {
+                    requestedSteer = 0f;
+                } else {
+                    float normalized = (steerMagnitude - 0.16f) / 0.84f;
+                    float shaped = normalized * normalized;
+                    requestedSteer = -Math.signum(jx) * shaped;
+                }
+                requestedRiderLean = Math.abs(jy) < 0.08f ? 0f : jy;
                 continue;
             }
 
@@ -375,7 +383,7 @@ public final class BalancePointGame extends ApplicationAdapter {
         rearBrake = approach(rearBrake, rearBrakeTarget,
                 (rearBrakeTarget > rearBrake ? 16f : 20f) * dt);
 
-        float steerResponse = 3.2f + Math.min(speed * 0.045f, 1.6f);
+        float steerResponse = 2.0f + Math.min(speed * 0.025f, 0.8f);
         steer += (steerTarget - steer) * Math.min(1f, dt * steerResponse);
         riderLean += (riderLeanTarget - riderLean) * Math.min(1f, dt * 5.0f);
 
@@ -463,7 +471,14 @@ public final class BalancePointGame extends ApplicationAdapter {
                     - pitchVelocity * angularDamping;
 
             pitchVelocity += (pitchTorque / PITCH_INERTIA) * dt;
-            pitchVelocity = MathUtils.clamp(pitchVelocity, -2.2f, 2.2f);
+
+            // True angular-rate damper: near balance point, rotational velocity is
+            // dissipated aggressively while gravity/drive/brake torque still decide
+            // which direction the bike moves. This stabilizes corrections without
+            // auto-holding a target wheelie angle.
+            float rateDecay = 1.15f + proximity * BALANCE_RATE_DECAY;
+            pitchVelocity *= (float) Math.exp(-rateDecay * dt);
+            pitchVelocity = MathUtils.clamp(pitchVelocity, -1.65f, 1.65f);
             pitch += pitchVelocity * dt;
 
             if (pitch <= 0f) {
@@ -474,9 +489,9 @@ public final class BalancePointGame extends ApplicationAdapter {
         }
 
         float speedBlend = MathUtils.clamp(speed / 30f, 0f, 1f);
-        float maxSteerDeg = MathUtils.lerp(25f, 7f, speedBlend);
+        float maxSteerDeg = MathUtils.lerp(16f, 4.5f, speedBlend);
         float steerAngle = steer * maxSteerDeg * MathUtils.degreesToRadians;
-        float steeringAuthority = frontGrounded ? 1f : 0.24f;
+        float steeringAuthority = frontGrounded ? 1f : 0.14f;
         float yawRate = speed > 0.35f
                 ? (speed / WHEELBASE) * (float) Math.tan(steerAngle) * steeringAuthority
                 : 0f;
@@ -675,7 +690,7 @@ public final class BalancePointGame extends ApplicationAdapter {
         // Left throttle slider.
         float sliderX = w * 0.09f;
         float sliderBottom = h * 0.12f;
-        float sliderTop = h * 0.72f;
+        float sliderTop = h * 0.52f;
         shapes.setColor(1f, 1f, 1f, 0.14f);
         shapes.rect(sliderX - 16f, sliderBottom, 32f, sliderTop - sliderBottom);
         float knobY = sliderBottom + throttleTarget * (sliderTop - sliderBottom);
@@ -695,7 +710,7 @@ public final class BalancePointGame extends ApplicationAdapter {
         shapes.setColor(1f, 1f, 1f, 0.13f);
         shapes.circle(joyX, joyY, joyR, 30);
         shapes.setColor(1f, 1f, 1f, 0.40f);
-        shapes.circle(joyX + steerTarget * joyR * 0.72f,
+        shapes.circle(joyX - steerTarget * joyR * 0.72f,
                 joyY + riderLeanTarget * joyR * 0.72f,
                 joyR * 0.33f, 24);
 
