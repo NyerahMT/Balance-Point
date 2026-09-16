@@ -18,29 +18,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Repair truncated DirtBike asset tail
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          path = Path('app/src/main/assets/models/dirtbike_qmesh_3.txt')
-          suffix = '[... truncated ...]'
-          text = path.read_text()
-          if text.endswith(suffix):
-              path.write_text(text[:-len(suffix)])
-              print('Removed injected truncation marker from DirtBike chunk 3')
-          else:
-              print('DirtBike chunk 3 has no truncation marker')
-          PY
-          if ! git diff --quiet -- app/src/main/assets/models/dirtbike_qmesh_3.txt; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add app/src/main/assets/models/dirtbike_qmesh_3.txt
-            git commit -m "Repair DirtBike mesh truncation marker"
-            git push origin HEAD:main
-          fi
-
       - name: Validate DirtBike mesh payload
         run: python3 tools/validate_dirtbike.py
 
@@ -89,6 +66,29 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Repair truncated DirtBike asset tail
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('app/src/main/assets/models/dirtbike_qmesh_3.txt')
+          suffix = '[... truncated ...]'
+          text = path.read_text()
+          if text.endswith(suffix):
+              path.write_text(text[:-len(suffix)])
+              print('Removed injected truncation marker from DirtBike chunk 3')
+          else:
+              print('DirtBike chunk 3 has no truncation marker')
+          PY
+          if ! git diff --quiet -- app/src/main/assets/models/dirtbike_qmesh_3.txt; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add app/src/main/assets/models/dirtbike_qmesh_3.txt
+            git commit -m "Repair DirtBike mesh truncation marker"
+            git push origin HEAD:main
+          fi
 
       - name: Validate DirtBike mesh payload
         run: python3 tools/validate_dirtbike.py
