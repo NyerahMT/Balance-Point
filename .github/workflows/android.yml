@@ -2,7 +2,7 @@ name: Android APK
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, import-dirtbike-model ]
   pull_request:
     branches: [ main ]
   workflow_dispatch:
@@ -27,6 +27,57 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.11.1'
+
+      - name: Wire imported dirtbike into runtime
+        if: github.event_name == 'push' && github.ref == 'refs/heads/import-dirtbike-model'
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('app/src/main/java/com/nyerahworks/balancepoint/BalancePointGame.java')
+          text = path.read_text()
+
+          replacements = [
+              (
+                  '''    private ModelInstance frontNumberPlate;\n''',
+                  '''    private ModelInstance frontNumberPlate;\n\n    private ModelInstance importedBody;\n    private ModelInstance importedEngine;\n    private ModelInstance importedFrontWheel;\n    private ModelInstance importedRearWheel;\n    private boolean importedBikeLoaded;\n'''
+              ),
+              (
+                  '''        frontNumberPlate = new ModelInstance(plateM);\n    }\n''',
+                  '''        frontNumberPlate = new ModelInstance(plateM);\n\n        // Load the optimized DirtBike.blend geometry. The procedural bike remains\n        // available as a no-crash fallback if an asset is ever missing or corrupt.\n        try {\n            ModelInstance[] imported = DirtBikeMeshLoader.load(ownedModels,\n                    material(0.08f, 0.52f, 0.12f),\n                    material(0.16f, 0.17f, 0.18f),\n                    material(0.045f, 0.048f, 0.052f));\n            importedBody = imported[0];\n            importedEngine = imported[1];\n            importedFrontWheel = imported[2];\n            importedRearWheel = imported[3];\n            importedBikeLoaded = true;\n        } catch (Exception e) {\n            importedBikeLoaded = false;\n            Gdx.app.error("BalancePoint", "Could not load imported dirt bike; using fallback", e);\n        }\n    }\n'''
+              ),
+              (
+                  '''        riderArmLeft.transform.rotate(Vector3.X, 69f);\n        riderArmRight.transform.rotate(Vector3.X, 69f);\n    }\n''',
+                  '''        riderArmLeft.transform.rotate(Vector3.X, 69f);\n        riderArmRight.transform.rotate(Vector3.X, 69f);\n\n        if (importedBikeLoaded) {\n            importedBody.transform.set(bikeRoot);\n            importedEngine.transform.set(bikeRoot);\n\n            float importedSpinDeg = -wheelSpin * MathUtils.radiansToDegrees;\n            importedRearWheel.transform.set(bikeRoot)\n                    .rotate(Vector3.X, importedSpinDeg);\n\n            float visualSteerDeg = -steer * MathUtils.lerp(13f, 5f,\n                    MathUtils.clamp(speed / 30f, 0f, 1f));\n            importedFrontWheel.transform.set(bikeRoot)\n                    .translate(0f, 0f, WHEELBASE)\n                    .rotate(Vector3.Y, visualSteerDeg)\n                    .rotate(Vector3.X, importedSpinDeg);\n        }\n    }\n'''
+              ),
+              (
+                  '''    private void renderBike() {\n        modelBatch.render(rearWheel, environment); modelBatch.render(frontWheel, environment);\n        modelBatch.render(rearHub, environment); modelBatch.render(frontHub, environment);\n        modelBatch.render(frame, environment); modelBatch.render(tank, environment);\n        modelBatch.render(seat, environment); modelBatch.render(frontFender, environment);\n        modelBatch.render(forkLeft, environment); modelBatch.render(forkRight, environment);\n        modelBatch.render(handlebar, environment); modelBatch.render(frontNumberPlate, environment);\n        modelBatch.render(riderTorso, environment); modelBatch.render(riderHead, environment);\n        modelBatch.render(riderLegLeft, environment); modelBatch.render(riderLegRight, environment);\n        modelBatch.render(riderArmLeft, environment); modelBatch.render(riderArmRight, environment);\n    }\n''',
+                  '''    private void renderBike() {\n        if (importedBikeLoaded) {\n            modelBatch.render(importedBody, environment);\n            modelBatch.render(importedEngine, environment);\n            modelBatch.render(importedRearWheel, environment);\n            modelBatch.render(importedFrontWheel, environment);\n\n            // Keep the lightweight existing rider and steering hardware for this\n            // first import pass; the source model has these as separate pieces too.\n            modelBatch.render(forkLeft, environment); modelBatch.render(forkRight, environment);\n            modelBatch.render(handlebar, environment);\n            modelBatch.render(riderTorso, environment); modelBatch.render(riderHead, environment);\n            modelBatch.render(riderLegLeft, environment); modelBatch.render(riderLegRight, environment);\n            modelBatch.render(riderArmLeft, environment); modelBatch.render(riderArmRight, environment);\n            return;\n        }\n\n        modelBatch.render(rearWheel, environment); modelBatch.render(frontWheel, environment);\n        modelBatch.render(rearHub, environment); modelBatch.render(frontHub, environment);\n        modelBatch.render(frame, environment); modelBatch.render(tank, environment);\n        modelBatch.render(seat, environment); modelBatch.render(frontFender, environment);\n        modelBatch.render(forkLeft, environment); modelBatch.render(forkRight, environment);\n        modelBatch.render(handlebar, environment); modelBatch.render(frontNumberPlate, environment);\n        modelBatch.render(riderTorso, environment); modelBatch.render(riderHead, environment);\n        modelBatch.render(riderLegLeft, environment); modelBatch.render(riderLegRight, environment);\n        modelBatch.render(riderArmLeft, environment); modelBatch.render(riderArmRight, environment);\n    }\n'''
+              ),
+          ]
+
+          changed = False
+          for old, new in replacements:
+              if old in text:
+                  text = text.replace(old, new, 1)
+                  changed = True
+              elif new not in text:
+                  raise SystemExit('Expected dirtbike source pattern not found:\n' + old[:160])
+
+          if changed:
+              path.write_text(text)
+          PY
+
+      - name: Commit dirtbike runtime integration
+        if: github.event_name == 'push' && github.ref == 'refs/heads/import-dirtbike-model'
+        run: |
+          if ! git diff --quiet -- app/src/main/java/com/nyerahworks/balancepoint/BalancePointGame.java; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add app/src/main/java/com/nyerahworks/balancepoint/BalancePointGame.java
+            git commit -m "Render imported dirtbike geometry [skip ci]"
+            git push origin HEAD:import-dirtbike-model
+          fi
 
       - name: Restore stable debug signing key
         run: base64 --decode .github/balancepoint-debug.keystore.b64 > .github/balancepoint-debug.keystore
