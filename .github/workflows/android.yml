@@ -27,8 +27,10 @@ jobs:
           path = Path('app/src/main/assets/models/dirtbike_qmesh_3.txt')
           suffix = '[... truncated ...]'
           text = path.read_text()
-          if text.endswith(suffix):
-              path.write_text(text[:-len(suffix)])
+          clean = text.rstrip()
+          if clean.endswith(suffix):
+              clean = clean[:-len(suffix)]
+              path.write_text(clean)
               print('Removed injected truncation marker from DirtBike chunk 3')
           else:
               print('DirtBike chunk 3 has no truncation marker')
@@ -99,8 +101,10 @@ jobs:
           path = Path('app/src/main/assets/models/dirtbike_qmesh_3.txt')
           suffix = '[... truncated ...]'
           text = path.read_text()
-          if text.endswith(suffix):
-              path.write_text(text[:-len(suffix)])
+          clean = text.rstrip()
+          if clean.endswith(suffix):
+              clean = clean[:-len(suffix)]
+              path.write_text(clean)
               print('Removed injected truncation marker from DirtBike chunk 3')
           else:
               print('DirtBike chunk 3 has no truncation marker')
