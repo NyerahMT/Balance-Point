@@ -17,6 +17,24 @@ parts = [p.read_text().strip() for p in chunks]
 print("DirtBike chunk lengths:", [len(p) for p in parts])
 print("DirtBike total Base64 chars:", sum(map(len, parts)))
 
+alphabet = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=")
+invalid = []
+for chunk_index, part in enumerate(parts):
+    for char_index, char in enumerate(part):
+        if char not in alphabet:
+            invalid.append((chunk_index, char_index, char, ord(char)))
+            if len(invalid) >= 20:
+                break
+    if len(invalid) >= 20:
+        break
+if invalid:
+    for chunk_index, char_index, char, codepoint in invalid:
+        print(
+            f"Invalid Base64 character in chunk {chunk_index} at char {char_index}: "
+            f"{char!r} (U+{codepoint:04X})"
+        )
+    raise SystemExit("DirtBike payload contains non-Base64 characters")
+
 encoded = "".join(parts)
 encoded += "=" * ((-len(encoded)) % 4)
 compressed = base64.b64decode(encoded, validate=True)
