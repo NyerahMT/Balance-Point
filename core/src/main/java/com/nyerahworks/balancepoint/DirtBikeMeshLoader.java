@@ -38,10 +38,24 @@ final class DirtBikeMeshLoader {
                                 Material wheelMaterial) throws IOException {
         StringBuilder encoded = new StringBuilder(112000);
         for (int i = 0; i < CHUNK_COUNT; i++) {
-            encoded.append(Gdx.files.internal("models/dirtbike_qmesh_" + i + ".txt").readString());
+            // Each chunk is a raw slice of one Base64 stream. trim() protects the
+            // decoder from an accidental trailing newline in a repository asset.
+            encoded.append(Gdx.files.internal("models/dirtbike_qmesh_" + i + ".txt")
+                    .readString().trim());
         }
 
-        byte[] compressed = Base64Coder.decode(encoded.toString());
+        // The compact exporter intentionally omitted terminal Base64 padding. libGDX's
+        // Base64Coder is stricter than Android/java.util decoders and requires a length
+        // divisible by four, so restore the RFC padding before decoding.
+        while ((encoded.length() & 3) != 0) encoded.append('=');
+
+        byte[] compressed;
+        try {
+            compressed = Base64Coder.decode(encoded.toString());
+        } catch (IllegalArgumentException e) {
+            throw new IOException("Invalid dirtbike Base64 payload", e);
+        }
+
         byte[] unpacked = inflate(compressed);
         DataInputStream in = new DataInputStream(new ByteArrayInputStream(unpacked));
 
