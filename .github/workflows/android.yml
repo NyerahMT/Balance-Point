@@ -18,6 +18,32 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Validate DirtBike mesh payload
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import base64, zlib
+
+          root = Path('app/src/main/assets/models')
+          chunks = sorted(root.glob('dirtbike_qmesh_*.txt'), key=lambda p: int(p.stem.rsplit('_', 1)[1]))
+          indices = [int(p.stem.rsplit('_', 1)[1]) for p in chunks]
+          if indices != list(range(len(chunks))):
+              raise SystemExit(f'Non-contiguous DirtBike chunks: {indices}')
+          if not chunks:
+              raise SystemExit('No DirtBike mesh chunks found')
+
+          encoded = ''.join(p.read_text().strip() for p in chunks)
+          encoded += '=' * ((-len(encoded)) % 4)
+          compressed = base64.b64decode(encoded, validate=True)
+          raw = zlib.decompress(compressed)
+          if raw[:4] != b'BPQ1':
+              raise SystemExit(f'Bad DirtBike magic: {raw[:4]!r}')
+          if len(raw) < 5 or raw[4] != 4:
+              raise SystemExit(f'Expected 4 DirtBike meshes, got {raw[4] if len(raw) > 4 else "missing"}')
+          print(f'DirtBike payload OK: {len(chunks)} chunks, {len(compressed)} compressed bytes, {len(raw)} unpacked bytes, 4 meshes')
+          PY
+
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
@@ -63,6 +89,32 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Validate DirtBike mesh payload
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import base64, zlib
+
+          root = Path('app/src/main/assets/models')
+          chunks = sorted(root.glob('dirtbike_qmesh_*.txt'), key=lambda p: int(p.stem.rsplit('_', 1)[1]))
+          indices = [int(p.stem.rsplit('_', 1)[1]) for p in chunks]
+          if indices != list(range(len(chunks))):
+              raise SystemExit(f'Non-contiguous DirtBike chunks: {indices}')
+          if not chunks:
+              raise SystemExit('No DirtBike mesh chunks found')
+
+          encoded = ''.join(p.read_text().strip() for p in chunks)
+          encoded += '=' * ((-len(encoded)) % 4)
+          compressed = base64.b64decode(encoded, validate=True)
+          raw = zlib.decompress(compressed)
+          if raw[:4] != b'BPQ1':
+              raise SystemExit(f'Bad DirtBike magic: {raw[:4]!r}')
+          if len(raw) < 5 or raw[4] != 4:
+              raise SystemExit(f'Expected 4 DirtBike meshes, got {raw[4] if len(raw) > 4 else "missing"}')
+          print(f'DirtBike payload OK: {len(chunks)} chunks, {len(compressed)} compressed bytes, {len(raw)} unpacked bytes, 4 meshes')
+          PY
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
