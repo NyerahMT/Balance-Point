@@ -1,81 +1,67 @@
 from pathlib import Path
-import base64
+import io
+import struct
 import zlib
 
-ROOT = Path("app/src/main/assets/models")
-chunks = sorted(
-    ROOT.glob("dirtbike_qmesh_*.txt"),
-    key=lambda p: int(p.stem.rsplit("_", 1)[1]),
-)
-indices = [int(p.stem.rsplit("_", 1)[1]) for p in chunks]
-if indices != list(range(len(chunks))):
-    raise SystemExit(f"Non-contiguous DirtBike chunks: {indices}")
-if not chunks:
-    raise SystemExit("No DirtBike mesh chunks found")
+PATH = Path("app/src/main/assets/models/dirtbike.bpq1z")
+MAGIC = b"BPQ1"
+EXPECTED = [(1396, 2714), (1190, 2308), (2118, 3676), (3041, 5508)]
 
-parts = [p.read_text().strip() for p in chunks]
-print("DirtBike chunk lengths:", [len(p) for p in parts])
-print("DirtBike total Base64 chars:", sum(map(len, parts)))
-
-alphabet = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=")
-invalid = []
-for chunk_index, part in enumerate(parts):
-    for char_index, char in enumerate(part):
-        if char not in alphabet:
-            invalid.append((chunk_index, char_index, char, ord(char)))
-            if len(invalid) >= 20:
-                break
-    if len(invalid) >= 20:
-        break
-if invalid:
-    for chunk_index, char_index, char, codepoint in invalid:
-        print(
-            f"Invalid Base64 character in chunk {chunk_index} at char {char_index}: "
-            f"{char!r} (U+{codepoint:04X})"
-        )
-    raise SystemExit("DirtBike payload contains non-Base64 characters")
-
-encoded = "".join(parts)
-encoded += "=" * ((-len(encoded)) % 4)
-compressed = base64.b64decode(encoded, validate=True)
-print("DirtBike compressed bytes:", len(compressed), "header:", compressed[:8].hex())
-
-# Inflate in small pieces so a corrupt source chunk can be traced to an approximate
-# compressed/Base64 offset instead of surfacing only as a generic zlib exception.
+compressed = PATH.read_bytes()
 inflater = zlib.decompressobj()
-raw_parts = []
-step = 128
-try:
-    for offset in range(0, len(compressed), step):
-        raw_parts.append(inflater.decompress(compressed[offset:offset + step]))
-    raw_parts.append(inflater.flush())
-except zlib.error as exc:
-    base64_offset = (offset * 4) // 3
-    cumulative = 0
-    source_chunk = None
-    source_offset = None
-    for index, part in enumerate(parts):
-        next_cumulative = cumulative + len(part)
-        if base64_offset < next_cumulative:
-            source_chunk = index
-            source_offset = base64_offset - cumulative
-            break
-        cumulative = next_cumulative
-    print(
-        f"DirtBike zlib failure near compressed byte {offset}, "
-        f"Base64 char {base64_offset}, source chunk {source_chunk} "
-        f"around char {source_offset}: {exc}"
-    )
-    raise
+raw = inflater.decompress(compressed) + inflater.flush()
+if not inflater.eof:
+    raise SystemExit("DirtBike zlib stream did not reach EOF")
+if inflater.unused_data or inflater.unconsumed_tail:
+    raise SystemExit("DirtBike zlib stream has unexpected extra data")
 
-raw = b"".join(raw_parts)
-if raw[:4] != b"BPQ1":
-    raise SystemExit(f"Bad DirtBike magic: {raw[:4]!r}")
-if len(raw) < 5 or raw[4] != 4:
-    got = raw[4] if len(raw) > 4 else "missing"
-    raise SystemExit(f"Expected 4 DirtBike meshes, got {got}")
+s = io.BytesIO(raw)
+def exact(n, label):
+    b = s.read(n)
+    if len(b) != n:
+        raise SystemExit(f"Unexpected EOF reading {label}: {len(b)}/{n}")
+    return b
 
-print(
-    f"DirtBike payload OK: {len(chunks)} chunks, {len(compressed)} compressed bytes, "
-    f"{len(raw)} unpacked bytes, 4 meshes"
-)
+def varuint():
+    value = 0
+    shift = 0
+    while shift < 35:
+        b = exact(1, "varint")[0]
+        value |= (b & 0x7f) << shift
+        if (b & 0x80) == 0:
+            return value
+        shift += 7
+    raise SystemExit("Malformed varint")
+
+if exact(4, "magic") != MAGIC:
+    raise SystemExit("Bad BPQ1 magic")
+mesh_count = exact(1, "mesh count")[0]
+if mesh_count != 4:
+    raise SystemExit(f"Expected 4 meshes, got {mesh_count}")
+
+summaries = []
+for mesh_index, (expected_vertices, expected_tris) in enumerate(EXPECTED):
+    vertex_count = struct.unpack(">H", exact(2, "vertex count"))[0]
+    index_count = struct.unpack(">I", exact(4, "index count"))[0]
+    bounds = struct.unpack(">6f", exact(24, "bounds"))
+    if vertex_count != expected_vertices:
+        raise SystemExit(f"Mesh {mesh_index} vertices {vertex_count} != {expected_vertices}")
+    if index_count != expected_tris * 3:
+        raise SystemExit(f"Mesh {mesh_index} triangles {index_count // 3} != {expected_tris}")
+    exact(vertex_count * 6, "positions")
+    exact(vertex_count * 2, "normals")
+    previous = 0
+    for i in range(index_count):
+        packed = varuint()
+        delta = (packed >> 1) ^ -(packed & 1)
+        previous += delta
+        if previous < 0 or previous >= vertex_count:
+            raise SystemExit(f"Mesh {mesh_index} index {i} out of range: {previous}")
+    summaries.append((vertex_count, index_count // 3, tuple(round(v, 4) for v in bounds)))
+
+if s.read():
+    raise SystemExit("Unexpected trailing BPQ1 bytes")
+
+print(f"DirtBike payload OK: {len(compressed)} compressed bytes, {len(raw)} unpacked bytes")
+for i, (verts, tris, bounds) in enumerate(summaries):
+    print(f"Mesh {i}: {verts} vertices, {tris} triangles, bounds {bounds}")

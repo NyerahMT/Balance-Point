@@ -10,7 +10,6 @@ import com.badlogic.gdx.graphics.g3d.Model;
 import com.badlogic.gdx.graphics.g3d.ModelInstance;
 import com.badlogic.gdx.graphics.g3d.utils.ModelBuilder;
 import com.badlogic.gdx.utils.Array;
-import com.badlogic.gdx.utils.Base64Coder;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -18,16 +17,8 @@ import java.io.DataInputStream;
 import java.io.IOException;
 import java.util.zip.InflaterInputStream;
 
-/**
- * Loads the compact BPQ1 dirt-bike mesh generated from DirtBike.blend.
- *
- * The source model is split into body, engine, front wheel and rear wheel. Positions
- * are uint16-quantized, normals use two-byte octahedral encoding and triangle indices
- * are delta/zig-zag varints. Keeping this tiny decoder in-app avoids a heavyweight
- * model-loader dependency on the low-end GMEE target.
- */
+/** Loads the compact BPQ1 dirt-bike mesh generated from DirtBike.blend. */
 final class DirtBikeMeshLoader {
-    private static final int CHUNK_COUNT = 4;
     private static final int MAGIC = 0x42505131; // "BPQ1"
 
     private DirtBikeMeshLoader() {}
@@ -36,26 +27,7 @@ final class DirtBikeMeshLoader {
                                 Material bodyMaterial,
                                 Material engineMaterial,
                                 Material wheelMaterial) throws IOException {
-        StringBuilder encoded = new StringBuilder(56000);
-        for (int i = 0; i < CHUNK_COUNT; i++) {
-            // Each chunk is a raw slice of one Base64 stream. trim() protects the
-            // decoder from an accidental trailing newline in a repository asset.
-            encoded.append(Gdx.files.internal("models/dirtbike_qmesh_" + i + ".txt")
-                    .readString().trim());
-        }
-
-        // The compact exporter intentionally omitted terminal Base64 padding. libGDX's
-        // Base64Coder is stricter than Android/java.util decoders and requires a length
-        // divisible by four, so restore the RFC padding before decoding.
-        while ((encoded.length() & 3) != 0) encoded.append('=');
-
-        byte[] compressed;
-        try {
-            compressed = Base64Coder.decode(encoded.toString());
-        } catch (IllegalArgumentException e) {
-            throw new IOException("Invalid dirtbike Base64 payload", e);
-        }
-
+        byte[] compressed = Gdx.files.internal("models/dirtbike.bpq1z").readBytes();
         byte[] unpacked = inflate(compressed);
         DataInputStream in = new DataInputStream(new ByteArrayInputStream(unpacked));
 
@@ -68,7 +40,7 @@ final class DirtBikeMeshLoader {
         for (int meshIndex = 0; meshIndex < meshCount; meshIndex++) {
             int vertexCount = in.readUnsignedShort();
             int indexCount = in.readInt();
-            if (vertexCount <= 0 || vertexCount > 32767 || indexCount <= 0) {
+            if (vertexCount <= 0 || vertexCount > 32767 || indexCount <= 0 || indexCount % 3 != 0) {
                 throw new IOException("Invalid dirtbike mesh dimensions");
             }
 
@@ -132,12 +104,14 @@ final class DirtBikeMeshLoader {
             ownedModels.add(model);
             result[meshIndex] = new ModelInstance(model);
         }
+
+        if (in.available() != 0) throw new IOException("Unexpected trailing dirtbike mesh bytes");
         return result;
     }
 
     private static byte[] inflate(byte[] compressed) throws IOException {
         InflaterInputStream inflater = new InflaterInputStream(new ByteArrayInputStream(compressed));
-        ByteArrayOutputStream out = new ByteArrayOutputStream(128000);
+        ByteArrayOutputStream out = new ByteArrayOutputStream(160000);
         byte[] buffer = new byte[4096];
         int count;
         while ((count = inflater.read(buffer)) >= 0) {
