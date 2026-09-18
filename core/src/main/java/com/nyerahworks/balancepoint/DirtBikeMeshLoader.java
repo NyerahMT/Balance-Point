@@ -11,6 +11,9 @@ import com.badlogic.gdx.graphics.g3d.Model;
 import com.badlogic.gdx.graphics.g3d.ModelInstance;
 import com.badlogic.gdx.graphics.g3d.attributes.ColorAttribute;
 import com.badlogic.gdx.graphics.g3d.utils.ModelBuilder;
+import com.badlogic.gdx.math.Matrix4;
+import com.badlogic.gdx.math.Quaternion;
+import com.badlogic.gdx.math.Vector3;
 import com.badlogic.gdx.utils.Array;
 import com.badlogic.gdx.utils.JsonReader;
 import com.badlogic.gdx.utils.JsonValue;
@@ -23,11 +26,13 @@ import java.nio.charset.StandardCharsets;
 /**
  * Minimal GLB 2.0 loader for the shipped DirtBike.glb asset.
  *
- * The file itself stays standard glTF/GLB. This reader only implements the subset
- * Balance Point currently needs: indexed triangle meshes with float VEC3 positions
- * and optional normalized UBYTE VEC4 vertex colors. Normals are generated once at
- * load time so the result can be rendered by the normal libGDX ModelBatch on both
- * Android and RoboVM/iOS without another runtime rendering stack.
+ * The file itself stays standard glTF/GLB. This reader implements the subset
+ * Balance Point currently needs: indexed triangle meshes with float VEC3 positions,
+ * optional vertex colors, and the glTF scene/node transform hierarchy.
+ *
+ * Static parts are baked into bike-local space once at load time. Wheel mesh
+ * transforms are baked relative to their wheel-pivot nodes so gameplay can still
+ * spin and steer the wheels independently.
  */
 final class DirtBikeMeshLoader {
     private static final int GLB_MAGIC = 0x46546C67; // "glTF"
@@ -35,12 +40,12 @@ final class DirtBikeMeshLoader {
     private static final int BIN_CHUNK = 0x004E4942;
     private static final int GLB_VERSION = 2;
 
-    // The physics model is intentionally unchanged. The source dirt-bike tires are
-    // visually normalized to the existing 0.31 m physics radius at import time.
+    // Physics remains unchanged. The visual tires are normalized around their
+    // authored pivot so they continue to match the existing physics contact model.
     private static final float TARGET_WHEEL_RADIUS = 0.31f;
 
-    // The exported source geometry is referenced to the rear axle and needs this
-    // small chassis-only lift to sit correctly on the existing physics axle line.
+    // Existing visual alignment between the imported chassis and physics axle line.
+    // This is applied after authored glTF node transforms have been baked.
     private static final float CHASSIS_Y_OFFSET = 0.28f;
 
     private DirtBikeMeshLoader() {}
@@ -57,14 +62,15 @@ final class DirtBikeMeshLoader {
             throw new IOException("DirtBike.glb contains no meshes");
         }
 
+        Array<NodeMeshUse> meshUses = collectMeshUses(glb.json, meshes.size);
         Array<MeshData> bodyParts = new Array<>();
         Array<MeshData> engineParts = new Array<>();
         Array<MeshData> frontWheelParts = new Array<>();
         Array<MeshData> rearWheelParts = new Array<>();
 
-        for (int i = 0; i < meshes.size; i++) {
-            JsonValue meshJson = meshes.get(i);
-            String name = meshJson.getString("name", "mesh-" + i);
+        for (NodeMeshUse use : meshUses) {
+            JsonValue meshJson = getArrayItem(glb.json, "meshes", use.meshIndex);
+            String name = meshJson.getString("name", "mesh-" + use.meshIndex);
             JsonValue primitives = meshJson.get("primitives");
             if (primitives == null || primitives.size != 1) {
                 throw new IOException("Expected one primitive for " + name);
@@ -92,24 +98,41 @@ final class DirtBikeMeshLoader {
                     ? readFirstColor(glb, attributes.getInt("COLOR_0"))
                     : diffuseColor(fallback);
 
-            if ("FrontWheel_GEO".equals(name) || "RearWheel_GEO".equals(name)) {
+            boolean frontWheel = "FrontWheel_GEO".equals(name);
+            boolean rearWheel = "RearWheel_GEO".equals(name);
+            if (frontWheel || rearWheel) {
+                // A wheel is animated by BalancePointGame around its axle. Preserve
+                // the model-authored transform inside that pivot, but intentionally
+                // remove the pivot's world translation/rotation from the baked mesh.
+                Matrix4 wheelLocal = new Matrix4(use.worldTransform);
+                if (use.wheelPivotWorld != null) {
+                    Matrix4 inversePivot = new Matrix4(use.wheelPivotWorld);
+                    try {
+                        inversePivot.inv();
+                    } catch (RuntimeException e) {
+                        throw new IOException("Non-invertible wheel pivot for " + name, e);
+                    }
+                    wheelLocal.set(inversePivot).mul(use.worldTransform);
+                }
+                transformPositions(positions, wheelLocal);
                 normalizeWheelRadius(positions);
             } else {
+                // Body/engine/detail geometry remains attached to the chassis, so
+                // bake the complete authored scene transform into its vertices.
+                transformPositions(positions, use.worldTransform);
                 for (int v = 0; v < positions.length; v += 3) {
                     positions[v + 1] += CHASSIS_Y_OFFSET;
                 }
             }
 
             MeshData part = new MeshData(name, positions, indices, color);
-            if ("FrontWheel_GEO".equals(name)) {
+            if (frontWheel) {
                 frontWheelParts.add(part);
-            } else if ("RearWheel_GEO".equals(name)) {
+            } else if (rearWheel) {
                 rearWheelParts.add(part);
             } else if ("Engine_GEO".equals(name)) {
                 engineParts.add(part);
             } else {
-                // Body, fork/shock, handlebar, chain and levers all arrive in their
-                // exported bike-local positions and can share the chassis transform.
                 bodyParts.add(part);
             }
         }
@@ -136,6 +159,163 @@ final class DirtBikeMeshLoader {
         };
     }
 
+    /**
+     * Resolve glTF scene/node transforms before reading mesh geometry.
+     *
+     * The previous loader iterated the meshes[] array directly, which discards the
+     * transforms stored in nodes[]. That is legal glTF but assembles a multi-part
+     * model incorrectly whenever a mesh is positioned by a parent pivot/node.
+     */
+    private static Array<NodeMeshUse> collectMeshUses(JsonValue json, int meshCount)
+            throws IOException {
+        Array<NodeMeshUse> result = new Array<>();
+        JsonValue nodes = json.get("nodes");
+        JsonValue scenes = json.get("scenes");
+
+        // Keep a safe fallback for a flat GLB. DirtBike.glb currently has a scene
+        // hierarchy, but a future re-export without nodes should still load.
+        if (nodes == null || nodes.size == 0 || scenes == null || scenes.size == 0) {
+            for (int meshIndex = 0; meshIndex < meshCount; meshIndex++) {
+                result.add(new NodeMeshUse(meshIndex, new Matrix4().idt(), null));
+            }
+            return result;
+        }
+
+        int sceneIndex = json.getInt("scene", 0);
+        JsonValue scene = getArrayItem(json, "scenes", sceneIndex);
+        JsonValue roots = scene.get("nodes");
+        if (roots == null || roots.size == 0) {
+            throw new IOException("DirtBike glTF scene contains no root nodes");
+        }
+
+        boolean[] visiting = new boolean[nodes.size];
+        boolean[] visited = new boolean[nodes.size];
+        for (int i = 0; i < roots.size; i++) {
+            int rootIndex = roots.get(i).asInt();
+            collectNodeMeshUses(json, rootIndex, new Matrix4().idt(), null,
+                    result, visiting, visited);
+        }
+
+        if (result.size == 0) {
+            throw new IOException("DirtBike glTF scene contains no mesh nodes");
+        }
+        return result;
+    }
+
+    private static void collectNodeMeshUses(JsonValue json,
+                                            int nodeIndex,
+                                            Matrix4 parentWorld,
+                                            Matrix4 inheritedWheelPivot,
+                                            Array<NodeMeshUse> out,
+                                            boolean[] visiting,
+                                            boolean[] visited) throws IOException {
+        JsonValue nodes = json.get("nodes");
+        if (nodeIndex < 0 || nodeIndex >= nodes.size) {
+            throw new IOException("Invalid DirtBike node index: " + nodeIndex);
+        }
+        if (visiting[nodeIndex]) {
+            throw new IOException("Cycle detected in DirtBike glTF node hierarchy");
+        }
+
+        // A legal glTF scene is a tree/forest, not a DAG. Avoid accidentally baking
+        // the same node twice if a malformed re-export references it twice.
+        if (visited[nodeIndex]) return;
+        visiting[nodeIndex] = true;
+
+        JsonValue node = nodes.get(nodeIndex);
+        Matrix4 local = readNodeTransform(node);
+        Matrix4 world = new Matrix4(parentWorld).mul(local);
+
+        String nodeName = node.getString("name", "node-" + nodeIndex);
+        Matrix4 wheelPivot = inheritedWheelPivot;
+        if ("FrontWheelPivot".equals(nodeName) || "RearWheelPivot".equals(nodeName)) {
+            wheelPivot = new Matrix4(world);
+        }
+
+        if (node.has("mesh")) {
+            int meshIndex = node.getInt("mesh");
+            JsonValue meshes = json.get("meshes");
+            if (meshes == null || meshIndex < 0 || meshIndex >= meshes.size) {
+                throw new IOException("Invalid mesh index on DirtBike node " + nodeName);
+            }
+            out.add(new NodeMeshUse(meshIndex, new Matrix4(world),
+                    wheelPivot == null ? null : new Matrix4(wheelPivot)));
+        }
+
+        JsonValue children = node.get("children");
+        if (children != null) {
+            for (int i = 0; i < children.size; i++) {
+                collectNodeMeshUses(json, children.get(i).asInt(), world, wheelPivot,
+                        out, visiting, visited);
+            }
+        }
+
+        visiting[nodeIndex] = false;
+        visited[nodeIndex] = true;
+    }
+
+    private static Matrix4 readNodeTransform(JsonValue node) throws IOException {
+        JsonValue matrixJson = node.get("matrix");
+        if (matrixJson != null) {
+            if (matrixJson.size != 16) {
+                throw new IOException("DirtBike node matrix must contain 16 values");
+            }
+            float[] values = new float[16];
+            for (int i = 0; i < 16; i++) values[i] = matrixJson.get(i).asFloat();
+            // glTF and libGDX both store 4x4 transforms in column-major order.
+            return new Matrix4(values);
+        }
+
+        Vector3 translation = new Vector3();
+        JsonValue translationJson = node.get("translation");
+        if (translationJson != null) {
+            if (translationJson.size != 3) {
+                throw new IOException("DirtBike node translation must contain 3 values");
+            }
+            translation.set(translationJson.get(0).asFloat(),
+                    translationJson.get(1).asFloat(),
+                    translationJson.get(2).asFloat());
+        }
+
+        Quaternion rotation = new Quaternion(0f, 0f, 0f, 1f);
+        JsonValue rotationJson = node.get("rotation");
+        if (rotationJson != null) {
+            if (rotationJson.size != 4) {
+                throw new IOException("DirtBike node rotation must contain 4 values");
+            }
+            rotation.set(rotationJson.get(0).asFloat(),
+                    rotationJson.get(1).asFloat(),
+                    rotationJson.get(2).asFloat(),
+                    rotationJson.get(3).asFloat());
+        }
+
+        Vector3 scale = new Vector3(1f, 1f, 1f);
+        JsonValue scaleJson = node.get("scale");
+        if (scaleJson != null) {
+            if (scaleJson.size != 3) {
+                throw new IOException("DirtBike node scale must contain 3 values");
+            }
+            scale.set(scaleJson.get(0).asFloat(),
+                    scaleJson.get(1).asFloat(),
+                    scaleJson.get(2).asFloat());
+        }
+
+        return new Matrix4().idt()
+                .translate(translation)
+                .rotate(rotation)
+                .scale(scale.x, scale.y, scale.z);
+    }
+
+    private static void transformPositions(float[] positions, Matrix4 transform) {
+        Vector3 point = new Vector3();
+        for (int i = 0; i < positions.length; i += 3) {
+            point.set(positions[i], positions[i + 1], positions[i + 2]).mul(transform);
+            positions[i] = point.x;
+            positions[i + 1] = point.y;
+            positions[i + 2] = point.z;
+        }
+    }
+
     private static ParsedGlb parseGlb(byte[] bytes) throws IOException {
         if (bytes.length < 20) throw new IOException("DirtBike.glb is too small");
 
@@ -144,7 +324,9 @@ final class DirtBikeMeshLoader {
         int version = in.getInt();
         int declaredLength = in.getInt();
         if (magic != GLB_MAGIC) throw new IOException("Bad DirtBike GLB magic");
-        if (version != GLB_VERSION) throw new IOException("Unsupported DirtBike GLB version: " + version);
+        if (version != GLB_VERSION) {
+            throw new IOException("Unsupported DirtBike GLB version: " + version);
+        }
         if (declaredLength != bytes.length) {
             throw new IOException("Truncated DirtBike GLB: header says " + declaredLength
                     + " bytes, file has " + bytes.length);
@@ -181,7 +363,8 @@ final class DirtBikeMeshLoader {
 
     private static float[] readPositions(ParsedGlb glb, int accessorIndex) throws IOException {
         JsonValue accessor = getArrayItem(glb.json, "accessors", accessorIndex);
-        if (accessor.getInt("componentType") != 5126 || !"VEC3".equals(accessor.getString("type"))) {
+        if (accessor.getInt("componentType") != 5126
+                || !"VEC3".equals(accessor.getString("type"))) {
             throw new IOException("DirtBike POSITION accessor must be FLOAT VEC3");
         }
 
@@ -211,10 +394,14 @@ final class DirtBikeMeshLoader {
         if (componentType == 5121) componentSize = 1;
         else if (componentType == 5123) componentSize = 2;
         else if (componentType == 5125) componentSize = 4;
-        else throw new IOException("Unsupported DirtBike index component type: " + componentType);
+        else {
+            throw new IOException("Unsupported DirtBike index component type: " + componentType);
+        }
 
         int count = accessor.getInt("count");
-        if (count <= 0 || (count % 3) != 0) throw new IOException("Invalid DirtBike index count");
+        if (count <= 0 || (count % 3) != 0) {
+            throw new IOException("Invalid DirtBike index count");
+        }
         AccessView view = accessView(glb, accessor, componentSize);
         ByteBuffer bin = ByteBuffer.wrap(glb.binary).order(ByteOrder.LITTLE_ENDIAN);
         short[] result = new short[count];
@@ -239,14 +426,18 @@ final class DirtBikeMeshLoader {
         JsonValue accessor = getArrayItem(glb.json, "accessors", accessorIndex);
         String type = accessor.getString("type");
         int components = "VEC4".equals(type) ? 4 : ("VEC3".equals(type) ? 3 : 0);
-        if (components == 0) throw new IOException("Unsupported DirtBike COLOR_0 type: " + type);
+        if (components == 0) {
+            throw new IOException("Unsupported DirtBike COLOR_0 type: " + type);
+        }
 
         int componentType = accessor.getInt("componentType");
         int componentSize;
         if (componentType == 5121) componentSize = 1;
         else if (componentType == 5123) componentSize = 2;
         else if (componentType == 5126) componentSize = 4;
-        else throw new IOException("Unsupported DirtBike color component type: " + componentType);
+        else {
+            throw new IOException("Unsupported DirtBike color component type: " + componentType);
+        }
 
         AccessView view = accessView(glb, accessor, componentSize * components);
         requireRange(view.offset, componentSize * components, glb.binary.length);
@@ -265,14 +456,17 @@ final class DirtBikeMeshLoader {
             throws IOException {
         int viewIndex = accessor.getInt("bufferView");
         JsonValue view = getArrayItem(glb.json, "bufferViews", viewIndex);
-        if (view.getInt("buffer", 0) != 0) throw new IOException("DirtBike GLB uses external buffer");
+        if (view.getInt("buffer", 0) != 0) {
+            throw new IOException("DirtBike GLB uses external buffer");
+        }
         int offset = view.getInt("byteOffset", 0) + accessor.getInt("byteOffset", 0);
         int stride = view.getInt("byteStride", elementSize);
         if (stride < elementSize) throw new IOException("Invalid DirtBike buffer stride");
         return new AccessView(offset, stride);
     }
 
-    private static JsonValue getArrayItem(JsonValue root, String name, int index) throws IOException {
+    private static JsonValue getArrayItem(JsonValue root, String name, int index)
+            throws IOException {
         JsonValue array = root.get(name);
         if (array == null || index < 0 || index >= array.size) {
             throw new IOException("Invalid DirtBike " + name + " index: " + index);
@@ -343,9 +537,15 @@ final class DirtBikeMeshLoader {
             float ny = abz * acx - abx * acz;
             float nz = abx * acy - aby * acx;
 
-            normals[a] += nx; normals[a + 1] += ny; normals[a + 2] += nz;
-            normals[b] += nx; normals[b + 1] += ny; normals[b + 2] += nz;
-            normals[c] += nx; normals[c + 1] += ny; normals[c + 2] += nz;
+            normals[a] += nx;
+            normals[a + 1] += ny;
+            normals[a + 2] += nz;
+            normals[b] += nx;
+            normals[b + 1] += ny;
+            normals[b + 2] += nz;
+            normals[c] += nx;
+            normals[c + 1] += ny;
+            normals[c + 2] += nz;
         }
 
         for (int i = 0; i < normals.length; i += 3) {
@@ -395,6 +595,18 @@ final class DirtBikeMeshLoader {
         AccessView(int offset, int stride) {
             this.offset = offset;
             this.stride = stride;
+        }
+    }
+
+    private static final class NodeMeshUse {
+        final int meshIndex;
+        final Matrix4 worldTransform;
+        final Matrix4 wheelPivotWorld;
+
+        NodeMeshUse(int meshIndex, Matrix4 worldTransform, Matrix4 wheelPivotWorld) {
+            this.meshIndex = meshIndex;
+            this.worldTransform = worldTransform;
+            this.wheelPivotWorld = wheelPivotWorld;
         }
     }
 
