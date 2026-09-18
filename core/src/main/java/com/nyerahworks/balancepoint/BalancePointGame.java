@@ -59,6 +59,10 @@ public final class BalancePointGame extends ApplicationAdapter {
     private static final float BALANCE_DAMPING_BAND = 18f * MathUtils.degreesToRadians;
     private static final float LOOP_ANGLE = 103f * MathUtils.degreesToRadians;
 
+    // The imported dirt bike is slimmer and lower than the original procedural
+    // prototype. Keep the simple rider, but size and seat it against the real asset.
+    private static final float IMPORTED_RIDER_SCALE = 0.82f;
+
     private final Array<Model> ownedModels = new Array<>();
     private final Matrix4 bikeRoot = new Matrix4();
     private final Vector3 tempA = new Vector3();
@@ -629,19 +633,45 @@ public final class BalancePointGame extends ApplicationAdapter {
         setPart(frontNumberPlate, 0f, 0.72f, 1.19f);
         frontNumberPlate.transform.rotate(Vector3.X, 10f);
 
-        // Rider visibly follows the joystick's fore-aft weight input.
-        float riderZ = 0.43f + riderLean * 0.10f;
-        setPart(riderTorso, 0f, 1.07f, riderZ);
-        riderTorso.transform.rotate(Vector3.X, -11f - riderLean * 9f);
-        setPart(riderHead, 0f, 1.48f, 0.55f + riderLean * 0.11f);
-        setPart(riderLegLeft, -0.15f, 0.57f, 0.40f);
-        setPart(riderLegRight, 0.15f, 0.57f, 0.40f);
-        riderLegLeft.transform.rotate(Vector3.X, 33f);
-        riderLegRight.transform.rotate(Vector3.X, 33f);
-        setPart(riderArmLeft, -0.20f, 0.97f, 0.82f);
-        setPart(riderArmRight, 0.20f, 0.97f, 0.82f);
-        riderArmLeft.transform.rotate(Vector3.X, 69f);
-        riderArmRight.transform.rotate(Vector3.X, 69f);
+        if (importedBikeLoaded) {
+            // Seat the placeholder rider against the actual GLB dirt bike instead of
+            // the much bulkier procedural prototype. The smaller local scale keeps
+            // the torso/head from towering over the tank and bars.
+            setPart(riderTorso, 0f, 0.94f, 0.49f);
+            riderTorso.transform.rotate(Vector3.X, -16f).scale(
+                    IMPORTED_RIDER_SCALE, IMPORTED_RIDER_SCALE, IMPORTED_RIDER_SCALE);
+            setPart(riderHead, 0f, 1.30f, 0.65f);
+            riderHead.transform.scale(IMPORTED_RIDER_SCALE, IMPORTED_RIDER_SCALE,
+                    IMPORTED_RIDER_SCALE);
+
+            setPart(riderLegLeft, -0.13f, 0.56f, 0.42f);
+            setPart(riderLegRight, 0.13f, 0.56f, 0.42f);
+            riderLegLeft.transform.rotate(Vector3.X, 36f).scale(
+                    IMPORTED_RIDER_SCALE, IMPORTED_RIDER_SCALE, IMPORTED_RIDER_SCALE);
+            riderLegRight.transform.rotate(Vector3.X, 36f).scale(
+                    IMPORTED_RIDER_SCALE, IMPORTED_RIDER_SCALE, IMPORTED_RIDER_SCALE);
+
+            setPart(riderArmLeft, -0.17f, 0.91f, 0.82f);
+            setPart(riderArmRight, 0.17f, 0.91f, 0.82f);
+            riderArmLeft.transform.rotate(Vector3.X, 67f).scale(
+                    IMPORTED_RIDER_SCALE, IMPORTED_RIDER_SCALE, IMPORTED_RIDER_SCALE);
+            riderArmRight.transform.rotate(Vector3.X, 67f).scale(
+                    IMPORTED_RIDER_SCALE, IMPORTED_RIDER_SCALE, IMPORTED_RIDER_SCALE);
+        } else {
+            // Original rider placement for the procedural fallback bike.
+            float riderZ = 0.43f + riderLean * 0.10f;
+            setPart(riderTorso, 0f, 1.07f, riderZ);
+            riderTorso.transform.rotate(Vector3.X, -11f - riderLean * 9f);
+            setPart(riderHead, 0f, 1.48f, 0.55f + riderLean * 0.11f);
+            setPart(riderLegLeft, -0.15f, 0.57f, 0.40f);
+            setPart(riderLegRight, 0.15f, 0.57f, 0.40f);
+            riderLegLeft.transform.rotate(Vector3.X, 33f);
+            riderLegRight.transform.rotate(Vector3.X, 33f);
+            setPart(riderArmLeft, -0.20f, 0.97f, 0.82f);
+            setPart(riderArmRight, 0.20f, 0.97f, 0.82f);
+            riderArmLeft.transform.rotate(Vector3.X, 69f);
+            riderArmRight.transform.rotate(Vector3.X, 69f);
+        }
 
         if (importedBikeLoaded) {
             importedBody.transform.set(bikeRoot);
@@ -676,8 +706,10 @@ public final class BalancePointGame extends ApplicationAdapter {
 
         if (cockpitCamera) {
             // Camera position rides with the helmet, but orientation is referenced to
-            // world-up. Wheelie pitch and chassis roll no longer tilt the horizon.
-            tempA.set(0f, 1.42f, 0.58f + riderLean * 0.10f).mul(bikeRoot);
+            // world-up. Use the lower imported rider pose when the GLB bike is active.
+            float helmetY = importedBikeLoaded ? 1.28f : 1.42f;
+            float helmetZ = importedBikeLoaded ? 0.66f : (0.58f + riderLean * 0.10f);
+            tempA.set(0f, helmetY, helmetZ).mul(bikeRoot);
             camera.position.set(tempA);
             float cp = MathUtils.cos(lookPitch);
             camera.direction.set(sinView * cp, MathUtils.sin(lookPitch), cosView * cp).nor();
@@ -708,8 +740,8 @@ public final class BalancePointGame extends ApplicationAdapter {
             modelBatch.render(importedRearWheel, environment);
             modelBatch.render(importedFrontWheel, environment);
 
-            // Keep the lightweight existing rider and steering hardware for this
-            // first import pass; the source model has these as separate pieces too.
+            // DirtBikeMeshLoader intentionally omits the GLB shock/handle/lever
+            // meshes for now, so there is exactly one animated steering assembly.
             modelBatch.render(forkLeft, environment); modelBatch.render(forkRight, environment);
             modelBatch.render(handlebar, environment);
             modelBatch.render(riderTorso, environment); modelBatch.render(riderHead, environment);
