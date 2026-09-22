@@ -11,6 +11,9 @@ import com.badlogic.gdx.graphics.g3d.Model;
 import com.badlogic.gdx.graphics.g3d.ModelInstance;
 import com.badlogic.gdx.graphics.g3d.attributes.ColorAttribute;
 import com.badlogic.gdx.graphics.g3d.utils.ModelBuilder;
+import com.badlogic.gdx.math.Matrix4;
+import com.badlogic.gdx.math.Quaternion;
+import com.badlogic.gdx.math.Vector3;
 import com.badlogic.gdx.utils.Array;
 import com.badlogic.gdx.utils.JsonReader;
 import com.badlogic.gdx.utils.JsonValue;
@@ -23,11 +26,11 @@ import java.nio.charset.StandardCharsets;
 /**
  * Minimal GLB 2.0 loader for the shipped DirtBike.glb asset.
  *
- * DirtBike.glb was exported directly in Balance Point's game coordinate system:
- * X right, Y up, Z forward, with the rear axle at the origin and a 1.45 m wheelbase.
- * The wheel meshes also carry their intended front/rear size difference, so this
- * loader deliberately preserves their authored geometry instead of forcing both
- * tires to the physics model's single nominal wheel radius.
+ * Unlike the original importer, this loader evaluates the active glTF scene graph
+ * and bakes each mesh node's full parent -> child transform into its vertices.
+ * Static pieces are then rebased to the authored rear-axle pivot while wheel
+ * geometry is rebased to its own axle pivot so the wheels can still spin/steer at
+ * runtime without losing the positions authored in Blender.
  *
  * The old procedural fork/handlebar remains the animated steering hardware for now.
  * Matching GLB pieces are therefore omitted here so they are not drawn twice.
@@ -37,11 +40,6 @@ final class DirtBikeMeshLoader {
     private static final int JSON_CHUNK = 0x4E4F534A;
     private static final int BIN_CHUNK = 0x004E4942;
     private static final int GLB_VERSION = 2;
-
-    // The body meshes were exported from the source rig slightly below the visual
-    // axle line. Keep the existing chassis correction; unlike the old wheel-radius
-    // normalization, this does not distort any part geometry.
-    private static final float CHASSIS_Y_OFFSET = 0.28f;
 
     private DirtBikeMeshLoader() {}
 
@@ -53,8 +51,27 @@ final class DirtBikeMeshLoader {
         ParsedGlb glb = parseGlb(bytes);
 
         JsonValue meshes = glb.json.get("meshes");
+        JsonValue nodes = glb.json.get("nodes");
         if (meshes == null || meshes.size == 0) {
             throw new IOException("DirtBike.glb contains no meshes");
+        }
+        if (nodes == null || nodes.size == 0) {
+            throw new IOException("DirtBike.glb contains no nodes");
+        }
+
+        Matrix4[] nodeWorlds = buildNodeWorldTransforms(glb.json);
+
+        Vector3 rearPivotWorld = findNamedNodeOrigin(glb.json, nodeWorlds, "RearWheelPivot");
+        Vector3 frontPivotWorld = findNamedNodeOrigin(glb.json, nodeWorlds, "FrontWheelPivot");
+
+        if (rearPivotWorld == null) {
+            rearPivotWorld = findMeshNodeOrigin(glb.json, nodeWorlds, "RearWheel_GEO");
+        }
+        if (frontPivotWorld == null) {
+            frontPivotWorld = findMeshNodeOrigin(glb.json, nodeWorlds, "FrontWheel_GEO");
+        }
+        if (rearPivotWorld == null || frontPivotWorld == null) {
+            throw new IOException("DirtBike.glb is missing usable front/rear wheel pivots");
         }
 
         Array<MeshData> bodyParts = new Array<>();
@@ -62,65 +79,81 @@ final class DirtBikeMeshLoader {
         Array<MeshData> frontWheelParts = new Array<>();
         Array<MeshData> rearWheelParts = new Array<>();
 
-        for (int i = 0; i < meshes.size; i++) {
-            JsonValue meshJson = meshes.get(i);
-            String name = meshJson.getString("name", "mesh-" + i);
+        for (int nodeIndex = 0; nodeIndex < nodes.size; nodeIndex++) {
+            Matrix4 world = nodeWorlds[nodeIndex];
+            if (world == null) continue;
+
+            JsonValue node = nodes.get(nodeIndex);
+            if (!node.has("mesh")) continue;
+
+            int meshIndex = node.getInt("mesh");
+            JsonValue meshJson = getArrayItem(glb.json, "meshes", meshIndex);
+            String name = meshJson.getString("name",
+                    node.getString("name", "mesh-" + meshIndex));
 
             // These are already represented by BalancePointGame's steering hardware.
-            // Loading them as part of importedBody produced the doubled fork/bar mess
-            // visible in the first GLB test builds.
             if (isProceduralSteeringPart(name)) continue;
 
             JsonValue primitives = meshJson.get("primitives");
-            if (primitives == null || primitives.size != 1) {
-                throw new IOException("Expected one primitive for " + name);
+            if (primitives == null || primitives.size == 0) {
+                throw new IOException("DirtBike mesh has no primitives: " + name);
             }
 
-            JsonValue primitive = primitives.get(0);
-            if (primitive.getInt("mode", GL20.GL_TRIANGLES) != GL20.GL_TRIANGLES) {
-                throw new IOException("DirtBike mesh is not triangles: " + name);
-            }
-
-            JsonValue attributes = primitive.get("attributes");
-            if (attributes == null || !attributes.has("POSITION") || !primitive.has("indices")) {
-                throw new IOException("DirtBike mesh is missing POSITION/indices: " + name);
-            }
-
-            float[] positions = readPositions(glb, attributes.getInt("POSITION"));
-            short[] indices = readIndices(glb, primitive.getInt("indices"), positions.length / 3);
-
-            Material fallback;
-            if ("Engine_GEO".equals(name)) fallback = engineMaterial;
-            else if ("FrontWheel_GEO".equals(name) || "RearWheel_GEO".equals(name)) {
-                fallback = wheelMaterial;
-            } else {
-                fallback = bodyMaterial;
-            }
-
-            Color color = attributes.has("COLOR_0")
-                    ? readFirstColor(glb, attributes.getInt("COLOR_0"))
-                    : diffuseColor(fallback);
-
-            boolean frontWheel = "FrontWheel_GEO".equals(name);
-            boolean rearWheel = "RearWheel_GEO".equals(name);
-
-            if (!frontWheel && !rearWheel) {
-                // The source mesh is already in bike-local coordinates. Only restore
-                // the rig-to-axle vertical correction used by the original import.
-                for (int v = 0; v < positions.length; v += 3) {
-                    positions[v + 1] += CHASSIS_Y_OFFSET;
+            for (int primitiveIndex = 0; primitiveIndex < primitives.size; primitiveIndex++) {
+                JsonValue primitive = primitives.get(primitiveIndex);
+                if (primitive.getInt("mode", GL20.GL_TRIANGLES) != GL20.GL_TRIANGLES) {
+                    throw new IOException("DirtBike mesh is not triangles: " + name);
                 }
-            }
 
-            MeshData part = new MeshData(name, positions, indices, color);
-            if (frontWheel) {
-                frontWheelParts.add(part);
-            } else if (rearWheel) {
-                rearWheelParts.add(part);
-            } else if ("Engine_GEO".equals(name)) {
-                engineParts.add(part);
-            } else {
-                bodyParts.add(part);
+                JsonValue attributes = primitive.get("attributes");
+                if (attributes == null || !attributes.has("POSITION") || !primitive.has("indices")) {
+                    throw new IOException("DirtBike mesh is missing POSITION/indices: " + name);
+                }
+
+                float[] positions = readPositions(glb, attributes.getInt("POSITION"));
+                short[] indices = readIndices(glb, primitive.getInt("indices"),
+                        positions.length / 3);
+
+                // Vertex accessors are local to their node. Apply the node's full
+                // inherited scene transform before deciding where the part belongs.
+                transformPositions(positions, world);
+                if (linearDeterminant(world) < 0f) {
+                    flipTriangleWinding(indices);
+                }
+
+                Material fallback;
+                if ("Engine_GEO".equals(name)) {
+                    fallback = engineMaterial;
+                } else if ("FrontWheel_GEO".equals(name) || "RearWheel_GEO".equals(name)) {
+                    fallback = wheelMaterial;
+                } else {
+                    fallback = bodyMaterial;
+                }
+
+                Color color = attributes.has("COLOR_0")
+                        ? readFirstColor(glb, attributes.getInt("COLOR_0"))
+                        : diffuseColor(fallback);
+
+                boolean frontWheel = "FrontWheel_GEO".equals(name);
+                boolean rearWheel = "RearWheel_GEO".equals(name);
+
+                // Static geometry lives in bike-local space relative to the rear axle.
+                // Wheel geometry lives relative to its own axle so runtime rotation
+                // remains a true spin instead of orbiting around the bike origin.
+                Vector3 rebase = frontWheel ? frontPivotWorld : rearPivotWorld;
+                rebasePositions(positions, rebase);
+
+                String partName = name + "-n" + nodeIndex + "-p" + primitiveIndex;
+                MeshData part = new MeshData(partName, positions, indices, color);
+                if (frontWheel) {
+                    frontWheelParts.add(part);
+                } else if (rearWheel) {
+                    rearWheelParts.add(part);
+                } else if ("Engine_GEO".equals(name)) {
+                    engineParts.add(part);
+                } else {
+                    bodyParts.add(part);
+                }
             }
         }
 
@@ -138,6 +171,10 @@ final class DirtBikeMeshLoader {
         ownedModels.add(front);
         ownedModels.add(rear);
 
+        Vector3 frontPivotLocal = new Vector3(frontPivotWorld).sub(rearPivotWorld);
+        Gdx.app.log("BalancePoint", "DirtBike authored front axle relative to rear: "
+                + frontPivotLocal);
+
         return new ModelInstance[] {
                 new ModelInstance(body),
                 new ModelInstance(engine),
@@ -151,6 +188,208 @@ final class DirtBikeMeshLoader {
                 || "Handle_GEO".equals(name)
                 || "LeftLeaver_GEO".equals(name)
                 || "RightLeaver_GEO".equals(name);
+    }
+
+    private static Matrix4[] buildNodeWorldTransforms(JsonValue json) throws IOException {
+        JsonValue nodes = json.get("nodes");
+        Matrix4[] worlds = new Matrix4[nodes.size];
+        boolean[] visiting = new boolean[nodes.size];
+
+        JsonValue scenes = json.get("scenes");
+        boolean traversedScene = false;
+        if (scenes != null && scenes.size > 0) {
+            int sceneIndex = json.getInt("scene", 0);
+            if (sceneIndex < 0 || sceneIndex >= scenes.size) {
+                throw new IOException("Invalid DirtBike default scene index: " + sceneIndex);
+            }
+            JsonValue roots = scenes.get(sceneIndex).get("nodes");
+            if (roots != null) {
+                Matrix4 identity = new Matrix4();
+                for (int i = 0; i < roots.size; i++) {
+                    traverseNode(nodes, roots.getInt(i), identity, worlds, visiting);
+                }
+                traversedScene = roots.size > 0;
+            }
+        }
+
+        if (!traversedScene) {
+            boolean[] child = new boolean[nodes.size];
+            for (int i = 0; i < nodes.size; i++) {
+                JsonValue children = nodes.get(i).get("children");
+                if (children == null) continue;
+                for (int c = 0; c < children.size; c++) {
+                    int childIndex = children.getInt(c);
+                    if (childIndex < 0 || childIndex >= nodes.size) {
+                        throw new IOException("Invalid DirtBike child node index: " + childIndex);
+                    }
+                    child[childIndex] = true;
+                }
+            }
+            Matrix4 identity = new Matrix4();
+            for (int i = 0; i < nodes.size; i++) {
+                if (!child[i]) traverseNode(nodes, i, identity, worlds, visiting);
+            }
+        }
+
+        return worlds;
+    }
+
+    private static void traverseNode(JsonValue nodes,
+                                     int nodeIndex,
+                                     Matrix4 parentWorld,
+                                     Matrix4[] worlds,
+                                     boolean[] visiting) throws IOException {
+        if (nodeIndex < 0 || nodeIndex >= nodes.size) {
+            throw new IOException("Invalid DirtBike node index: " + nodeIndex);
+        }
+        if (worlds[nodeIndex] != null) return;
+        if (visiting[nodeIndex]) {
+            throw new IOException("Cycle detected in DirtBike node hierarchy");
+        }
+
+        visiting[nodeIndex] = true;
+        JsonValue node = nodes.get(nodeIndex);
+        Matrix4 world = new Matrix4(parentWorld).mul(readNodeLocalTransform(node));
+        worlds[nodeIndex] = world;
+
+        JsonValue children = node.get("children");
+        if (children != null) {
+            for (int i = 0; i < children.size; i++) {
+                traverseNode(nodes, children.getInt(i), world, worlds, visiting);
+            }
+        }
+        visiting[nodeIndex] = false;
+    }
+
+    private static Matrix4 readNodeLocalTransform(JsonValue node) throws IOException {
+        JsonValue matrix = node.get("matrix");
+        if (matrix != null) {
+            if (matrix.size != 16) {
+                throw new IOException("DirtBike node matrix must contain 16 values");
+            }
+            float[] values = new float[16];
+            for (int i = 0; i < 16; i++) values[i] = matrix.getFloat(i);
+            return new Matrix4(values);
+        }
+
+        float tx = 0f, ty = 0f, tz = 0f;
+        JsonValue translation = node.get("translation");
+        if (translation != null) {
+            requireVectorSize(translation, 3, "translation");
+            tx = translation.getFloat(0);
+            ty = translation.getFloat(1);
+            tz = translation.getFloat(2);
+        }
+
+        float qx = 0f, qy = 0f, qz = 0f, qw = 1f;
+        JsonValue rotation = node.get("rotation");
+        if (rotation != null) {
+            requireVectorSize(rotation, 4, "rotation");
+            qx = rotation.getFloat(0);
+            qy = rotation.getFloat(1);
+            qz = rotation.getFloat(2);
+            qw = rotation.getFloat(3);
+        }
+
+        float sx = 1f, sy = 1f, sz = 1f;
+        JsonValue scale = node.get("scale");
+        if (scale != null) {
+            requireVectorSize(scale, 3, "scale");
+            sx = scale.getFloat(0);
+            sy = scale.getFloat(1);
+            sz = scale.getFloat(2);
+        }
+
+        Quaternion orientation = new Quaternion(qx, qy, qz, qw).nor();
+        return new Matrix4().idt()
+                .translate(tx, ty, tz)
+                .rotate(orientation)
+                .scale(sx, sy, sz);
+    }
+
+    private static void requireVectorSize(JsonValue value, int expected, String label)
+            throws IOException {
+        if (value.size != expected) {
+            throw new IOException("DirtBike node " + label + " must contain "
+                    + expected + " values");
+        }
+    }
+
+    private static Vector3 findNamedNodeOrigin(JsonValue json,
+                                               Matrix4[] nodeWorlds,
+                                               String wantedName) {
+        JsonValue nodes = json.get("nodes");
+        for (int i = 0; i < nodes.size; i++) {
+            if (nodeWorlds[i] == null) continue;
+            String name = nodes.get(i).getString("name", "");
+            if (wantedName.equalsIgnoreCase(name)) {
+                return transformOrigin(nodeWorlds[i]);
+            }
+        }
+        return null;
+    }
+
+    private static Vector3 findMeshNodeOrigin(JsonValue json,
+                                              Matrix4[] nodeWorlds,
+                                              String wantedMeshName) throws IOException {
+        JsonValue nodes = json.get("nodes");
+        for (int i = 0; i < nodes.size; i++) {
+            if (nodeWorlds[i] == null) continue;
+            JsonValue node = nodes.get(i);
+            if (!node.has("mesh")) continue;
+
+            JsonValue mesh = getArrayItem(json, "meshes", node.getInt("mesh"));
+            if (wantedMeshName.equals(mesh.getString("name", ""))) {
+                return transformOrigin(nodeWorlds[i]);
+            }
+        }
+        return null;
+    }
+
+    private static Vector3 transformOrigin(Matrix4 matrix) {
+        float[] v = matrix.val;
+        return new Vector3(v[Matrix4.M03], v[Matrix4.M13], v[Matrix4.M23]);
+    }
+
+    private static void transformPositions(float[] positions, Matrix4 transform) {
+        float[] m = transform.val;
+        for (int i = 0; i < positions.length; i += 3) {
+            float x = positions[i];
+            float y = positions[i + 1];
+            float z = positions[i + 2];
+            positions[i] = m[Matrix4.M00] * x + m[Matrix4.M01] * y
+                    + m[Matrix4.M02] * z + m[Matrix4.M03];
+            positions[i + 1] = m[Matrix4.M10] * x + m[Matrix4.M11] * y
+                    + m[Matrix4.M12] * z + m[Matrix4.M13];
+            positions[i + 2] = m[Matrix4.M20] * x + m[Matrix4.M21] * y
+                    + m[Matrix4.M22] * z + m[Matrix4.M23];
+        }
+    }
+
+    private static void rebasePositions(float[] positions, Vector3 pivot) {
+        for (int i = 0; i < positions.length; i += 3) {
+            positions[i] -= pivot.x;
+            positions[i + 1] -= pivot.y;
+            positions[i + 2] -= pivot.z;
+        }
+    }
+
+    private static float linearDeterminant(Matrix4 matrix) {
+        float[] m = matrix.val;
+        return m[Matrix4.M00] * (m[Matrix4.M11] * m[Matrix4.M22]
+                - m[Matrix4.M12] * m[Matrix4.M21])
+                - m[Matrix4.M01] * (m[Matrix4.M10] * m[Matrix4.M22]
+                - m[Matrix4.M12] * m[Matrix4.M20])
+                + m[Matrix4.M02] * (m[Matrix4.M10] * m[Matrix4.M21]
+                - m[Matrix4.M11] * m[Matrix4.M20]);
+    }
+
+    private static void flipTriangleWinding(short[] indices) {
+        for (int i = 0; i < indices.length; i += 3) {
+            short temp = indices[i + 1];
+            indices[i + 1] = indices[i + 2];
+            indices[i + 2] = temp;
+        }
     }
 
     private static ParsedGlb parseGlb(byte[] bytes) throws IOException {
