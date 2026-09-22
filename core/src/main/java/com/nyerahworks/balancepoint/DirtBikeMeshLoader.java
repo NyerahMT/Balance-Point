@@ -26,20 +26,19 @@ import java.nio.charset.StandardCharsets;
 /**
  * Minimal GLB 2.0 loader for the shipped DirtBike.glb asset.
  *
- * Unlike the original importer, this loader evaluates the active glTF scene graph
- * and bakes each mesh node's full parent -> child transform into its vertices.
- * Static pieces are then rebased to the authored rear-axle pivot while wheel
- * geometry is rebased to its own axle pivot so the wheels can still spin/steer at
- * runtime without losing the positions authored in Blender.
- *
- * The old procedural fork/handlebar remains the animated steering hardware for now.
- * Matching GLB pieces are therefore omitted here so they are not drawn twice.
+ * The GLB scene graph supplies the authored object transforms. DirtBike.layout.json
+ * supplies the game's authoritative named anchors plus the one documented source-rig
+ * correction required by the static chassis geometry. Keeping those values in a
+ * human-readable manifest means placement is measurable and reproducible rather than
+ * being tuned by eye in runtime code.
  */
 final class DirtBikeMeshLoader {
     private static final int GLB_MAGIC = 0x46546C67; // "glTF"
     private static final int JSON_CHUNK = 0x4E4F534A;
     private static final int BIN_CHUNK = 0x004E4942;
     private static final int GLB_VERSION = 2;
+    private static final String LAYOUT_PATH = "models/DirtBike.layout.json";
+    private static final float ANCHOR_EPSILON = 0.001f;
 
     private DirtBikeMeshLoader() {}
 
@@ -49,6 +48,7 @@ final class DirtBikeMeshLoader {
                                 Material wheelMaterial) throws IOException {
         byte[] bytes = Gdx.files.internal("models/DirtBike.glb").readBytes();
         ParsedGlb glb = parseGlb(bytes);
+        JsonValue layout = readLayout();
 
         JsonValue meshes = glb.json.get("meshes");
         JsonValue nodes = glb.json.get("nodes");
@@ -61,17 +61,36 @@ final class DirtBikeMeshLoader {
 
         Matrix4[] nodeWorlds = buildNodeWorldTransforms(glb.json);
 
-        Vector3 rearPivotWorld = findNamedNodeOrigin(glb.json, nodeWorlds, "RearWheelPivot");
-        Vector3 frontPivotWorld = findNamedNodeOrigin(glb.json, nodeWorlds, "FrontWheelPivot");
+        JsonValue anchors = layout.get("anchors");
+        if (anchors == null) throw new IOException("DirtBike layout has no anchors");
+        Vector3 rearPivotWorld = readVec3(anchors.get("rearAxle"), "rearAxle");
+        Vector3 frontPivotWorld = readVec3(anchors.get("frontAxle"), "frontAxle");
+        Vector3 steeringHead = readVec3(anchors.get("steeringHead"), "steeringHead");
 
-        if (rearPivotWorld == null) {
-            rearPivotWorld = findMeshNodeOrigin(glb.json, nodeWorlds, "RearWheel_GEO");
+        // The manifest is the game-facing source of truth, but fail loudly if the
+        // binary asset's named pivots ever drift away from it.
+        requireAnchorMatches("RearWheelPivot", rearPivotWorld,
+                findNamedNodeOrigin(glb.json, nodeWorlds, "RearWheelPivot"));
+        requireAnchorMatches("FrontWheelPivot", frontPivotWorld,
+                findNamedNodeOrigin(glb.json, nodeWorlds, "FrontWheelPivot"));
+        requireAnchorMatches("SteeringPivot", steeringHead,
+                findNamedNodeOrigin(glb.json, nodeWorlds, "SteeringPivot"));
+
+        float declaredWheelbase = layout.getFloat("wheelbase", -1f);
+        float measuredWheelbase = frontPivotWorld.dst(rearPivotWorld);
+        if (declaredWheelbase <= 0f || Math.abs(declaredWheelbase - measuredWheelbase) > ANCHOR_EPSILON) {
+            throw new IOException("DirtBike layout wheelbase does not match axle anchors");
         }
-        if (frontPivotWorld == null) {
-            frontPivotWorld = findMeshNodeOrigin(glb.json, nodeWorlds, "FrontWheel_GEO");
+
+        JsonValue correctionJson = layout.get("staticGeometryCorrection");
+        if (correctionJson == null) {
+            throw new IOException("DirtBike layout has no staticGeometryCorrection");
         }
-        if (rearPivotWorld == null || frontPivotWorld == null) {
-            throw new IOException("DirtBike.glb is missing usable front/rear wheel pivots");
+        Vector3 staticCorrection = readVec3(correctionJson.get("translation"),
+                "staticGeometryCorrection.translation");
+        JsonValue correctedMeshes = correctionJson.get("meshes");
+        if (correctedMeshes == null) {
+            throw new IOException("DirtBike layout correction has no mesh list");
         }
 
         Array<MeshData> bodyParts = new Array<>();
@@ -91,7 +110,8 @@ final class DirtBikeMeshLoader {
             String name = meshJson.getString("name",
                     node.getString("name", "mesh-" + meshIndex));
 
-            // These are already represented by BalancePointGame's steering hardware.
+            // BalancePointGame still owns the animated steering hardware. These exact
+            // GLB meshes are retained in the manifest and will replace it next.
             if (isProceduralSteeringPart(name)) continue;
 
             JsonValue primitives = meshJson.get("primitives");
@@ -114,11 +134,18 @@ final class DirtBikeMeshLoader {
                 short[] indices = readIndices(glb, primitive.getInt("indices"),
                         positions.length / 3);
 
-                // Vertex accessors are local to their node. Apply the node's full
-                // inherited scene transform before deciding where the part belongs.
+                // POSITION accessors are node-local. First get every vertex into the
+                // exact authored world/bike coordinate system.
                 transformPositions(positions, world);
                 if (linearDeterminant(world) < 0f) {
                     flipTriangleWinding(indices);
+                }
+
+                // The old import pipeline documented that these static source-rig
+                // meshes sit 0.28 m below the visual axle reference. Apply the exact
+                // correction from the manifest, never to either wheel.
+                if (containsString(correctedMeshes, name)) {
+                    translatePositions(positions, staticCorrection);
                 }
 
                 Material fallback;
@@ -137,9 +164,8 @@ final class DirtBikeMeshLoader {
                 boolean frontWheel = "FrontWheel_GEO".equals(name);
                 boolean rearWheel = "RearWheel_GEO".equals(name);
 
-                // Static geometry lives in bike-local space relative to the rear axle.
-                // Wheel geometry lives relative to its own axle so runtime rotation
-                // remains a true spin instead of orbiting around the bike origin.
+                // Static geometry is relative to the rear axle. Each wheel is relative
+                // to its own exact axle so runtime spin remains centered on the hub.
                 Vector3 rebase = frontWheel ? frontPivotWorld : rearPivotWorld;
                 rebasePositions(positions, rebase);
 
@@ -171,9 +197,9 @@ final class DirtBikeMeshLoader {
         ownedModels.add(front);
         ownedModels.add(rear);
 
-        Vector3 frontPivotLocal = new Vector3(frontPivotWorld).sub(rearPivotWorld);
-        Gdx.app.log("BalancePoint", "DirtBike authored front axle relative to rear: "
-                + frontPivotLocal);
+        Gdx.app.log("BalancePoint", "DirtBike exact layout: rear=" + rearPivotWorld
+                + " front=" + frontPivotWorld + " steering=" + steeringHead
+                + " staticCorrection=" + staticCorrection);
 
         return new ModelInstance[] {
                 new ModelInstance(body),
@@ -181,6 +207,51 @@ final class DirtBikeMeshLoader {
                 new ModelInstance(front),
                 new ModelInstance(rear)
         };
+    }
+
+    private static JsonValue readLayout() throws IOException {
+        try {
+            JsonValue layout = new JsonReader().parse(
+                    Gdx.files.internal(LAYOUT_PATH).readString("UTF-8"));
+            if (layout.getInt("version", 0) != 1) {
+                throw new IOException("Unsupported DirtBike layout version");
+            }
+            String coordinateSystem = layout.getString("coordinateSystem", "");
+            if (!"X right, Y up, Z forward".equals(coordinateSystem)) {
+                throw new IOException("Unexpected DirtBike layout coordinate system: "
+                        + coordinateSystem);
+            }
+            return layout;
+        } catch (IOException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IOException("Could not read DirtBike layout", e);
+        }
+    }
+
+    private static Vector3 readVec3(JsonValue value, String label) throws IOException {
+        if (value == null || value.size != 3) {
+            throw new IOException("DirtBike layout " + label + " must contain 3 values");
+        }
+        return new Vector3(value.getFloat(0), value.getFloat(1), value.getFloat(2));
+    }
+
+    private static boolean containsString(JsonValue array, String wanted) {
+        for (int i = 0; i < array.size; i++) {
+            if (wanted.equals(array.getString(i))) return true;
+        }
+        return false;
+    }
+
+    private static void requireAnchorMatches(String label, Vector3 expected, Vector3 actual)
+            throws IOException {
+        if (actual == null) {
+            throw new IOException("DirtBike GLB is missing named anchor " + label);
+        }
+        if (expected.dst(actual) > ANCHOR_EPSILON) {
+            throw new IOException("DirtBike anchor drift for " + label
+                    + ": layout=" + expected + " glb=" + actual);
+        }
     }
 
     private static boolean isProceduralSteeringPart(String name) {
@@ -329,23 +400,6 @@ final class DirtBikeMeshLoader {
         return null;
     }
 
-    private static Vector3 findMeshNodeOrigin(JsonValue json,
-                                              Matrix4[] nodeWorlds,
-                                              String wantedMeshName) throws IOException {
-        JsonValue nodes = json.get("nodes");
-        for (int i = 0; i < nodes.size; i++) {
-            if (nodeWorlds[i] == null) continue;
-            JsonValue node = nodes.get(i);
-            if (!node.has("mesh")) continue;
-
-            JsonValue mesh = getArrayItem(json, "meshes", node.getInt("mesh"));
-            if (wantedMeshName.equals(mesh.getString("name", ""))) {
-                return transformOrigin(nodeWorlds[i]);
-            }
-        }
-        return null;
-    }
-
     private static Vector3 transformOrigin(Matrix4 matrix) {
         float[] v = matrix.val;
         return new Vector3(v[Matrix4.M03], v[Matrix4.M13], v[Matrix4.M23]);
@@ -363,6 +417,14 @@ final class DirtBikeMeshLoader {
                     + m[Matrix4.M12] * z + m[Matrix4.M13];
             positions[i + 2] = m[Matrix4.M20] * x + m[Matrix4.M21] * y
                     + m[Matrix4.M22] * z + m[Matrix4.M23];
+        }
+    }
+
+    private static void translatePositions(float[] positions, Vector3 translation) {
+        for (int i = 0; i < positions.length; i += 3) {
+            positions[i] += translation.x;
+            positions[i + 1] += translation.y;
+            positions[i + 2] += translation.z;
         }
     }
 
