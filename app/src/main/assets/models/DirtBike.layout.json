@@ -1,0 +1,83 @@
+{
+  "version": 1,
+  "source": "DirtBike.blend",
+  "coordinateSystem": "X right, Y up, Z forward",
+  "wheelbase": 1.45,
+  "anchors": {
+    "bikeOrigin": [0.0, 0.0, 0.0],
+    "rearAxle": [0.0, 0.0, 0.0],
+    "frontAxle": [0.0, 0.0, 1.45],
+    "steeringHead": [0.0000001696009414, 0.3071144766, 1.2865853977],
+    "steeringAxis": [-0.0000000004564457, -0.3071144766, 0.1634146023]
+  },
+  "staticGeometryCorrection": {
+    "translation": [0.0, 0.28, 0.0],
+    "meshes": ["Body_GEO", "Engine_GEO", "RearWheelChain_GEO"],
+    "reason": "The source rig's static chassis geometry is authored 0.28 m below the visual axle reference; this correction was present in the original import pipeline and is centralized here instead of hidden in runtime code."
+  },
+  "parts": {
+    "Body_GEO": {
+      "nodeOrigin": [0.0, 0.0, 0.0],
+      "center": [0.000001, -0.067593, 0.416370],
+      "min": [-0.266774, -0.392639, -0.285788],
+      "max": [0.266776, 0.257453, 1.118528],
+      "size": [0.533550, 0.650092, 1.404316]
+    },
+    "Engine_GEO": {
+      "nodeOrigin": [0.0, 0.0, 0.0],
+      "center": [0.0, -0.233750, 0.447006],
+      "min": [-0.193640, -0.587712, -0.154508],
+      "max": [0.193640, 0.120213, 1.048521],
+      "size": [0.387281, 0.707925, 1.203028]
+    },
+    "FrontShock_GEO": {
+      "nodeOrigin": [0.0, 0.0, 0.0],
+      "center": [0.0, 0.439140, 1.213561],
+      "min": [-0.141415, 0.278702, 1.111209],
+      "max": [0.141416, 0.599577, 1.315912],
+      "size": [0.282831, 0.320876, 0.204703]
+    },
+    "FrontWheel_GEO": {
+      "nodeOrigin": [0.0, 0.0, 1.45],
+      "center": [0.0, 0.0, 1.45],
+      "min": [-0.087623, -0.404531, 1.046022],
+      "max": [0.087623, 0.404531, 1.853978],
+      "size": [0.175247, 0.809063, 0.807955]
+    },
+    "Handle_GEO": {
+      "nodeOrigin": [0.0, 0.0, 0.0],
+      "center": [0.0, 0.767114, 1.151676],
+      "min": [-0.421065, 0.418386, 0.736514],
+      "max": [0.421065, 1.115842, 1.566839],
+      "size": [0.842130, 0.697456, 0.830325]
+    },
+    "RearWheel_GEO": {
+      "nodeOrigin": [0.0, 0.0, 0.0],
+      "center": [0.0, 0.0, 0.0],
+      "min": [-0.083079, -0.352413, -0.351716],
+      "max": [0.083079, 0.352413, 0.351716],
+      "size": [0.166157, 0.704826, 0.703431]
+    },
+    "RearWheelChain_GEO": {
+      "nodeOrigin": [0.0, 0.0, 0.0],
+      "center": [0.0, 0.127149, 0.980083],
+      "min": [-0.151110, -0.027389, 0.531972],
+      "max": [0.151110, 0.281687, 1.428194],
+      "size": [0.302221, 0.309076, 0.896222]
+    },
+    "LeftLeaver_GEO": {
+      "nodeOrigin": [0.0, 0.0, 0.0],
+      "center": [0.133630, 0.857188, 0.931433],
+      "min": [0.035569, 0.824647, 0.890640],
+      "max": [0.231691, 0.889730, 0.972226],
+      "size": [0.196122, 0.065083, 0.081586]
+    },
+    "RightLeaver_GEO": {
+      "nodeOrigin": [0.0, 0.0, 0.0],
+      "center": [-0.133630, 0.857188, 0.931433],
+      "min": [-0.231691, 0.824647, 0.890640],
+      "max": [-0.035569, 0.889730, 0.972226],
+      "size": [0.196123, 0.065083, 0.081586]
+    }
+  }
+}
