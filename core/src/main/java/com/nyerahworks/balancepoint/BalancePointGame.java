@@ -59,9 +59,9 @@ public final class BalancePointGame extends ApplicationAdapter {
     private static final float BALANCE_DAMPING_BAND = 18f * MathUtils.degreesToRadians;
     private static final float LOOP_ANGLE = 103f * MathUtils.degreesToRadians;
 
+    // Placeholder rider transforms are retained for cockpit/camera experiments, but the
+    // imported GLB path renders only the authored motorcycle geometry.
     private static final float IMPORTED_RIDER_SCALE = 0.82f;
-    private static final float IMPORTED_BODY_LIFT = 0.12f;
-    private static final float IMPORTED_STEERING_VISUAL_DROP = 0.28f;
 
     private final Array<Model> ownedModels = new Array<>();
     private final Matrix4 bikeRoot = new Matrix4();
@@ -651,9 +651,10 @@ public final class BalancePointGame extends ApplicationAdapter {
         }
 
         if (importedBikeLoaded) {
-            importedBike.body.transform.set(bikeRoot)
-                    .translate(0f, IMPORTED_BODY_LIFT, 0f);
-            importedBike.engine.transform.set(bikeRoot).translate(0f, 0.20f, 0f);
+            // Neutral visual pose must reproduce the authored GLB exactly. Only joint
+            // animation (steering and wheel spin) is applied on top of that pose.
+            importedBike.body.transform.set(bikeRoot);
+            importedBike.engine.transform.set(bikeRoot);
 
             float importedSpinDeg = -wheelSpin * MathUtils.radiansToDegrees;
             importedBike.rearWheel.transform.set(bikeRoot)
@@ -665,11 +666,7 @@ public final class BalancePointGame extends ApplicationAdapter {
             importedSteeringRoot.set(bikeRoot)
                     .translate(importedBike.steeringHead)
                     .rotate(importedBike.steeringAxis, visualSteerDeg);
-
-            // The source shock bottoms 0.2787 m above the axle. Drop only the visual
-            // steering/suspension mesh while leaving the wheel on the authored axle.
-            importedBike.steering.transform.set(importedSteeringRoot)
-                    .translate(0f, -IMPORTED_STEERING_VISUAL_DROP, 0f);
+            importedBike.steering.transform.set(importedSteeringRoot);
             importedBike.frontWheel.transform.set(importedSteeringRoot)
                     .translate(importedBike.frontAxleOffset)
                     .rotate(Vector3.X, importedSpinDeg);
