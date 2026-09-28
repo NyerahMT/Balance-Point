@@ -11,9 +11,9 @@
     "steeringAxis": [-0.0000000004564457, -0.3071144766, 0.1634146023]
   },
   "staticGeometryCorrection": {
-    "translation": [0.0, 0.28, 0.0],
+    "translation": [0.0, 0.0, 0.0],
     "meshes": ["Body_GEO", "Engine_GEO", "RearWheelChain_GEO"],
-    "reason": "The source rig's static chassis geometry is authored 0.28 m below the visual axle reference; this correction was present in the original import pipeline and is centralized here instead of hidden in runtime code."
+    "reason": "Neutralized: the GLB viewer pose is authoritative. Runtime zero-pose rendering must preserve the authored GLB coordinates exactly."
   },
   "parts": {
     "Body_GEO": {
