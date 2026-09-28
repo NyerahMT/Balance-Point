@@ -671,7 +671,9 @@ public final class BalancePointGame extends ApplicationAdapter {
 
         if (importedBikeLoaded) {
             importedBike.body.transform.set(bikeRoot);
-            importedBike.engine.transform.set(bikeRoot);
+            // The engine is authored substantially lower than the body in the source mesh.
+            // Lift only the engine so the chassis/plastics that already align with the wheels stay put.
+            importedBike.engine.transform.set(bikeRoot).translate(0f, 0.20f, 0f);
 
             float importedSpinDeg = -wheelSpin * MathUtils.radiansToDegrees;
             importedBike.rearWheel.transform.set(bikeRoot)
