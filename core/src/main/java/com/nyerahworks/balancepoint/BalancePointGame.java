@@ -59,9 +59,9 @@ public final class BalancePointGame extends ApplicationAdapter {
     private static final float BALANCE_DAMPING_BAND = 18f * MathUtils.degreesToRadians;
     private static final float LOOP_ANGLE = 103f * MathUtils.degreesToRadians;
 
-    // The imported dirt bike is slimmer and lower than the original procedural
-    // prototype. Keep the simple rider, but size and seat it against the real asset.
     private static final float IMPORTED_RIDER_SCALE = 0.82f;
+    private static final float IMPORTED_BODY_LIFT = 0.12f;
+    private static final float IMPORTED_STEERING_VISUAL_DROP = 0.28f;
 
     private final Array<Model> ownedModels = new Array<>();
     private final Matrix4 bikeRoot = new Matrix4();
@@ -262,8 +262,6 @@ public final class BalancePointGame extends ApplicationAdapter {
         riderArmRight = new ModelInstance(limbM);
         frontNumberPlate = new ModelInstance(plateM);
 
-        // Load the optimized DirtBike.blend geometry. The procedural bike remains
-        // available as a no-crash fallback if an asset is ever missing or corrupt.
         try {
             importedBike = DirtBikeMeshLoader.load(ownedModels,
                     material(0.08f, 0.52f, 0.12f),
@@ -337,7 +335,6 @@ public final class BalancePointGame extends ApplicationAdapter {
                 continue;
             }
 
-            // Right-side vertical throttle slider.
             if (x > 0.82f && y > 0.46f && y < 0.90f) {
                 throttleTouch = true;
                 requestedThrottle = Math.max(requestedThrottle,
@@ -345,7 +342,6 @@ public final class BalancePointGame extends ApplicationAdapter {
                 continue;
             }
 
-            // Rear brake sits just left of the throttle for the right thumb.
             if (x >= 0.70f && x <= 0.82f && y > 0.70f) {
                 brakeTouch = true;
                 float brake = MathUtils.clamp((y - 0.70f) / 0.24f, 0.50f, 1f);
@@ -353,7 +349,6 @@ public final class BalancePointGame extends ApplicationAdapter {
                 continue;
             }
 
-            // Left/right steering arrows. Digital touch, analog filtered steering.
             if (x >= 0.03f && x < 0.16f && y > 0.66f && y < 0.91f) {
                 leftArrowTouch = true;
                 continue;
@@ -363,7 +358,6 @@ public final class BalancePointGame extends ApplicationAdapter {
                 continue;
             }
 
-            // Middle-screen drag remains free-look and never feeds steering.
             if (x > 0.30f && x < 0.70f && y > 0.10f && y < 0.66f) {
                 lookTouch = true;
                 lookYaw -= Gdx.input.getDeltaX(pointer) * 0.0048f;
@@ -385,11 +379,9 @@ public final class BalancePointGame extends ApplicationAdapter {
         if (leftArrowTouch == rightArrowTouch) {
             steerTarget = 0f;
         } else {
-            // Positive steer is screen-left in the current motorcycle model.
             steerTarget = leftArrowTouch ? 0.65f : -0.65f;
         }
 
-        // Fore/aft rider lean is intentionally disabled.
         riderLean = 0f;
         riderLeanTarget = 0f;
 
@@ -398,7 +390,6 @@ public final class BalancePointGame extends ApplicationAdapter {
         rearBrake = approach(rearBrake, rearBrakeTarget,
                 (rearBrakeTarget > rearBrake ? 24f : 22f) * dt);
 
-        // Digital arrows feed a damped analog steering state.
         float steerResponse = 1.65f + Math.min(speed * 0.018f, 0.55f);
         steer += (steerTarget - steer) * Math.min(1f, dt * steerResponse);
 
@@ -480,8 +471,6 @@ public final class BalancePointGame extends ApplicationAdapter {
             float proximityLinear = 1f - MathUtils.clamp(balanceDistance / BALANCE_DAMPING_BAND, 0f, 1f);
             float proximity = proximityLinear * proximityLinear;
 
-            // Slow, deliberate corrections receive almost no assist. Damping ramps
-            // in only when pitch rate gets large near the balance region.
             float rateMagnitude = Math.abs(pitchVelocity);
             float rateAssist = MathUtils.clamp(
                     (rateMagnitude - BALANCE_FREE_RATE) / (BALANCE_FULL_RATE - BALANCE_FREE_RATE),
@@ -496,9 +485,6 @@ public final class BalancePointGame extends ApplicationAdapter {
 
             pitchVelocity += (pitchTorque / PITCH_INERTIA) * dt;
 
-            // Progressive safety net rather than an auto-balance system: normal
-            // balance-point movement stays in the rider's hands, while fast pitch
-            // excursions are softened enough to remain recoverable.
             float rateDecay = 0.45f + assist * BALANCE_RATE_DECAY;
             pitchVelocity *= (float) Math.exp(-rateDecay * dt);
             pitchVelocity = MathUtils.clamp(pitchVelocity, -1.90f, 1.90f);
@@ -629,10 +615,6 @@ public final class BalancePointGame extends ApplicationAdapter {
         frontNumberPlate.transform.rotate(Vector3.X, 10f);
 
         if (importedBikeLoaded) {
-            // Keep the rider transforms available for cockpit/camera experiments, but
-            // do not render this procedural placeholder over the imported bike. The
-            // GLB/STL contains the motorcycle only, so visual validation must show the
-            // authored motorcycle geometry without the old block-character obscuring it.
             setPart(riderTorso, 0f, 0.94f, 0.49f);
             riderTorso.transform.rotate(Vector3.X, -16f).scale(
                     IMPORTED_RIDER_SCALE, IMPORTED_RIDER_SCALE, IMPORTED_RIDER_SCALE);
@@ -654,7 +636,6 @@ public final class BalancePointGame extends ApplicationAdapter {
             riderArmRight.transform.rotate(Vector3.X, 67f).scale(
                     IMPORTED_RIDER_SCALE, IMPORTED_RIDER_SCALE, IMPORTED_RIDER_SCALE);
         } else {
-            // Original rider placement for the procedural fallback bike.
             float riderZ = 0.43f + riderLean * 0.10f;
             setPart(riderTorso, 0f, 1.07f, riderZ);
             riderTorso.transform.rotate(Vector3.X, -11f - riderLean * 9f);
@@ -670,9 +651,8 @@ public final class BalancePointGame extends ApplicationAdapter {
         }
 
         if (importedBikeLoaded) {
-            importedBike.body.transform.set(bikeRoot);
-            // The engine is authored substantially lower than the body in the source mesh.
-            // Lift only the engine so the chassis/plastics that already align with the wheels stay put.
+            importedBike.body.transform.set(bikeRoot)
+                    .translate(0f, IMPORTED_BODY_LIFT, 0f);
             importedBike.engine.transform.set(bikeRoot).translate(0f, 0.20f, 0f);
 
             float importedSpinDeg = -wheelSpin * MathUtils.radiansToDegrees;
@@ -682,13 +662,14 @@ public final class BalancePointGame extends ApplicationAdapter {
             float visualSteerDeg = -steer * MathUtils.lerp(13f, 5f,
                     MathUtils.clamp(speed / 30f, 0f, 1f));
 
-            // Steering hardware and front wheel now share the exact authored steering
-            // head and rake axis from DirtBike.layout.json. The front wheel first moves
-            // from the steering head to its axle, then spins around its local axle.
             importedSteeringRoot.set(bikeRoot)
                     .translate(importedBike.steeringHead)
                     .rotate(importedBike.steeringAxis, visualSteerDeg);
-            importedBike.steering.transform.set(importedSteeringRoot);
+
+            // The source shock bottoms 0.2787 m above the axle. Drop only the visual
+            // steering/suspension mesh while leaving the wheel on the authored axle.
+            importedBike.steering.transform.set(importedSteeringRoot)
+                    .translate(0f, -IMPORTED_STEERING_VISUAL_DROP, 0f);
             importedBike.frontWheel.transform.set(importedSteeringRoot)
                     .translate(importedBike.frontAxleOffset)
                     .rotate(Vector3.X, importedSpinDeg);
@@ -710,8 +691,6 @@ public final class BalancePointGame extends ApplicationAdapter {
         float cosView = MathUtils.cos(viewYaw);
 
         if (cockpitCamera) {
-            // Camera position rides with the helmet, but orientation is referenced to
-            // world-up. Use the lower imported rider pose when the GLB bike is active.
             float helmetY = importedBikeLoaded ? 1.28f : 1.42f;
             float helmetZ = importedBikeLoaded ? 0.66f : (0.58f + riderLean * 0.10f);
             tempA.set(0f, helmetY, helmetZ).mul(bikeRoot);
@@ -745,10 +724,6 @@ public final class BalancePointGame extends ApplicationAdapter {
             modelBatch.render(importedBike.steering, environment);
             modelBatch.render(importedBike.rearWheel, environment);
             modelBatch.render(importedBike.frontWheel, environment);
-
-            // Intentionally render only the authored GLB motorcycle here. The source
-            // asset contains no rider; the old procedural rider made placement changes
-            // look nearly identical and obscured whether the motorcycle itself was right.
             return;
         }
 
@@ -777,7 +752,6 @@ public final class BalancePointGame extends ApplicationAdapter {
         shapes.setColor(0f, 0f, 0f, 0.45f);
         shapes.rect(18f, h - 142f, 300f, 120f);
 
-        // Right-side throttle slider.
         float sliderX = w * 0.91f;
         float sliderBottom = h * 0.12f;
         float sliderTop = h * 0.52f;
@@ -787,13 +761,11 @@ public final class BalancePointGame extends ApplicationAdapter {
         shapes.setColor(1f, 1f, 1f, 0.48f);
         shapes.circle(sliderX, knobY, min * 0.045f, 20);
 
-        // Rear brake beside throttle.
         float brakeX = w * 0.755f;
         float brakeY = h * 0.17f;
         shapes.setColor(1f, 1f, 1f, rearBrakeTarget > 0f ? 0.50f : 0.16f);
         shapes.circle(brakeX, brakeY, min * 0.065f, 24);
 
-        // Left-side steering arrows.
         float steerLeftX = w * 0.095f;
         float steerRightX = w * 0.235f;
         float steerY = h * 0.18f;
