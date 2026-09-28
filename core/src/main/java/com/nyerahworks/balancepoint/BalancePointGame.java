@@ -629,9 +629,10 @@ public final class BalancePointGame extends ApplicationAdapter {
         frontNumberPlate.transform.rotate(Vector3.X, 10f);
 
         if (importedBikeLoaded) {
-            // Seat the placeholder rider against the actual GLB dirt bike instead of
-            // the much bulkier procedural prototype. The smaller local scale keeps
-            // the torso/head from towering over the tank and bars.
+            // Keep the rider transforms available for cockpit/camera experiments, but
+            // do not render this procedural placeholder over the imported bike. The
+            // GLB/STL contains the motorcycle only, so visual validation must show the
+            // authored motorcycle geometry without the old block-character obscuring it.
             setPart(riderTorso, 0f, 0.94f, 0.49f);
             riderTorso.transform.rotate(Vector3.X, -16f).scale(
                     IMPORTED_RIDER_SCALE, IMPORTED_RIDER_SCALE, IMPORTED_RIDER_SCALE);
@@ -743,11 +744,9 @@ public final class BalancePointGame extends ApplicationAdapter {
             modelBatch.render(importedBike.rearWheel, environment);
             modelBatch.render(importedBike.frontWheel, environment);
 
-            // The procedural fork/handlebar pieces are now fallback-only. When the
-            // GLB loads, the authored shock, bars and levers are the steering assembly.
-            modelBatch.render(riderTorso, environment); modelBatch.render(riderHead, environment);
-            modelBatch.render(riderLegLeft, environment); modelBatch.render(riderLegRight, environment);
-            modelBatch.render(riderArmLeft, environment); modelBatch.render(riderArmRight, environment);
+            // Intentionally render only the authored GLB motorcycle here. The source
+            // asset contains no rider; the old procedural rider made placement changes
+            // look nearly identical and obscured whether the motorcycle itself was right.
             return;
         }
 
