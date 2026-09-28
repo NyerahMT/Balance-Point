@@ -42,10 +42,39 @@ final class DirtBikeMeshLoader {
 
     private DirtBikeMeshLoader() {}
 
-    static ModelInstance[] load(Array<Model> ownedModels,
-                                Material bodyMaterial,
-                                Material engineMaterial,
-                                Material wheelMaterial) throws IOException {
+    static final class LoadedBike {
+        final ModelInstance body;
+        final ModelInstance engine;
+        final ModelInstance steering;
+        final ModelInstance frontWheel;
+        final ModelInstance rearWheel;
+        final Vector3 steeringHead;
+        final Vector3 steeringAxis;
+        final Vector3 frontAxleOffset;
+
+        LoadedBike(Model bodyModel,
+                   Model engineModel,
+                   Model steeringModel,
+                   Model frontWheelModel,
+                   Model rearWheelModel,
+                   Vector3 steeringHead,
+                   Vector3 steeringAxis,
+                   Vector3 frontAxleOffset) {
+            this.body = new ModelInstance(bodyModel);
+            this.engine = new ModelInstance(engineModel);
+            this.steering = new ModelInstance(steeringModel);
+            this.frontWheel = new ModelInstance(frontWheelModel);
+            this.rearWheel = new ModelInstance(rearWheelModel);
+            this.steeringHead = new Vector3(steeringHead);
+            this.steeringAxis = new Vector3(steeringAxis).nor();
+            this.frontAxleOffset = new Vector3(frontAxleOffset);
+        }
+    }
+
+    static LoadedBike load(Array<Model> ownedModels,
+                           Material bodyMaterial,
+                           Material engineMaterial,
+                           Material wheelMaterial) throws IOException {
         byte[] bytes = Gdx.files.internal("models/DirtBike.glb").readBytes();
         ParsedGlb glb = parseGlb(bytes);
         JsonValue layout = readLayout();
@@ -66,6 +95,15 @@ final class DirtBikeMeshLoader {
         Vector3 rearPivotWorld = readVec3(anchors.get("rearAxle"), "rearAxle");
         Vector3 frontPivotWorld = readVec3(anchors.get("frontAxle"), "frontAxle");
         Vector3 steeringHead = readVec3(anchors.get("steeringHead"), "steeringHead");
+        Vector3 steeringAxis = readVec3(anchors.get("steeringAxis"), "steeringAxis");
+        Vector3 frontAxleOffset = new Vector3(frontPivotWorld).sub(steeringHead);
+
+        if (steeringAxis.len2() < 0.000001f) {
+            throw new IOException("DirtBike steering axis has zero length");
+        }
+        if (steeringAxis.dst(frontAxleOffset) > ANCHOR_EPSILON) {
+            throw new IOException("DirtBike steering axis does not terminate at the front axle");
+        }
 
         // The manifest is the game-facing source of truth, but fail loudly if the
         // binary asset's named pivots ever drift away from it.
@@ -95,6 +133,7 @@ final class DirtBikeMeshLoader {
 
         Array<MeshData> bodyParts = new Array<>();
         Array<MeshData> engineParts = new Array<>();
+        Array<MeshData> steeringParts = new Array<>();
         Array<MeshData> frontWheelParts = new Array<>();
         Array<MeshData> rearWheelParts = new Array<>();
 
@@ -109,10 +148,6 @@ final class DirtBikeMeshLoader {
             JsonValue meshJson = getArrayItem(glb.json, "meshes", meshIndex);
             String name = meshJson.getString("name",
                     node.getString("name", "mesh-" + meshIndex));
-
-            // BalancePointGame still owns the animated steering hardware. These exact
-            // GLB meshes are retained in the manifest and will replace it next.
-            if (isProceduralSteeringPart(name)) continue;
 
             JsonValue primitives = meshJson.get("primitives");
             if (primitives == null || primitives.size == 0) {
@@ -143,7 +178,7 @@ final class DirtBikeMeshLoader {
 
                 // The old import pipeline documented that these static source-rig
                 // meshes sit 0.28 m below the visual axle reference. Apply the exact
-                // correction from the manifest, never to either wheel.
+                // correction from the manifest, never to either wheel or steering group.
                 if (containsString(correctedMeshes, name)) {
                     translatePositions(positions, staticCorrection);
                 }
@@ -163,10 +198,13 @@ final class DirtBikeMeshLoader {
 
                 boolean frontWheel = "FrontWheel_GEO".equals(name);
                 boolean rearWheel = "RearWheel_GEO".equals(name);
+                boolean steeringPart = isSteeringPart(name);
 
-                // Static geometry is relative to the rear axle. Each wheel is relative
-                // to its own exact axle so runtime spin remains centered on the hub.
-                Vector3 rebase = frontWheel ? frontPivotWorld : rearPivotWorld;
+                // Static geometry is relative to the rear axle. The steering hardware
+                // is relative to the authored steering head and each wheel is relative
+                // to its own axle so runtime animation never invents another pivot.
+                Vector3 rebase = frontWheel ? frontPivotWorld
+                        : (steeringPart ? steeringHead : rearPivotWorld);
                 rebasePositions(positions, rebase);
 
                 String partName = name + "-n" + nodeIndex + "-p" + primitiveIndex;
@@ -175,6 +213,8 @@ final class DirtBikeMeshLoader {
                     frontWheelParts.add(part);
                 } else if (rearWheel) {
                     rearWheelParts.add(part);
+                } else if (steeringPart) {
+                    steeringParts.add(part);
                 } else if ("Engine_GEO".equals(name)) {
                     engineParts.add(part);
                 } else {
@@ -183,30 +223,28 @@ final class DirtBikeMeshLoader {
             }
         }
 
-        if (bodyParts.size == 0 || engineParts.size == 0
+        if (bodyParts.size == 0 || engineParts.size == 0 || steeringParts.size == 0
                 || frontWheelParts.size == 0 || rearWheelParts.size == 0) {
             throw new IOException("DirtBike.glb is missing one of the required bike groups");
         }
 
         Model body = buildModel(bodyParts);
         Model engine = buildModel(engineParts);
+        Model steering = buildModel(steeringParts);
         Model front = buildModel(frontWheelParts);
         Model rear = buildModel(rearWheelParts);
         ownedModels.add(body);
         ownedModels.add(engine);
+        ownedModels.add(steering);
         ownedModels.add(front);
         ownedModels.add(rear);
 
         Gdx.app.log("BalancePoint", "DirtBike exact layout: rear=" + rearPivotWorld
                 + " front=" + frontPivotWorld + " steering=" + steeringHead
-                + " staticCorrection=" + staticCorrection);
+                + " steeringAxis=" + steeringAxis + " staticCorrection=" + staticCorrection);
 
-        return new ModelInstance[] {
-                new ModelInstance(body),
-                new ModelInstance(engine),
-                new ModelInstance(front),
-                new ModelInstance(rear)
-        };
+        return new LoadedBike(body, engine, steering, front, rear,
+                steeringHead, steeringAxis, frontAxleOffset);
     }
 
     private static JsonValue readLayout() throws IOException {
@@ -254,7 +292,7 @@ final class DirtBikeMeshLoader {
         }
     }
 
-    private static boolean isProceduralSteeringPart(String name) {
+    private static boolean isSteeringPart(String name) {
         return "FrontShock_GEO".equals(name)
                 || "Handle_GEO".equals(name)
                 || "LeftLeaver_GEO".equals(name)

@@ -65,6 +65,7 @@ public final class BalancePointGame extends ApplicationAdapter {
 
     private final Array<Model> ownedModels = new Array<>();
     private final Matrix4 bikeRoot = new Matrix4();
+    private final Matrix4 importedSteeringRoot = new Matrix4();
     private final Vector3 tempA = new Vector3();
     private final Vector3 tempB = new Vector3();
 
@@ -102,10 +103,7 @@ public final class BalancePointGame extends ApplicationAdapter {
     private ModelInstance riderArmRight;
     private ModelInstance frontNumberPlate;
 
-    private ModelInstance importedBody;
-    private ModelInstance importedEngine;
-    private ModelInstance importedFrontWheel;
-    private ModelInstance importedRearWheel;
+    private DirtBikeMeshLoader.LoadedBike importedBike;
     private boolean importedBikeLoaded;
 
     private float speed;
@@ -267,16 +265,13 @@ public final class BalancePointGame extends ApplicationAdapter {
         // Load the optimized DirtBike.blend geometry. The procedural bike remains
         // available as a no-crash fallback if an asset is ever missing or corrupt.
         try {
-            ModelInstance[] imported = DirtBikeMeshLoader.load(ownedModels,
+            importedBike = DirtBikeMeshLoader.load(ownedModels,
                     material(0.08f, 0.52f, 0.12f),
                     material(0.16f, 0.17f, 0.18f),
                     material(0.045f, 0.048f, 0.052f));
-            importedBody = imported[0];
-            importedEngine = imported[1];
-            importedFrontWheel = imported[2];
-            importedRearWheel = imported[3];
             importedBikeLoaded = true;
         } catch (Exception e) {
+            importedBike = null;
             importedBikeLoaded = false;
             Gdx.app.error("BalancePoint", "Could not load imported dirt bike; using fallback", e);
         }
@@ -674,18 +669,25 @@ public final class BalancePointGame extends ApplicationAdapter {
         }
 
         if (importedBikeLoaded) {
-            importedBody.transform.set(bikeRoot);
-            importedEngine.transform.set(bikeRoot);
+            importedBike.body.transform.set(bikeRoot);
+            importedBike.engine.transform.set(bikeRoot);
 
             float importedSpinDeg = -wheelSpin * MathUtils.radiansToDegrees;
-            importedRearWheel.transform.set(bikeRoot)
+            importedBike.rearWheel.transform.set(bikeRoot)
                     .rotate(Vector3.X, importedSpinDeg);
 
             float visualSteerDeg = -steer * MathUtils.lerp(13f, 5f,
                     MathUtils.clamp(speed / 30f, 0f, 1f));
-            importedFrontWheel.transform.set(bikeRoot)
-                    .translate(0f, 0f, WHEELBASE)
-                    .rotate(Vector3.Y, visualSteerDeg)
+
+            // Steering hardware and front wheel now share the exact authored steering
+            // head and rake axis from DirtBike.layout.json. The front wheel first moves
+            // from the steering head to its axle, then spins around its local axle.
+            importedSteeringRoot.set(bikeRoot)
+                    .translate(importedBike.steeringHead)
+                    .rotate(importedBike.steeringAxis, visualSteerDeg);
+            importedBike.steering.transform.set(importedSteeringRoot);
+            importedBike.frontWheel.transform.set(importedSteeringRoot)
+                    .translate(importedBike.frontAxleOffset)
                     .rotate(Vector3.X, importedSpinDeg);
         }
     }
@@ -735,15 +737,14 @@ public final class BalancePointGame extends ApplicationAdapter {
 
     private void renderBike() {
         if (importedBikeLoaded) {
-            modelBatch.render(importedBody, environment);
-            modelBatch.render(importedEngine, environment);
-            modelBatch.render(importedRearWheel, environment);
-            modelBatch.render(importedFrontWheel, environment);
+            modelBatch.render(importedBike.body, environment);
+            modelBatch.render(importedBike.engine, environment);
+            modelBatch.render(importedBike.steering, environment);
+            modelBatch.render(importedBike.rearWheel, environment);
+            modelBatch.render(importedBike.frontWheel, environment);
 
-            // DirtBikeMeshLoader intentionally omits the GLB shock/handle/lever
-            // meshes for now, so there is exactly one animated steering assembly.
-            modelBatch.render(forkLeft, environment); modelBatch.render(forkRight, environment);
-            modelBatch.render(handlebar, environment);
+            // The procedural fork/handlebar pieces are now fallback-only. When the
+            // GLB loads, the authored shock, bars and levers are the steering assembly.
             modelBatch.render(riderTorso, environment); modelBatch.render(riderHead, environment);
             modelBatch.render(riderLegLeft, environment); modelBatch.render(riderLegRight, environment);
             modelBatch.render(riderArmLeft, environment); modelBatch.render(riderArmRight, environment);
