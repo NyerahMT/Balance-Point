@@ -26,9 +26,10 @@ import com.badlogic.gdx.utils.Array;
 /**
  * Balance Point - GMEE-focused lightweight 3D motorcycle prototype.
  *
- * Physics v3 keeps the load-transfer and traction model, adds a stronger
- * pitch-rate damper around balance point, rider weight shift, horizon-stabilized
- * helmet cam, free-look, and dedicated analog mobile controls.
+ * Physics v4 keeps the load-transfer and traction model, but gives airborne
+ * wheelies a higher, throttle-controlled balance envelope. Drive torque fades out
+ * of the pitch channel near balance point so high-angle throttle can keep building
+ * road speed instead of immediately looping the bike.
  */
 public final class BalancePointGame extends ApplicationAdapter {
     private static final float PHYSICS_DT = 1f / 120f;
@@ -51,12 +52,25 @@ public final class BalancePointGame extends ApplicationAdapter {
     private static final float ROLLING_RESISTANCE = 0.017f;
     private static final float AERO_DRAG = 0.34f;
 
-    private static final float PITCH_DAMPING_BASE = 85f;
-    private static final float PITCH_DAMPING_BALANCE = 360f;
-    private static final float BALANCE_RATE_DECAY = 3.2f;
-    private static final float BALANCE_FREE_RATE = 0.20f;
-    private static final float BALANCE_FULL_RATE = 0.95f;
-    private static final float BALANCE_DAMPING_BAND = 18f * MathUtils.degreesToRadians;
+    // Wheelie tuning. Ground lift still uses the physical COM, with a modest
+    // effective anti-squat lever so the bike comes up willingly under power.
+    // Once airborne, the rider/bike system supplies a progressive balance assist
+    // that is controlled by throttle and defeated strongly by the rear brake.
+    private static final float WHEELIE_LIFT_HEIGHT = 0.84f;
+    private static final float WHEELIE_LAUNCH_RATE = 0.065f;
+    private static final float WHEELIE_TARGET_LOW = 30f * MathUtils.degreesToRadians;
+    private static final float WHEELIE_TARGET_HIGH = 62f * MathUtils.degreesToRadians;
+    private static final float WHEELIE_BRAKE_TARGET_DROP = 28f * MathUtils.degreesToRadians;
+    private static final float WHEELIE_ASSIST_START = 12f * MathUtils.degreesToRadians;
+    private static final float WHEELIE_ASSIST_FULL = 30f * MathUtils.degreesToRadians;
+    private static final float WHEELIE_HOLD_STIFFNESS = 6200f;
+    private static final float PITCH_DAMPING_BASE = 120f;
+    private static final float WHEELIE_DAMPING = 620f;
+    private static final float WHEELIE_RATE_DECAY_BASE = 0.30f;
+    private static final float WHEELIE_RATE_DECAY_ASSIST = 2.0f;
+    private static final float DRIVE_PITCH_FADE_START = 24f * MathUtils.degreesToRadians;
+    private static final float DRIVE_PITCH_FADE_END = 54f * MathUtils.degreesToRadians;
+    private static final float HIGH_ANGLE_DRIVE_PITCH_COUPLING = 0.05f;
     private static final float LOOP_ANGLE = 103f * MathUtils.degreesToRadians;
 
     // Placeholder rider transforms are retained for cockpit/camera experiments, but the
@@ -404,6 +418,11 @@ public final class BalancePointGame extends ApplicationAdapter {
         return Math.max(value - amount, target);
     }
 
+    private static float smoothStep01(float value) {
+        float x = MathUtils.clamp(value, 0f, 1f);
+        return x * x * (3f - 2f * x);
+    }
+
     private void simulate(float dt) {
         if (crashed) {
             crashTimer += dt;
@@ -451,7 +470,7 @@ public final class BalancePointGame extends ApplicationAdapter {
         speed = MathUtils.clamp(speed, 0f, 48f);
 
         frontNormalLoad = (MASS * GRAVITY * effectiveComForward
-                - MASS * longitudinalAcceleration * COM_HEIGHT) / WHEELBASE;
+                - MASS * longitudinalAcceleration * WHEELIE_LIFT_HEIGHT) / WHEELBASE;
 
         if (frontGrounded) {
             pitch = 0f;
@@ -459,33 +478,44 @@ public final class BalancePointGame extends ApplicationAdapter {
             if (frontNormalLoad <= 0f && speed > 2.5f) {
                 frontGrounded = false;
                 frontNormalLoad = 0f;
-                pitchVelocity = 0.035f;
+                pitchVelocity = WHEELIE_LAUNCH_RATE;
             }
         } else {
             float sinPitch = MathUtils.sin(pitch);
             float cosPitch = MathUtils.cos(pitch);
             float comWorldForward = effectiveComForward * cosPitch - COM_HEIGHT * sinPitch;
             float comWorldHeight = effectiveComForward * sinPitch + COM_HEIGHT * cosPitch;
-            float balanceAngle = (float) Math.atan2(effectiveComForward, COM_HEIGHT);
-            float balanceDistance = Math.abs(pitch - balanceAngle);
-            float proximityLinear = 1f - MathUtils.clamp(balanceDistance / BALANCE_DAMPING_BAND, 0f, 1f);
-            float proximity = proximityLinear * proximityLinear;
 
-            float rateMagnitude = Math.abs(pitchVelocity);
-            float rateAssist = MathUtils.clamp(
-                    (rateMagnitude - BALANCE_FREE_RATE) / (BALANCE_FULL_RATE - BALANCE_FREE_RATE),
-                    0f, 1f);
-            rateAssist *= rateAssist;
-            float assist = proximity * rateAssist;
-            float angularDamping = PITCH_DAMPING_BASE + assist * PITCH_DAMPING_BALANCE;
+            // Near balance point, most additional drive should become forward speed,
+            // not an ever-growing backward pitch torque. This is the key high-angle
+            // change: throttle remains useful while the front wheel is high.
+            float driveFade = smoothStep01((pitch - DRIVE_PITCH_FADE_START)
+                    / (DRIVE_PITCH_FADE_END - DRIVE_PITCH_FADE_START));
+            float pitchDriveCoupling = MathUtils.lerp(1f,
+                    HIGH_ANGLE_DRIVE_PITCH_COUPLING, driveFade);
+
+            // Rider/bike balance envelope. Full throttle asks for the high target;
+            // rolling off asks the nose to come down, and rear brake pulls the target
+            // down aggressively so brake taps remain the recovery control.
+            float assistBlend = smoothStep01((pitch - WHEELIE_ASSIST_START)
+                    / (WHEELIE_ASSIST_FULL - WHEELIE_ASSIST_START));
+            float targetAngle = MathUtils.lerp(WHEELIE_TARGET_LOW,
+                    WHEELIE_TARGET_HIGH, throttle)
+                    - rearBrake * WHEELIE_BRAKE_TARGET_DROP;
+            float balanceTorque = -WHEELIE_HOLD_STIFFNESS * assistBlend
+                    * (pitch - targetAngle);
+            float angularDamping = PITCH_DAMPING_BASE + WHEELIE_DAMPING * assistBlend;
 
             float pitchTorque = MASS * longitudinalAcceleration * comWorldHeight
+                    * pitchDriveCoupling
                     - MASS * GRAVITY * comWorldForward
+                    + balanceTorque
                     - pitchVelocity * angularDamping;
 
             pitchVelocity += (pitchTorque / PITCH_INERTIA) * dt;
 
-            float rateDecay = 0.45f + assist * BALANCE_RATE_DECAY;
+            float rateDecay = WHEELIE_RATE_DECAY_BASE
+                    + WHEELIE_RATE_DECAY_ASSIST * assistBlend;
             pitchVelocity *= (float) Math.exp(-rateDecay * dt);
             pitchVelocity = MathUtils.clamp(pitchVelocity, -1.90f, 1.90f);
             pitch += pitchVelocity * dt;
