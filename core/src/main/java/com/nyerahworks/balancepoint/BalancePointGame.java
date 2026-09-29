@@ -651,24 +651,30 @@ public final class BalancePointGame extends ApplicationAdapter {
         }
 
         if (importedBikeLoaded) {
-            // Neutral visual pose must reproduce the authored GLB exactly. Only joint
-            // animation (steering and wheel spin) is applied on top of that pose.
+            // Zero animation must reproduce the approved GLB pose exactly. Each wheel
+            // model is axle-local, so runtime adds the authored axle offset back before
+            // applying only joint rotation.
             importedBike.body.transform.set(bikeRoot);
             importedBike.engine.transform.set(bikeRoot);
 
-            float importedSpinDeg = -wheelSpin * MathUtils.radiansToDegrees;
+            // Physics still uses the prototype's 0.31 m wheel radius. Correct the
+            // visual spin rate to the replacement model's measured tire radius.
+            float importedSpinDeg = -wheelSpin * (WHEEL_RADIUS / importedBike.wheelRadius)
+                    * MathUtils.radiansToDegrees;
             importedBike.rearWheel.transform.set(bikeRoot)
+                    .translate(importedBike.rearAxleOffset)
                     .rotate(Vector3.X, importedSpinDeg);
 
+            // Until the fork/handlebar geometry is split from the chassis, steer the
+            // complete front wheel about its own authored axle. This changes no neutral
+            // placement and gives us correct wheel steering/spin without moving bodywork.
             float visualSteerDeg = -steer * MathUtils.lerp(13f, 5f,
                     MathUtils.clamp(speed / 30f, 0f, 1f));
-
             importedSteeringRoot.set(bikeRoot)
-                    .translate(importedBike.steeringHead)
-                    .rotate(importedBike.steeringAxis, visualSteerDeg);
+                    .translate(importedBike.frontAxleOffset)
+                    .rotate(Vector3.Y, visualSteerDeg);
             importedBike.steering.transform.set(importedSteeringRoot);
             importedBike.frontWheel.transform.set(importedSteeringRoot)
-                    .translate(importedBike.frontAxleOffset)
                     .rotate(Vector3.X, importedSpinDeg);
         }
     }
