@@ -11,9 +11,9 @@ import java.io.IOException;
 /**
  * Stable game-facing dirt-bike loader API.
  *
- * The old importer rebuilt the motorcycle into synthetic body/engine/steering/wheel
- * groups and accumulated placement corrections. That path is intentionally gone.
- * ViewerFaithfulDirtBikeLoader now imports the replacement GLB as one rigid scene.
+ * The replacement importer preserves the approved neutral GLB pose, but moving
+ * assemblies are allowed to use local pivot coordinates as long as zero-angle
+ * reconstruction lands exactly on that authored pose.
  */
 final class DirtBikeMeshLoader {
     private DirtBikeMeshLoader() {}
@@ -24,26 +24,32 @@ final class DirtBikeMeshLoader {
         final ModelInstance steering;
         final ModelInstance frontWheel;
         final ModelInstance rearWheel;
+        final Vector3 rearAxleOffset;
         final Vector3 steeringHead;
         final Vector3 steeringAxis;
         final Vector3 frontAxleOffset;
+        final float wheelRadius;
 
         LoadedBike(Model bodyModel,
                    Model engineModel,
                    Model steeringModel,
                    Model frontWheelModel,
                    Model rearWheelModel,
+                   Vector3 rearAxleOffset,
                    Vector3 steeringHead,
                    Vector3 steeringAxis,
-                   Vector3 frontAxleOffset) {
+                   Vector3 frontAxleOffset,
+                   float wheelRadius) {
             this.body = new ModelInstance(bodyModel);
             this.engine = new ModelInstance(engineModel);
             this.steering = new ModelInstance(steeringModel);
             this.frontWheel = new ModelInstance(frontWheelModel);
             this.rearWheel = new ModelInstance(rearWheelModel);
+            this.rearAxleOffset = new Vector3(rearAxleOffset);
             this.steeringHead = new Vector3(steeringHead);
             this.steeringAxis = new Vector3(steeringAxis).nor();
             this.frontAxleOffset = new Vector3(frontAxleOffset);
+            this.wheelRadius = wheelRadius;
         }
     }
 
