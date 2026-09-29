@@ -11,7 +11,6 @@ import com.badlogic.gdx.graphics.g3d.Model;
 import com.badlogic.gdx.graphics.g3d.attributes.ColorAttribute;
 import com.badlogic.gdx.graphics.g3d.attributes.IntAttribute;
 import com.badlogic.gdx.graphics.g3d.utils.ModelBuilder;
-import com.badlogic.gdx.math.Matrix3;
 import com.badlogic.gdx.math.Matrix4;
 import com.badlogic.gdx.math.Quaternion;
 import com.badlogic.gdx.math.Vector3;
@@ -40,7 +39,7 @@ import java.nio.charset.StandardCharsets;
 final class ViewerFaithfulDirtBikeLoader {
     static final String ASSET_PATH = "models/dirt_bike_off_road_bike_low_poly.glb";
 
-    private static final int GLB_MAGIC = 0x46546C67; // glTF
+    private static final int GLB_MAGIC = 0x46546C67;
     private static final int GLB_VERSION = 2;
     private static final int JSON_CHUNK = 0x4E4F534A;
     private static final int BIN_CHUNK = 0x004E4942;
@@ -123,13 +122,12 @@ final class ViewerFaithfulDirtBikeLoader {
                     throw new IOException("Mesh is missing POSITION/indices: " + meshName);
                 }
 
-                float[] positions = readVec3(glb, attributes.getInt("POSITION"), "POSITION");
-                float[] normals = attributes.has("NORMAL")
-                        ? readVec3(glb, attributes.getInt("NORMAL"), "NORMAL")
-                        : null;
+                float[] positions = readPositions(glb, attributes.getInt("POSITION"));
                 short[] indices = readIndices(glb, primitive.getInt("indices"),
                         positions.length / 3);
 
+                // This is the entire placement pipeline: authored node hierarchy,
+                // followed by the exact same rigid scene translation for every part.
                 transformPositions(positions, world);
                 translatePositions(positions, normalization);
 
@@ -137,12 +135,10 @@ final class ViewerFaithfulDirtBikeLoader {
                     flipTriangleWinding(indices);
                 }
 
-                if (normals != null) {
-                    transformNormals(normals, world);
-                } else {
-                    normals = generateNormals(positions, indices);
-                }
-
+                // Regenerate normals after the authored transforms are baked. This
+                // affects lighting only, never placement, and avoids a second matrix
+                // implementation while we validate the neutral geometry.
+                float[] normals = generateNormals(positions, indices);
                 SourceMaterial sourceMaterial = sourceMaterial(glb.json, primitive);
                 String partName = meshName + "-n" + nodeIndex + "-p" + primitiveIndex;
                 parts.add(new MeshData(partName, positions, normals, indices,
@@ -336,7 +332,7 @@ final class ViewerFaithfulDirtBikeLoader {
             for (int p = 0; p < primitives.size; p++) {
                 JsonValue attributes = primitives.get(p).get("attributes");
                 if (attributes == null || !attributes.has("POSITION")) continue;
-                float[] positions = readVec3(glb, attributes.getInt("POSITION"), "POSITION");
+                float[] positions = readPositions(glb, attributes.getInt("POSITION"));
                 transformPositions(positions, nodeWorlds[nodeIndex]);
                 bounds.include(positions);
             }
@@ -346,15 +342,14 @@ final class ViewerFaithfulDirtBikeLoader {
         return null;
     }
 
-    private static float[] readVec3(ParsedGlb glb, int accessorIndex, String label)
-            throws IOException {
+    private static float[] readPositions(ParsedGlb glb, int accessorIndex) throws IOException {
         JsonValue accessor = arrayItem(glb.json, "accessors", accessorIndex);
         if (accessor.getInt("componentType") != 5126
                 || !"VEC3".equals(accessor.getString("type"))) {
-            throw new IOException(label + " accessor must be FLOAT VEC3");
+            throw new IOException("POSITION accessor must be FLOAT VEC3");
         }
         if (accessor.has("sparse")) {
-            throw new IOException("Sparse " + label + " accessors are not supported");
+            throw new IOException("Sparse POSITION accessors are not supported");
         }
 
         int count = accessor.getInt("count");
@@ -477,29 +472,6 @@ final class ViewerFaithfulDirtBikeLoader {
         }
     }
 
-    private static void transformNormals(float[] normals, Matrix4 world) {
-        Matrix3 normalMatrix = new Matrix3(world).inv().tra();
-        float[] m = normalMatrix.val;
-        for (int i = 0; i < normals.length; i += 3) {
-            float x = normals[i];
-            float y = normals[i + 1];
-            float z = normals[i + 2];
-            float nx = m[Matrix3.M00] * x + m[Matrix3.M01] * y + m[Matrix3.M02] * z;
-            float ny = m[Matrix3.M10] * x + m[Matrix3.M11] * y + m[Matrix3.M12] * z;
-            float nz = m[Matrix3.M20] * x + m[Matrix3.M21] * y + m[Matrix3.M22] * z;
-            float length = (float)Math.sqrt(nx * nx + ny * ny + nz * nz);
-            if (length > 0.000001f) {
-                normals[i] = nx / length;
-                normals[i + 1] = ny / length;
-                normals[i + 2] = nz / length;
-            } else {
-                normals[i] = 0f;
-                normals[i + 1] = 1f;
-                normals[i + 2] = 0f;
-            }
-        }
-    }
-
     private static float linearDeterminant(Matrix4 matrix) {
         float[] m = matrix.val;
         return m[Matrix4.M00] * (m[Matrix4.M11] * m[Matrix4.M22]
@@ -535,11 +507,9 @@ final class ViewerFaithfulDirtBikeLoader {
             float ny = abz * acx - abx * acz;
             float nz = abx * acy - aby * acx;
 
-            for (int v : new int[] {ia, ib, ic}) {
-                normals[v] += nx;
-                normals[v + 1] += ny;
-                normals[v + 2] += nz;
-            }
+            normals[ia] += nx; normals[ia + 1] += ny; normals[ia + 2] += nz;
+            normals[ib] += nx; normals[ib + 1] += ny; normals[ib + 2] += nz;
+            normals[ic] += nx; normals[ic + 1] += ny; normals[ic + 2] += nz;
         }
         for (int i = 0; i < normals.length; i += 3) {
             float x = normals[i], y = normals[i + 1], z = normals[i + 2];
@@ -549,7 +519,9 @@ final class ViewerFaithfulDirtBikeLoader {
                 normals[i + 1] = y / length;
                 normals[i + 2] = z / length;
             } else {
+                normals[i] = 0f;
                 normals[i + 1] = 1f;
+                normals[i + 2] = 0f;
             }
         }
         return normals;
