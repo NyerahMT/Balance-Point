@@ -62,7 +62,7 @@ jobs:
           fi
 
   ios:
-    name: iOS unsigned IPA
+    name: iOS Feather-compatible IPA
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
@@ -88,18 +88,55 @@ jobs:
       - name: Build native iOS IPA
         run: gradle :ios:createIPA -Probovm.archs=arm64 --stacktrace
 
-      - name: Verify IPA output
+      - name: Repackage for Feather
         shell: bash
         run: |
-          IPA_PATH="$(find ios/build/robovm -type f -name '*.ipa' | head -n 1)"
-          if [ -z "$IPA_PATH" ]; then
+          set -euo pipefail
+          RAW_IPA="$(find ios/build/robovm -type f -name '*.ipa' | head -n 1)"
+          if [ -z "$RAW_IPA" ]; then
             echo "RoboVM completed without producing an IPA"
             find ios/build -maxdepth 5 -type f -print || true
             exit 1
           fi
-          echo "IPA produced at $IPA_PATH"
-          cp "$IPA_PATH" BalancePoint-latest-unsigned.ipa
+
+          echo "Raw RoboVM IPA: $RAW_IPA"
+          rm -rf feather-package BalancePoint-latest-unsigned.ipa
+          mkdir -p feather-package
+          ditto -x -k "$RAW_IPA" feather-package
+
+          test -d feather-package/Payload
+          APP_COUNT="$(find feather-package/Payload -maxdepth 1 -type d -name '*.app' | wc -l | tr -d ' ')"
+          if [ "$APP_COUNT" != "1" ]; then
+            echo "Expected exactly one .app in Payload, found $APP_COUNT"
+            find feather-package/Payload -maxdepth 2 -print || true
+            exit 1
+          fi
+
+          APP_PATH="$(find feather-package/Payload -maxdepth 1 -type d -name '*.app' | head -n 1)"
+          test -f "$APP_PATH/Info.plist"
+          EXECUTABLE_NAME="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP_PATH/Info.plist")"
+          BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Info.plist")"
+          test -n "$EXECUTABLE_NAME"
+          test -n "$BUNDLE_ID"
+          test -f "$APP_PATH/$EXECUTABLE_NAME"
+
+          # Feather itself packages its unsigned distribution with an ad-hoc
+          # signature before users re-sign it. Do the same here so Feather's
+          # importer/signer sees a conventional iOS application bundle rather
+          # than RoboVM's raw unsigned archive.
+          /usr/bin/codesign --force --deep --sign - --timestamp=none "$APP_PATH"
+          /usr/bin/codesign --verify --deep --strict "$APP_PATH"
+
+          # RoboVM adds a top-level Symbols directory. It is useful for crash
+          # symbolication but is not part of the application payload and makes
+          # on-device import substantially larger. Package Payload only.
+          rm -rf feather-package/Symbols
+          ditto -c -k --sequesterRsrc --keepParent feather-package/Payload BalancePoint-latest-unsigned.ipa
+
           test -s BalancePoint-latest-unsigned.ipa
+          unzip -t BalancePoint-latest-unsigned.ipa
+          echo "Feather-compatible IPA ready: $BUNDLE_ID / $EXECUTABLE_NAME"
+          du -h BalancePoint-latest-unsigned.ipa
 
       - name: Upload iOS artifact
         uses: actions/upload-artifact@v4
