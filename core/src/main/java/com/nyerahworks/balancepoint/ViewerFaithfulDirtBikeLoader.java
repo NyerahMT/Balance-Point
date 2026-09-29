@@ -24,17 +24,13 @@ import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 
 /**
- * Imports the replacement dirt bike as one rigid, viewer-faithful glTF scene.
+ * Imports the replacement dirt bike while preserving the approved viewer pose.
  *
- * Every mesh keeps the transform authored in the GLB. The only edit applied to
- * the scene is one rigid translation of the ENTIRE motorcycle so its rear tire
- * sits on Balance Point's existing ground reference and its rear wheel is
- * centered on the game origin. There are deliberately no per-part corrections,
- * rebases, steering offsets, or layout manifests in this loader.
- *
- * Until the neutral pose is visually approved, the whole motorcycle is rendered
- * as one ModelInstance. Wheel spin and steering will be attached to source nodes
- * later without changing their zero-angle transforms.
+ * All authored node transforms are baked first, then the entire scene receives
+ * one rigid translation into Balance Point coordinates. The two source wheel
+ * assemblies are subsequently rebased into local axle coordinates purely for
+ * animation. Their stored axle offsets reconstruct the exact same neutral pose
+ * at zero rotation, so this is a pivot change rather than a placement correction.
  */
 final class ViewerFaithfulDirtBikeLoader {
     static final String ASSET_PATH = "models/dirt_bike_off_road_bike_low_poly.glb";
@@ -51,6 +47,8 @@ final class ViewerFaithfulDirtBikeLoader {
 
     private static final String WHEEL_A = "Cylinder.005_TYRE_0";
     private static final String WHEEL_B = "Cylinder.003_TYRE_0";
+    private static final String WHEEL_A_PREFIX = "Cylinder.005_";
+    private static final String WHEEL_B_PREFIX = "Cylinder.003_";
 
     private ViewerFaithfulDirtBikeLoader() {}
 
@@ -71,8 +69,12 @@ final class ViewerFaithfulDirtBikeLoader {
             throw new IOException("Replacement dirt bike wheel meshes were not found");
         }
 
-        Bounds rear = wheelA.center.z <= wheelB.center.z ? wheelA : wheelB;
-        Bounds front = rear == wheelA ? wheelB : wheelA;
+        boolean wheelAIsRear = wheelA.center.z <= wheelB.center.z;
+        Bounds rear = wheelAIsRear ? wheelA : wheelB;
+        Bounds front = wheelAIsRear ? wheelB : wheelA;
+        String rearPrefix = wheelAIsRear ? WHEEL_A_PREFIX : WHEEL_B_PREFIX;
+        String frontPrefix = wheelAIsRear ? WHEEL_B_PREFIX : WHEEL_A_PREFIX;
+
         float wheelbase = rear.center.dst(front.center);
         float rearRadius = ((rear.max.y - rear.min.y) + (rear.max.z - rear.min.z)) * 0.25f;
         float frontRadius = ((front.max.y - front.min.y) + (front.max.z - front.min.z)) * 0.25f;
@@ -87,15 +89,22 @@ final class ViewerFaithfulDirtBikeLoader {
                     + rearRadius + " front=" + frontRadius);
         }
 
-        // One rigid translation for every vertex in the scene. X/Z put the rear
-        // wheel on the game origin; Y makes the tire contact the road once the
-        // existing BikeRoot +0.31 m lift is applied.
+        // One rigid translation for every source vertex. X/Z put the rear wheel on
+        // the game origin; Y makes the tire contact the road after BikeRoot's lift.
         Vector3 normalization = new Vector3(
                 -rear.center.x,
                 -GAME_ROOT_LIFT - rear.min.y,
                 -rear.center.z);
 
-        Array<MeshData> parts = new Array<>();
+        Vector3 rearAxleOffset = new Vector3(rear.center).add(normalization);
+        Vector3 frontAxleOffset = new Vector3(front.center).add(normalization);
+        Vector3 rearRebase = new Vector3(rearAxleOffset).scl(-1f);
+        Vector3 frontRebase = new Vector3(frontAxleOffset).scl(-1f);
+
+        Array<MeshData> bodyParts = new Array<>();
+        Array<MeshData> rearWheelParts = new Array<>();
+        Array<MeshData> frontWheelParts = new Array<>();
+
         for (int nodeIndex = 0; nodeIndex < nodes.size; nodeIndex++) {
             Matrix4 world = nodeWorlds[nodeIndex];
             if (world == null) continue;
@@ -126,52 +135,77 @@ final class ViewerFaithfulDirtBikeLoader {
                 short[] indices = readIndices(glb, primitive.getInt("indices"),
                         positions.length / 3);
 
-                // This is the entire placement pipeline: authored node hierarchy,
-                // followed by the exact same rigid scene translation for every part.
+                // First reproduce the exact approved neutral scene coordinates.
                 transformPositions(positions, world);
                 translatePositions(positions, normalization);
+
+                Array<MeshData> target = bodyParts;
+                if (meshName.startsWith(rearPrefix)) {
+                    // Convert the complete authored rear-wheel assembly into axle-local
+                    // coordinates. Runtime adds rearAxleOffset back before any rotation.
+                    translatePositions(positions, rearRebase);
+                    target = rearWheelParts;
+                } else if (meshName.startsWith(frontPrefix)) {
+                    // Same for the complete front wheel: tire, rim and metal hardware.
+                    translatePositions(positions, frontRebase);
+                    target = frontWheelParts;
+                }
 
                 if (linearDeterminant(world) < 0f) {
                     flipTriangleWinding(indices);
                 }
 
-                // Regenerate normals after the authored transforms are baked. This
-                // affects lighting only, never placement, and avoids a second matrix
-                // implementation while we validate the neutral geometry.
+                // Regenerate normals after authored transforms are baked. This affects
+                // lighting only and does not change placement or the animation pivots.
                 float[] normals = generateNormals(positions, indices);
                 SourceMaterial sourceMaterial = sourceMaterial(glb.json, primitive);
                 String partName = meshName + "-n" + nodeIndex + "-p" + primitiveIndex;
-                parts.add(new MeshData(partName, positions, normals, indices,
+                target.add(new MeshData(partName, positions, normals, indices,
                         sourceMaterial.color, sourceMaterial.doubleSided));
             }
         }
 
-        if (parts.size == 0) {
-            throw new IOException("Replacement dirt bike produced no renderable mesh parts");
+        if (bodyParts.size == 0) {
+            throw new IOException("Replacement dirt bike produced no static body geometry");
+        }
+        if (rearWheelParts.size != 3 || frontWheelParts.size != 3) {
+            throw new IOException("Expected 3 meshes per wheel assembly, got rear="
+                    + rearWheelParts.size + " front=" + frontWheelParts.size);
         }
 
-        Model sceneModel = buildModel(parts);
+        Model bodyModel = buildModel(bodyParts);
+        Model rearWheelModel = buildModel(rearWheelParts);
+        Model frontWheelModel = buildModel(frontWheelParts);
         Model emptyModel = buildEmptyModel();
-        ownedModels.add(sceneModel);
+        ownedModels.add(bodyModel);
+        ownedModels.add(rearWheelModel);
+        ownedModels.add(frontWheelModel);
         ownedModels.add(emptyModel);
 
-        Gdx.app.log("BalancePoint", "Viewer-faithful dirt bike loaded: parts=" + parts.size
+        float wheelRadius = (rearRadius + frontRadius) * 0.5f;
+        Gdx.app.log("BalancePoint", "Viewer-faithful dirt bike loaded: bodyParts="
+                + bodyParts.size + " rearWheelParts=" + rearWheelParts.size
+                + " frontWheelParts=" + frontWheelParts.size
                 + " wheelbase=" + wheelbase
-                + " rearRadius=" + rearRadius
-                + " frontRadius=" + frontRadius
+                + " wheelRadius=" + wheelRadius
+                + " rearAxle=" + rearAxleOffset
+                + " frontAxle=" + frontAxleOffset
                 + " rigidTranslation=" + normalization);
 
-        // Existing game code still has slots for the old synthetic groups. Only
-        // body contains geometry now; the other instances are intentionally empty.
+        // Engine/steering remain empty compatibility slots. The wheels are real
+        // source assemblies now; zero rotation plus these axle offsets exactly
+        // reconstructs their approved GLB placement.
         return new DirtBikeMeshLoader.LoadedBike(
-                sceneModel,
+                bodyModel,
                 emptyModel,
                 emptyModel,
-                emptyModel,
-                emptyModel,
+                frontWheelModel,
+                rearWheelModel,
+                rearAxleOffset,
                 new Vector3(),
                 new Vector3(0f, 1f, 0f),
-                new Vector3(0f, 0f, wheelbase));
+                frontAxleOffset,
+                wheelRadius);
     }
 
     private static ParsedGlb parseGlb(byte[] bytes) throws IOException {
