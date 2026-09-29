@@ -15,6 +15,7 @@ import com.badlogic.gdx.math.Matrix4;
 import com.badlogic.gdx.math.Quaternion;
 import com.badlogic.gdx.math.Vector3;
 import com.badlogic.gdx.utils.Array;
+import com.badlogic.gdx.utils.IntArray;
 import com.badlogic.gdx.utils.JsonReader;
 import com.badlogic.gdx.utils.JsonValue;
 
@@ -22,15 +23,25 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * Imports the replacement dirt bike while preserving the approved viewer pose.
  *
- * All authored node transforms are baked first, then the entire scene receives
- * one rigid translation into Balance Point coordinates. The two source wheel
- * assemblies are subsequently rebased into local axle coordinates purely for
- * animation. Their stored axle offsets reconstruct the exact same neutral pose
- * at zero rotation, so this is a pivot change rather than a placement correction.
+ * Authored glTF transforms are baked first and the entire motorcycle receives one
+ * rigid normalization into Balance Point coordinates. Moving assemblies are then
+ * converted to pivot-local coordinates only; zero steering and zero wheel spin
+ * reconstruct the exact approved neutral scene.
+ *
+ * The replacement source does not provide a steering node. Instead of hand-moving
+ * meshes, Stage 2 derives a front-end rig from source topology:
+ *  - connected components in the Cube_* source meshes are separated by shared
+ *    geometric vertices;
+ *  - components whose geometric centers occupy the source front-end region become
+ *    the steering assembly;
+ *  - the two long METAL fork components define the steering/rake axis by a 2-D
+ *    least-squares principal-axis fit in the bike Y/Z plane.
  */
 final class ViewerFaithfulDirtBikeLoader {
     static final String ASSET_PATH = "models/dirt_bike_off_road_bike_low_poly.glb";
@@ -40,15 +51,16 @@ final class ViewerFaithfulDirtBikeLoader {
     private static final int JSON_CHUNK = 0x4E4F534A;
     private static final int BIN_CHUNK = 0x004E4942;
 
-    // BalancePointGame currently raises BikeRoot by 0.31 m. The model is shifted
-    // rigidly so the rear tire's authored lowest point is -0.31 m. This is a
-    // world-origin convention only; it does not change any relative placement.
     private static final float GAME_ROOT_LIFT = 0.31f;
 
     private static final String WHEEL_A = "Cylinder.005_TYRE_0";
     private static final String WHEEL_B = "Cylinder.003_TYRE_0";
     private static final String WHEEL_A_PREFIX = "Cylinder.005_";
     private static final String WHEEL_B_PREFIX = "Cylinder.003_";
+
+    private static final float STEERING_REGION_FRACTION = 0.67f;
+    private static final String FORK_AXIS_MESH = "Cube_METAL_0";
+    private static final float CONNECTIVITY_QUANTIZATION = 100000f;
 
     private ViewerFaithfulDirtBikeLoader() {}
 
@@ -89,8 +101,6 @@ final class ViewerFaithfulDirtBikeLoader {
                     + rearRadius + " front=" + frontRadius);
         }
 
-        // One rigid translation for every source vertex. X/Z put the rear wheel on
-        // the game origin; Y makes the tire contact the road after BikeRoot's lift.
         Vector3 normalization = new Vector3(
                 -rear.center.x,
                 -GAME_ROOT_LIFT - rear.min.y,
@@ -101,9 +111,16 @@ final class ViewerFaithfulDirtBikeLoader {
         Vector3 rearRebase = new Vector3(rearAxleOffset).scl(-1f);
         Vector3 frontRebase = new Vector3(frontAxleOffset).scl(-1f);
 
+        float steeringRegionStartZ = rearAxleOffset.z + wheelbase * STEERING_REGION_FRACTION;
+
         Array<MeshData> bodyParts = new Array<>();
+        Array<PrimitivePiece> steeringPieces = new Array<>();
         Array<MeshData> rearWheelParts = new Array<>();
         Array<MeshData> frontWheelParts = new Array<>();
+        ForkAxisAccumulator forkAxis = new ForkAxisAccumulator();
+
+        int connectedComponentCount = 0;
+        int steeringComponentCount = 0;
 
         for (int nodeIndex = 0; nodeIndex < nodes.size; nodeIndex++) {
             Matrix4 world = nodeWorlds[nodeIndex];
@@ -135,33 +152,48 @@ final class ViewerFaithfulDirtBikeLoader {
                 short[] indices = readIndices(glb, primitive.getInt("indices"),
                         positions.length / 3);
 
-                // First reproduce the exact approved neutral scene coordinates.
                 transformPositions(positions, world);
                 translatePositions(positions, normalization);
-
-                Array<MeshData> target = bodyParts;
-                if (meshName.startsWith(rearPrefix)) {
-                    // Convert the complete authored rear-wheel assembly into axle-local
-                    // coordinates. Runtime adds rearAxleOffset back before any rotation.
-                    translatePositions(positions, rearRebase);
-                    target = rearWheelParts;
-                } else if (meshName.startsWith(frontPrefix)) {
-                    // Same for the complete front wheel: tire, rim and metal hardware.
-                    translatePositions(positions, frontRebase);
-                    target = frontWheelParts;
-                }
 
                 if (linearDeterminant(world) < 0f) {
                     flipTriangleWinding(indices);
                 }
 
-                // Regenerate normals after authored transforms are baked. This affects
-                // lighting only and does not change placement or the animation pivots.
-                float[] normals = generateNormals(positions, indices);
                 SourceMaterial sourceMaterial = sourceMaterial(glb.json, primitive);
                 String partName = meshName + "-n" + nodeIndex + "-p" + primitiveIndex;
-                target.add(new MeshData(partName, positions, normals, indices,
-                        sourceMaterial.color, sourceMaterial.doubleSided));
+
+                if (meshName.startsWith(rearPrefix)) {
+                    translatePositions(positions, rearRebase);
+                    rearWheelParts.add(makeMeshData(partName, positions, indices, sourceMaterial));
+                    continue;
+                }
+
+                if (meshName.startsWith(frontPrefix)) {
+                    translatePositions(positions, frontRebase);
+                    frontWheelParts.add(makeMeshData(partName, positions, indices, sourceMaterial));
+                    continue;
+                }
+
+                if (meshName.startsWith("Cube_")) {
+                    Array<PrimitivePiece> pieces = splitConnectedComponents(
+                            meshName, partName, positions, indices, sourceMaterial);
+                    connectedComponentCount += pieces.size;
+
+                    for (PrimitivePiece piece : pieces) {
+                        if (isSteeringComponent(piece, steeringRegionStartZ)) {
+                            steeringPieces.add(piece);
+                            steeringComponentCount++;
+                            if (isForkAxisComponent(piece, steeringRegionStartZ,
+                                    frontAxleOffset)) {
+                                forkAxis.add(piece.positions);
+                            }
+                        } else {
+                            bodyParts.add(makeMeshData(piece));
+                        }
+                    }
+                } else {
+                    bodyParts.add(makeMeshData(partName, positions, indices, sourceMaterial));
+                }
             }
         }
 
@@ -172,40 +204,168 @@ final class ViewerFaithfulDirtBikeLoader {
             throw new IOException("Expected 3 meshes per wheel assembly, got rear="
                     + rearWheelParts.size + " front=" + frontWheelParts.size);
         }
+        if (steeringComponentCount < 12) {
+            throw new IOException("Steering topology extraction found too few components: "
+                    + steeringComponentCount);
+        }
+
+        SteeringAxisFit axisFit = forkAxis.finish(frontAxleOffset);
+        Vector3 steeringPivot = axisFit.pivot;
+        Vector3 steeringAxis = axisFit.axis;
+        Vector3 steeringRebase = new Vector3(steeringPivot).scl(-1f);
+
+        Array<MeshData> steeringParts = new Array<>();
+        for (PrimitivePiece piece : steeringPieces) {
+            translatePositions(piece.positions, steeringRebase);
+            steeringParts.add(makeMeshData(piece));
+        }
 
         Model bodyModel = buildModel(bodyParts);
+        Model steeringModel = buildModel(steeringParts);
         Model rearWheelModel = buildModel(rearWheelParts);
         Model frontWheelModel = buildModel(frontWheelParts);
         Model emptyModel = buildEmptyModel();
+
         ownedModels.add(bodyModel);
+        ownedModels.add(steeringModel);
         ownedModels.add(rearWheelModel);
         ownedModels.add(frontWheelModel);
         ownedModels.add(emptyModel);
 
         float wheelRadius = (rearRadius + frontRadius) * 0.5f;
-        Gdx.app.log("BalancePoint", "Viewer-faithful dirt bike loaded: bodyParts="
-                + bodyParts.size + " rearWheelParts=" + rearWheelParts.size
+        Gdx.app.log("BalancePoint", "Topology-rigged dirt bike loaded: bodyParts="
+                + bodyParts.size + " cubeComponents=" + connectedComponentCount
+                + " steeringComponents=" + steeringComponentCount
+                + " rearWheelParts=" + rearWheelParts.size
                 + " frontWheelParts=" + frontWheelParts.size
                 + " wheelbase=" + wheelbase
                 + " wheelRadius=" + wheelRadius
-                + " rearAxle=" + rearAxleOffset
-                + " frontAxle=" + frontAxleOffset
+                + " steeringPivot=" + steeringPivot
+                + " steeringAxis=" + steeringAxis
+                + " forkAxisMiss=" + axisFit.frontAxleMiss
                 + " rigidTranslation=" + normalization);
 
-        // Engine/steering remain empty compatibility slots. The wheels are real
-        // source assemblies now; zero rotation plus these axle offsets exactly
-        // reconstructs their approved GLB placement.
         return new DirtBikeMeshLoader.LoadedBike(
                 bodyModel,
                 emptyModel,
-                emptyModel,
+                steeringModel,
                 frontWheelModel,
                 rearWheelModel,
                 rearAxleOffset,
-                new Vector3(),
-                new Vector3(0f, 1f, 0f),
+                steeringPivot,
+                steeringAxis,
                 frontAxleOffset,
                 wheelRadius);
+    }
+
+    private static boolean isSteeringComponent(PrimitivePiece piece, float regionStartZ) {
+        return piece.meshName.startsWith("Cube_")
+                && piece.bounds.center.z > regionStartZ;
+    }
+
+    private static boolean isForkAxisComponent(PrimitivePiece piece,
+                                               float regionStartZ,
+                                               Vector3 frontAxleOffset) {
+        if (!FORK_AXIS_MESH.equals(piece.meshName)) return false;
+        Bounds b = piece.bounds;
+        float height = b.max.y - b.min.y;
+        float depth = b.max.z - b.min.z;
+        return b.center.z > regionStartZ
+                && Math.abs(b.center.x - frontAxleOffset.x) < 0.15f
+                && height > 0.45f
+                && depth > 0.20f;
+    }
+
+    private static Array<PrimitivePiece> splitConnectedComponents(String meshName,
+                                                                  String partName,
+                                                                  float[] positions,
+                                                                  short[] indices,
+                                                                  SourceMaterial material)
+            throws IOException {
+        int triangleCount = indices.length / 3;
+        UnionFind union = new UnionFind(triangleCount);
+        Map<PositionKey, Integer> firstTriangleAtPosition = new HashMap<>();
+
+        for (int triangle = 0; triangle < triangleCount; triangle++) {
+            int base = triangle * 3;
+            for (int corner = 0; corner < 3; corner++) {
+                int vertex = indices[base + corner] & 0xffff;
+                int p = vertex * 3;
+                PositionKey key = new PositionKey(
+                        positions[p], positions[p + 1], positions[p + 2]);
+                Integer other = firstTriangleAtPosition.get(key);
+                if (other == null) {
+                    firstTriangleAtPosition.put(key, triangle);
+                } else {
+                    union.union(triangle, other);
+                }
+            }
+        }
+
+        Map<Integer, IntArray> groups = new HashMap<>();
+        for (int triangle = 0; triangle < triangleCount; triangle++) {
+            int root = union.find(triangle);
+            IntArray list = groups.get(root);
+            if (list == null) {
+                list = new IntArray();
+                groups.put(root, list);
+            }
+            list.add(triangle);
+        }
+
+        Array<PrimitivePiece> result = new Array<>();
+        int componentIndex = 0;
+        for (IntArray triangles : groups.values()) {
+            int vertexCount = triangles.size * 3;
+            if (vertexCount > 32767) {
+                throw new IOException("Connected component exceeds libGDX short index limit: "
+                        + meshName + " vertices=" + vertexCount);
+            }
+
+            float[] componentPositions = new float[vertexCount * 3];
+            short[] componentIndices = new short[vertexCount];
+            int outVertex = 0;
+
+            for (int i = 0; i < triangles.size; i++) {
+                int triangle = triangles.get(i);
+                int indexBase = triangle * 3;
+                for (int corner = 0; corner < 3; corner++) {
+                    int sourceVertex = indices[indexBase + corner] & 0xffff;
+                    int source = sourceVertex * 3;
+                    int target = outVertex * 3;
+                    componentPositions[target] = positions[source];
+                    componentPositions[target + 1] = positions[source + 1];
+                    componentPositions[target + 2] = positions[source + 2];
+                    componentIndices[outVertex] = (short)outVertex;
+                    outVertex++;
+                }
+            }
+
+            Bounds bounds = new Bounds();
+            bounds.include(componentPositions);
+            bounds.finish();
+            result.add(new PrimitivePiece(
+                    meshName,
+                    partName + "-c" + componentIndex++,
+                    componentPositions,
+                    componentIndices,
+                    material,
+                    bounds));
+        }
+        return result;
+    }
+
+    private static MeshData makeMeshData(PrimitivePiece piece) {
+        return makeMeshData(piece.name, piece.positions, piece.indices, piece.material);
+    }
+
+    private static MeshData makeMeshData(String name,
+                                         float[] positions,
+                                         short[] indices,
+                                         SourceMaterial material) {
+        float[] normals = generateNormals(positions, indices);
+        return new MeshData(name, positions, normals, indices,
+                material.color, material.doubleSided);
     }
 
     private static ParsedGlb parseGlb(byte[] bytes) throws IOException {
@@ -633,6 +793,29 @@ final class ViewerFaithfulDirtBikeLoader {
         }
     }
 
+    private static final class PrimitivePiece {
+        final String meshName;
+        final String name;
+        final float[] positions;
+        final short[] indices;
+        final SourceMaterial material;
+        final Bounds bounds;
+
+        PrimitivePiece(String meshName,
+                       String name,
+                       float[] positions,
+                       short[] indices,
+                       SourceMaterial material,
+                       Bounds bounds) {
+            this.meshName = meshName;
+            this.name = name;
+            this.positions = positions;
+            this.indices = indices;
+            this.material = material;
+            this.bounds = bounds;
+        }
+    }
+
     private static final class MeshData {
         final String name;
         final float[] positions;
@@ -673,6 +856,142 @@ final class ViewerFaithfulDirtBikeLoader {
         void finish() throws IOException {
             if (min.x == Float.POSITIVE_INFINITY) throw new IOException("Empty mesh bounds");
             center.set(min).add(max).scl(0.5f);
+        }
+    }
+
+    private static final class PositionKey {
+        final int x;
+        final int y;
+        final int z;
+
+        PositionKey(float x, float y, float z) {
+            this.x = Math.round(x * CONNECTIVITY_QUANTIZATION);
+            this.y = Math.round(y * CONNECTIVITY_QUANTIZATION);
+            this.z = Math.round(z * CONNECTIVITY_QUANTIZATION);
+        }
+
+        @Override
+        public boolean equals(Object other) {
+            if (this == other) return true;
+            if (!(other instanceof PositionKey)) return false;
+            PositionKey key = (PositionKey)other;
+            return x == key.x && y == key.y && z == key.z;
+        }
+
+        @Override
+        public int hashCode() {
+            int result = x;
+            result = 31 * result + y;
+            result = 31 * result + z;
+            return result;
+        }
+    }
+
+    private static final class UnionFind {
+        final int[] parent;
+        final byte[] rank;
+
+        UnionFind(int size) {
+            parent = new int[size];
+            rank = new byte[size];
+            for (int i = 0; i < size; i++) parent[i] = i;
+        }
+
+        int find(int value) {
+            int root = value;
+            while (parent[root] != root) root = parent[root];
+            while (parent[value] != value) {
+                int next = parent[value];
+                parent[value] = root;
+                value = next;
+            }
+            return root;
+        }
+
+        void union(int a, int b) {
+            int rootA = find(a);
+            int rootB = find(b);
+            if (rootA == rootB) return;
+            if (rank[rootA] < rank[rootB]) {
+                parent[rootA] = rootB;
+            } else if (rank[rootA] > rank[rootB]) {
+                parent[rootB] = rootA;
+            } else {
+                parent[rootB] = rootA;
+                rank[rootA]++;
+            }
+        }
+    }
+
+    private static final class ForkAxisAccumulator {
+        long count;
+        int componentCount;
+        double sumY;
+        double sumZ;
+        double sumYY;
+        double sumZZ;
+        double sumYZ;
+
+        void add(float[] positions) {
+            componentCount++;
+            for (int i = 0; i < positions.length; i += 3) {
+                double y = positions[i + 1];
+                double z = positions[i + 2];
+                count++;
+                sumY += y;
+                sumZ += z;
+                sumYY += y * y;
+                sumZZ += z * z;
+                sumYZ += y * z;
+            }
+        }
+
+        SteeringAxisFit finish(Vector3 frontAxle) throws IOException {
+            if (componentCount != 2 || count < 100) {
+                throw new IOException("Expected two long fork-axis components, got "
+                        + componentCount + " components / " + count + " vertices");
+            }
+
+            double meanY = sumY / count;
+            double meanZ = sumZ / count;
+            double covYY = sumYY / count - meanY * meanY;
+            double covZZ = sumZZ / count - meanZ * meanZ;
+            double covYZ = sumYZ / count - meanY * meanZ;
+
+            double theta = 0.5 * Math.atan2(2.0 * covYZ, covYY - covZZ);
+            Vector3 axis = new Vector3(
+                    0f,
+                    (float)Math.cos(theta),
+                    (float)Math.sin(theta)).nor();
+            if (axis.y < 0f) axis.scl(-1f);
+
+            if (axis.y < 0.85f || axis.z > -0.25f || axis.z < -0.60f) {
+                throw new IOException("Derived steering axis is implausible: " + axis);
+            }
+
+            Vector3 linePoint = new Vector3(frontAxle.x, (float)meanY, (float)meanZ);
+            Vector3 delta = new Vector3(frontAxle).sub(linePoint);
+            float along = delta.dot(axis);
+            Vector3 pivot = linePoint.mulAdd(axis, along);
+            float miss = pivot.dst(frontAxle);
+
+            if (miss > 0.015f) {
+                throw new IOException("Derived fork axis misses front axle by " + miss + " m");
+            }
+
+            return new SteeringAxisFit(pivot, axis, miss);
+        }
+    }
+
+    private static final class SteeringAxisFit {
+        final Vector3 pivot;
+        final Vector3 axis;
+        final float frontAxleMiss;
+
+        SteeringAxisFit(Vector3 pivot, Vector3 axis, float frontAxleMiss) {
+            this.pivot = new Vector3(pivot);
+            this.axis = new Vector3(axis);
+            this.frontAxleMiss = frontAxleMiss;
         }
     }
 }

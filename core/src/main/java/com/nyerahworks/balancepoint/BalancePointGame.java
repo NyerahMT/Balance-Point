@@ -651,9 +651,8 @@ public final class BalancePointGame extends ApplicationAdapter {
         }
 
         if (importedBikeLoaded) {
-            // Zero animation must reproduce the approved GLB pose exactly. Each wheel
-            // model is axle-local, so runtime adds the authored axle offset back before
-            // applying only joint rotation.
+            // Zero animation must reproduce the approved GLB pose exactly. The body is
+            // still in authored scene coordinates; moving assemblies are pivot-local.
             importedBike.body.transform.set(bikeRoot);
             importedBike.engine.transform.set(bikeRoot);
 
@@ -665,16 +664,19 @@ public final class BalancePointGame extends ApplicationAdapter {
                     .translate(importedBike.rearAxleOffset)
                     .rotate(Vector3.X, importedSpinDeg);
 
-            // Until the fork/handlebar geometry is split from the chassis, steer the
-            // complete front wheel about its own authored axle. This changes no neutral
-            // placement and gives us correct wheel steering/spin without moving bodywork.
+            // Stage 2: forks/bars/front hardware and the front wheel share the rake
+            // axis derived from the source fork geometry. No placement correction is
+            // applied: at zero steer this collapses exactly to the approved GLB pose.
             float visualSteerDeg = -steer * MathUtils.lerp(13f, 5f,
                     MathUtils.clamp(speed / 30f, 0f, 1f));
             importedSteeringRoot.set(bikeRoot)
-                    .translate(importedBike.frontAxleOffset)
-                    .rotate(Vector3.Y, visualSteerDeg);
+                    .translate(importedBike.steeringHead)
+                    .rotate(importedBike.steeringAxis, visualSteerDeg);
             importedBike.steering.transform.set(importedSteeringRoot);
+
+            tempA.set(importedBike.frontAxleOffset).sub(importedBike.steeringHead);
             importedBike.frontWheel.transform.set(importedSteeringRoot)
+                    .translate(tempA)
                     .rotate(Vector3.X, importedSpinDeg);
         }
     }
