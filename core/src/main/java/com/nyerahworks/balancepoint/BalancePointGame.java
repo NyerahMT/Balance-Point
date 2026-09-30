@@ -77,12 +77,11 @@ public final class BalancePointGame extends ApplicationAdapter {
     private BitmapFont font;
     private Environment environment;
 
+    private TerrainVisuals terrainVisuals;
     private ModelInstance[] roadSegments;
-    private ModelInstance[] groundSegments;
     private ModelInstance[] shoulderLeft;
     private ModelInstance[] shoulderRight;
     private ModelInstance[] laneDashes;
-    private ModelInstance[] buildings;
 
     private ModelInstance rearWheel;
     private ModelInstance frontWheel;
@@ -148,7 +147,7 @@ public final class BalancePointGame extends ApplicationAdapter {
 
         camera = new PerspectiveCamera(67f, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
         camera.near = 0.08f;
-        camera.far = 260f;
+        camera.far = 520f;
         camera.position.set(0f, 2.5f, -5.4f);
         camera.lookAt(0f, 0.8f, 4f);
         camera.update();
@@ -157,8 +156,8 @@ public final class BalancePointGame extends ApplicationAdapter {
         resize(Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
 
         environment = new Environment();
-        environment.set(new ColorAttribute(ColorAttribute.AmbientLight, 0.70f, 0.72f, 0.74f, 1f));
-        environment.add(new DirectionalLight().set(0.82f, 0.80f, 0.74f, -0.45f, -1f, -0.28f));
+        environment.set(new ColorAttribute(ColorAttribute.AmbientLight, 0.62f, 0.65f, 0.63f, 1f));
+        environment.add(new DirectionalLight().set(0.95f, 0.88f, 0.76f, -0.45f, -1f, -0.28f));
 
         createWorldModels();
         createBikeModels();
@@ -198,27 +197,26 @@ public final class BalancePointGame extends ApplicationAdapter {
 
     private void createWorldModels() {
         ModelBuilder b = new ModelBuilder();
-        Model road = box(b, ROAD_HALF_WIDTH * 2f, 0.08f, SEGMENT_LENGTH, material(0.16f, 0.17f, 0.18f));
-        Model ground = box(b, 48f, 0.035f, SEGMENT_LENGTH, material(0.42f, 0.46f, 0.40f));
-        Model shoulder = box(b, 0.10f, 0.025f, SEGMENT_LENGTH, material(0.86f, 0.86f, 0.80f));
-        Model dash = box(b, 0.10f, 0.025f, 2.8f, material(0.92f, 0.80f, 0.35f));
-        Model building = box(b, 4f, 3f, 5f, material(0.34f, 0.39f, 0.40f));
+        Model road = box(b, ROAD_HALF_WIDTH * 2f, 0.08f, SEGMENT_LENGTH,
+                material(0.13f, 0.14f, 0.145f));
+        Model edgeLine = box(b, 0.10f, 0.025f, SEGMENT_LENGTH,
+                material(0.82f, 0.80f, 0.72f));
+        Model dash = box(b, 0.10f, 0.025f, 2.8f,
+                material(0.90f, 0.74f, 0.26f));
 
-        int n = 16;
+        int n = 18;
         roadSegments = new ModelInstance[n];
-        groundSegments = new ModelInstance[n];
         shoulderLeft = new ModelInstance[n];
         shoulderRight = new ModelInstance[n];
-        buildings = new ModelInstance[n];
         for (int i = 0; i < n; i++) {
             roadSegments[i] = new ModelInstance(road);
-            groundSegments[i] = new ModelInstance(ground);
-            shoulderLeft[i] = new ModelInstance(shoulder);
-            shoulderRight[i] = new ModelInstance(shoulder);
-            buildings[i] = new ModelInstance(building);
+            shoulderLeft[i] = new ModelInstance(edgeLine);
+            shoulderRight[i] = new ModelInstance(edgeLine);
         }
-        laneDashes = new ModelInstance[52];
+        laneDashes = new ModelInstance[58];
         for (int i = 0; i < laneDashes.length; i++) laneDashes[i] = new ModelInstance(dash);
+
+        terrainVisuals = new TerrainVisuals(ownedModels);
     }
 
     private void createBikeModels() {
@@ -294,16 +292,15 @@ public final class BalancePointGame extends ApplicationAdapter {
         updateCamera(frameDt);
 
         Gdx.gl.glViewport(0, 0, Gdx.graphics.getBackBufferWidth(), Gdx.graphics.getBackBufferHeight());
-        Gdx.gl.glClearColor(0.55f, 0.70f, 0.78f, 1f);
+        Gdx.gl.glClearColor(0.58f, 0.72f, 0.80f, 1f);
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT | GL20.GL_DEPTH_BUFFER_BIT);
 
         modelBatch.begin(camera);
-        for (ModelInstance m : groundSegments) modelBatch.render(m, environment);
+        terrainVisuals.render(modelBatch, environment);
         for (ModelInstance m : roadSegments) modelBatch.render(m, environment);
         for (ModelInstance m : shoulderLeft) modelBatch.render(m, environment);
         for (ModelInstance m : shoulderRight) modelBatch.render(m, environment);
         for (ModelInstance m : laneDashes) modelBatch.render(m, environment);
-        for (ModelInstance m : buildings) modelBatch.render(m, environment);
         renderBike();
         modelBatch.end();
         drawHud();
@@ -558,26 +555,18 @@ public final class BalancePointGame extends ApplicationAdapter {
     }
 
     private void updateWorldInstances() {
-        float firstCenter = (float) Math.floor((bikeZ - 70f) / SEGMENT_LENGTH) * SEGMENT_LENGTH
+        float firstCenter = (float) Math.floor((bikeZ - 80f) / SEGMENT_LENGTH) * SEGMENT_LENGTH
                 + SEGMENT_LENGTH * 0.5f;
         for (int i = 0; i < roadSegments.length; i++) {
             float z = firstCenter + i * SEGMENT_LENGTH;
-            int wi = (int) Math.floor(z / SEGMENT_LENGTH);
-            groundSegments[i].transform.setToTranslation(0f, -0.075f, z);
             roadSegments[i].transform.setToTranslation(0f, -0.025f, z);
             shoulderLeft[i].transform.setToTranslation(-ROAD_HALF_WIDTH + 0.18f, 0.026f, z);
             shoulderRight[i].transform.setToTranslation(ROAD_HALF_WIDTH - 0.18f, 0.026f, z);
-
-            float side = (wi & 1) == 0 ? 1f : -1f;
-            float sx = 0.78f + positiveMod(wi * 17, 5) * 0.08f;
-            float sy = 0.70f + positiveMod(wi * 13, 7) * 0.10f;
-            float sz = 0.82f + positiveMod(wi * 7, 4) * 0.12f;
-            float bx = side * (8.5f + positiveMod(wi * 11, 5));
-            float bz = z + (positiveMod(wi * 5, 7) - 3) * 0.85f;
-            buildings[i].transform.setToTranslation(bx, 1.5f * sy, bz).scale(sx, sy, sz);
         }
 
-        float dashStart = (float) Math.floor((bikeZ - 35f) / 6f) * 6f;
+        terrainVisuals.update(bikeZ);
+
+        float dashStart = (float) Math.floor((bikeZ - 42f) / 6f) * 6f;
         for (int i = 0; i < laneDashes.length; i++)
             laneDashes[i].transform.setToTranslation(0f, 0.028f, dashStart + i * 6f);
     }
