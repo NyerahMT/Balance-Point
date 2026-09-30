@@ -81,7 +81,12 @@ final class EngineAudio {
     private double outletEdgeLp;
     private double previousOutlet;
 
+    // Two low-pass states form a band-limited intake texture. The previous pass subtracted a single
+    // low-pass from raw white noise and also mixed raw turbulence directly into the output, which
+    // produced an audible broadband hiss. Nothing here feeds unfiltered white noise to the speaker.
     private double intakeNoiseLow;
+    private double intakeNoiseMid;
+
     private double afterfire;
     private int noiseState = 0x13579BDF;
 
@@ -123,6 +128,11 @@ final class EngineAudio {
         float smoothShift = 0f;
         boolean previousShiftTarget = false;
 
+        // Fixed noise filters. Their difference creates a broad intake band concentrated in the
+        // hundreds-to-low-thousands of Hz instead of the previous full-band white hiss.
+        final double intakeLowAlpha = onePoleAlpha(420.0);
+        final double intakeMidAlpha = onePoleAlpha(1_650.0);
+
         while (running) {
             smoothRpm += (targetRpm - smoothRpm) * 0.20f;
             smoothThrottle += (targetThrottle - smoothThrottle) * 0.24f;
@@ -158,13 +168,12 @@ final class EngineAudio {
             double midToBodyT = 1.0 + midToBodyR;
             double bodyToOutletT = 1.0 + bodyToOutletR;
 
-            // The packing kills high frequencies far harder than low frequencies. Two separate
-            // smoothing bands let the muffler retain a deep pressure body while bleeding off the
-            // metallic pipe edge that dominated the previous version.
-            double bodyAlpha = onePoleAlpha(720.0 + 260.0 * smoothThrottle);
-            double edgeAlpha = onePoleAlpha(2_600.0 + 900.0 * smoothThrottle);
-            double outletBodyAlpha = onePoleAlpha(1_050.0 + 250.0 * smoothThrottle);
-            double outletEdgeAlpha = onePoleAlpha(3_600.0 + 650.0 * smoothThrottle);
+            // Deliberately keep the packed-can edge bandwidth below the old pass. The body remains
+            // strong, but the high-order pulse train no longer dominates as an insect-like buzz.
+            double bodyAlpha = onePoleAlpha(650.0 + 180.0 * smoothThrottle);
+            double edgeAlpha = onePoleAlpha(1_850.0 + 520.0 * smoothThrottle);
+            double outletBodyAlpha = onePoleAlpha(900.0 + 200.0 * smoothThrottle);
+            double outletEdgeAlpha = onePoleAlpha(2_450.0 + 420.0 * smoothThrottle);
 
             for (int i = 0; i < buffer.length; i++) {
                 double previousDeg = cycleDeg;
@@ -173,8 +182,9 @@ final class EngineAudio {
 
                 noiseState = noiseState * 1664525 + 1013904223;
                 double white = (((noiseState >>> 8) & 0xFFFF) / 32767.5) - 1.0;
-                intakeNoiseLow += (white - intakeNoiseLow) * 0.050;
-                double intakeNoise = white - intakeNoiseLow;
+                intakeNoiseLow += (white - intakeNoiseLow) * intakeLowAlpha;
+                intakeNoiseMid += (white - intakeNoiseMid) * intakeMidAlpha;
+                double intakeTexture = intakeNoiseMid - intakeNoiseLow;
 
                 if (crossedAngle(previousDeg, cycleDeg, IGNITION_DEG)) {
                     combustionCount++;
@@ -183,7 +193,9 @@ final class EngineAudio {
                     if (limiterCut) {
                         cycleStrength = 0.035;
                     } else {
-                        double variation = 0.965 + 0.07 * Math.abs(white);
+                        // Use slow colored noise only for tiny cycle-to-cycle combustion variation.
+                        // Raw white noise is intentionally not used here or in the final mix.
+                        double variation = 1.0 + 0.028 * intakeNoiseLow;
                         cycleStrength = (0.30 + 1.62 * load) * variation;
                     }
                 }
@@ -230,9 +242,11 @@ final class EngineAudio {
                     afterfire = 0.0;
                 }
 
-                double intakeFlow = intakeLift * intakeNoise
-                        * (0.010 + 0.085 * smoothThrottle)
-                        * (0.45 + 0.55 * rpmNorm);
+                // Intake sound now exists only while the intake valve is flowing and uses a colored
+                // mid-band texture. This removes the constant broadband air hiss from the last pass.
+                double intakeFlow = intakeLift * intakeTexture
+                        * (0.003 + 0.030 * smoothThrottle)
+                        * (0.35 + 0.65 * rpmNorm);
 
                 // HEADER: mostly clean pressure propagation with a lightly damped return from the
                 // area increase into the midpipe. Reflection is filtered to mimic wall/thermal loss.
@@ -262,11 +276,10 @@ final class EngineAudio {
                 double bodyBand = mufflerBodyLp;
                 double edgeBand = mufflerEdgeLp - mufflerBodyLp;
 
-                // Split the can into two lossy acoustic paths. A real packed muffler has a direct
-                // perforated-core path plus energy traveling through the surrounding volume. Their
-                // different delays smear narrow resonances into the broad "450 can" character.
-                double shortFeed = bodyBand * 0.70 + edgeBand * 0.20 + mufflerPressure * 0.26;
-                double longFeed = bodyBand * 0.48 + edgeBand * 0.08 + mufflerPressure * 0.44;
+                // Split the can into two lossy acoustic paths. Reduce edge energy heavily; most of
+                // the audible character should come from pressure body, not repeated sharp pulses.
+                double shortFeed = bodyBand * 0.74 + edgeBand * 0.11 + mufflerPressure * 0.28;
+                double longFeed = bodyBand * 0.52 + edgeBand * 0.035 + mufflerPressure * 0.46;
 
                 mufflerShortLine[mufflerShortWrite] = shortFeed;
                 double shortOut = readDelay(mufflerShortLine, mufflerShortWrite,
@@ -280,12 +293,12 @@ final class EngineAudio {
 
                 // Recombine the paths with slight opposite polarity. That represents expansion-
                 // chamber scattering and prevents both paths from summing into one rigid comb tone.
-                double canOut = shortOut * 0.72 - longOut * 0.36 + mufflerPressure * 0.18;
+                double canOut = shortOut * 0.74 - longOut * 0.31 + mufflerPressure * 0.22;
                 canOut *= bodyToOutletT;
 
-                // OUTLET: short tailpipe with much lower feedback than the old model. The positive
-                // reflection from the contraction adds punch, not a long metallic ring.
-                outletLine[outletWrite] = canOut + previousOutlet * bodyToOutletR * 0.055;
+                // OUTLET: short tailpipe with very low feedback. Keep only enough reflection for a
+                // physical outlet boundary; excessive feedback recreates the narrow fly-like tone.
+                outletLine[outletWrite] = canOut + previousOutlet * bodyToOutletR * 0.035;
                 double tailPressure = readDelay(outletLine, outletWrite, outletSamples);
                 outletWrite = (outletWrite + 1) & (DELAY_BUFFER_SIZE - 1);
 
@@ -294,18 +307,17 @@ final class EngineAudio {
                 double pressureVelocity = acPressure - previousOutlet;
                 previousOutlet = acPressure;
 
-                // Split final tone into body and edge. The body dominates; the edge only provides
-                // enough crack to remain recognizably a high-compression four-stroke at high RPM.
                 outletBodyLp += (acPressure - outletBodyLp) * outletBodyAlpha;
                 outletEdgeLp += (acPressure - outletEdgeLp) * outletEdgeAlpha;
                 double outletBody = outletBodyLp;
                 double outletEdge = outletEdgeLp - outletBodyLp;
 
-                double turbulence = intakeNoise * (0.006 + 0.018 * load);
-                double raw = outletBody * 1.12
-                        + outletEdge * (0.23 + 0.08 * smoothThrottle)
-                        + pressureVelocity * 0.035
-                        + turbulence
+                // No additive white-noise/turbulence path here. The only stochastic audio component
+                // is the intake-flow texture above, which is band-limited and valve-gated.
+                double raw = outletBody * 1.16
+                        + outletEdge * (0.13 + 0.045 * smoothThrottle)
+                        + pressureVelocity * 0.010
+                        + mufflerPressure * 0.055
                         + intakeFlow;
 
                 double shiftGain = 1.0 - smoothShift * 0.28;
@@ -313,7 +325,7 @@ final class EngineAudio {
 
                 // Gentle asymmetrical compression gives the exhaust pulse density without turning
                 // the outlet back into a buzzy harmonic generator.
-                double positiveDrive = output >= 0.0 ? 1.03 : 0.91;
+                double positiveDrive = output >= 0.0 ? 1.02 : 0.92;
                 output = Math.tanh(output * positiveDrive) * 0.88;
                 buffer[i] = (short) Math.round(output * 32767.0);
             }
