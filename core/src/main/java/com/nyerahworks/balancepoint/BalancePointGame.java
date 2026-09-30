@@ -39,7 +39,7 @@ public final class BalancePointGame extends ApplicationAdapter {
     private static final float WHEEL_RADIUS = 0.31f;
     private static final float MASS = 212f;
     private static final float GRAVITY = 9.81f;
-    private static final float PITCH_INERTIA = 126f;
+    private static final float PITCH_INERTIA = 168f;
     private static final float COM_FORWARD = 0.60f;
     private static final float COM_HEIGHT = 0.70f;
     private static final float RIDER_SHIFT = 0.14f;
@@ -52,11 +52,11 @@ public final class BalancePointGame extends ApplicationAdapter {
     private static final float AERO_DRAG = 0.34f;
 
     // MX-style wheelie tuning: the balance point is intentionally unstable.
-    private static final float PITCH_DAMPING = 24f;
-    private static final float MAX_PITCH_RATE = 6.5f;
+    private static final float PITCH_DAMPING = 30f;
+    private static final float MAX_PITCH_RATE = 5.4f;
     private static final float LIFT_SEED_RATE = 0.08f;
     private static final float THROTTLE_SNAP_RATE = 12f;
-    private static final float THROTTLE_SNAP_IMPULSE = 0.62f;
+    private static final float THROTTLE_SNAP_IMPULSE = 0.52f;
     private static final float LOOP_ANGLE = 155f * MathUtils.degreesToRadians;
 
     // Placeholder rider transforms are retained for cockpit/camera experiments, but the
