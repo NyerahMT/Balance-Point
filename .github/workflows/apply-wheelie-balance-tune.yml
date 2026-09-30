@@ -1,0 +1,52 @@
+name: Apply wheelie balance tune
+
+on:
+  push:
+    branches:
+      - physics/raise-balance-point
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: physics/raise-balance-point
+          fetch-depth: 0
+
+      - name: Raise geometric wheelie balance point
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('core/src/main/java/com/nyerahworks/balancepoint/BalancePointGame.java')
+          text = path.read_text()
+
+          old = '    private static final float COM_FORWARD = 0.60f;\n    private static final float COM_HEIGHT = 0.70f;'
+          new = '    private static final float COM_FORWARD = 0.60f;\n    private static final float AIRBORNE_COM_FORWARD = 1.00f;\n    private static final float COM_HEIGHT = 0.70f;'
+          if old not in text:
+              raise SystemExit('COM constants block not found')
+          text = text.replace(old, new, 1)
+
+          old = '            float comWorldForward = effectiveComForward * cosPitch - COM_HEIGHT * sinPitch;\n            float comWorldHeight = effectiveComForward * sinPitch + COM_HEIGHT * cosPitch;'
+          new = '            float airborneComForward = AIRBORNE_COM_FORWARD + riderLean * RIDER_SHIFT;\n            float comWorldForward = airborneComForward * cosPitch - COM_HEIGHT * sinPitch;\n            float comWorldHeight = airborneComForward * sinPitch + COM_HEIGHT * cosPitch;'
+          if old not in text:
+              raise SystemExit('airborne COM transform block not found')
+          text = text.replace(old, new, 1)
+
+          path.write_text(text)
+          PY
+
+      - name: Commit tune and remove one-shot workflow
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add core/src/main/java/com/nyerahworks/balancepoint/BalancePointGame.java
+          git rm .github/workflows/apply-wheelie-balance-tune.yml
+          git commit -m 'Raise wheelie balance point without auto-hold'
+          git push origin HEAD:physics/raise-balance-point
