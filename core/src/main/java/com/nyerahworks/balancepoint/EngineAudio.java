@@ -7,11 +7,9 @@ import com.badlogic.gdx.math.MathUtils;
 /**
  * Procedural 450-class four-stroke single engine synthesizer.
  *
- * The first pass was mostly a stack of RPM-tracked sine waves, which made the engine sound tonal
- * and synthetic. This version is built around discrete combustion pressure events (one firing every
- * two crank revolutions), fixed exhaust-system resonances, intake bark and a small amount of
- * valvetrain/mechanical content. The result should read much more like a large MX single while
- * remaining tiny and fully RPM-driven on both Android and iOS.
+ * Built around discrete combustion pressure events, low exhaust-system resonances, intake bark
+ * and restrained mechanical content. The exhaust body is intentionally voiced low and heavy so
+ * the motor reads as a large 450 single rather than a small buzzy engine.
  */
 final class EngineAudio {
     private static final int SAMPLE_RATE = 22_050;
@@ -30,9 +28,8 @@ final class EngineAudio {
     private double combustionPhase;
     private double crankPhase;
 
-    // Simple resonators excited by each combustion event. These are intentionally tied to the
-    // exhaust system rather than RPM, so the note keeps a recognizable pipe/body character while
-    // the firing cadence rises through the rev range.
+    // Resonators excited by each combustion event. These frequencies define most of the perceived
+    // exhaust body. They are deliberately about an octave below the previous pass.
     private double low1;
     private double low2;
     private double mid1;
@@ -48,7 +45,7 @@ final class EngineAudio {
         AudioDevice created = null;
         try {
             created = Gdx.audio.newAudioDevice(SAMPLE_RATE, true);
-            created.setVolume(0.62f);
+            created.setVolume(0.66f);
         } catch (Throwable t) {
             Gdx.app.error("BalancePoint", "Engine audio unavailable", t);
         }
@@ -83,12 +80,14 @@ final class EngineAudio {
         boolean previousShiftTarget = false;
         double shiftCrack = 0.0;
 
-        final double lowA = 2.0 * 0.994 * Math.cos(MathUtils.PI2 * 92.0 / SAMPLE_RATE);
-        final double lowB = 0.994 * 0.994;
-        final double midA = 2.0 * 0.991 * Math.cos(MathUtils.PI2 * 215.0 / SAMPLE_RATE);
-        final double midB = 0.991 * 0.991;
-        final double barkA = 2.0 * 0.982 * Math.cos(MathUtils.PI2 * 720.0 / SAMPLE_RATE);
-        final double barkB = 0.982 * 0.982;
+        // Lower the exhaust body's resonant character about one octave without lying about RPM or
+        // changing the actual four-stroke firing cadence.
+        final double lowA = 2.0 * 0.996 * Math.cos(MathUtils.PI2 * 46.0 / SAMPLE_RATE);
+        final double lowB = 0.996 * 0.996;
+        final double midA = 2.0 * 0.994 * Math.cos(MathUtils.PI2 * 108.0 / SAMPLE_RATE);
+        final double midB = 0.994 * 0.994;
+        final double barkA = 2.0 * 0.988 * Math.cos(MathUtils.PI2 * 360.0 / SAMPLE_RATE);
+        final double barkB = 0.988 * 0.988;
 
         while (running) {
             smoothRpm += (targetRpm - smoothRpm) * 0.18f;
@@ -102,15 +101,14 @@ final class EngineAudio {
             }
             previousShiftTarget = currentShiftTarget;
 
-            // A four-stroke single fires once every two crank revolutions.
+            // A four-stroke single fires once every two crank revolutions. Keep this physically
+            // correct; perceived pitch is lowered with exhaust-body voicing instead.
             float firingHz = Math.max(10f, smoothRpm / 120f);
             float crankHz = Math.max(20f, smoothRpm / 60f);
             double firingStep = firingHz / SAMPLE_RATE;
             double crankStep = MathUtils.PI2 * crankHz / SAMPLE_RATE;
 
-            // Closed-throttle high-RPM running still has pumping/exhaust sound, but loaded running
-            // gets a much stronger pressure pulse and more high-frequency bark.
-            float load = 0.28f + smoothThrottle * 0.72f;
+            float load = 0.30f + smoothThrottle * 0.70f;
             float rpmNorm = MathUtils.clamp((smoothRpm - 1_800f) / 11_400f, 0f, 1f);
             float shiftCut = 1f - smoothShift * 0.50f;
             float master = smoothGain * (0.30f + 0.70f * shiftCut);
@@ -127,74 +125,69 @@ final class EngineAudio {
                 crankPhase += crankStep;
                 if (crankPhase >= MathUtils.PI2) crankPhase -= MathUtils.PI2;
 
-                // Near the limiter, deliberately miss an occasional combustion event. That gives
-                // the top end a real ignition-cut texture instead of a steady synthesized whistle.
                 boolean limiterMiss = smoothRpm > 13_050f && smoothThrottle > 0.72f
                         && (firingCount & 3) == 3;
 
                 noiseState = noiseState * 1664525 + 1013904223;
                 double rawNoise = (((noiseState >>> 8) & 0xFFFF) / 32767.5) - 1.0;
-                noiseLow += (rawNoise - noiseLow) * 0.085;
+
+                // Heavier low-pass than the previous pass. Keep only a small amount of dry edge.
+                noiseLow += (rawNoise - noiseLow) * 0.045;
                 double noiseHigh = rawNoise - noiseLow;
 
                 double excitation = 0.0;
                 if (fired && !limiterMiss) {
-                    // Small cycle-to-cycle variation stops the exhaust from sounding perfectly
-                    // periodic while remaining subtle enough not to read as a misfire.
-                    double cycleVariation = 0.94 + 0.08 * Math.abs(rawNoise);
-                    excitation = (0.72 + 1.05 * smoothThrottle) * cycleVariation;
+                    double cycleVariation = 0.95 + 0.06 * Math.abs(rawNoise);
+                    excitation = (0.78 + 1.08 * smoothThrottle) * cycleVariation;
                 }
 
-                double nextLow = lowA * low1 - lowB * low2 + excitation * 0.72;
+                double nextLow = lowA * low1 - lowB * low2 + excitation * 0.82;
                 low2 = low1;
                 low1 = nextLow;
 
-                double nextMid = midA * mid1 - midB * mid2 + excitation * 0.46;
+                double nextMid = midA * mid1 - midB * mid2 + excitation * 0.42;
                 mid2 = mid1;
                 mid1 = nextMid;
 
                 double nextBark = barkA * bark1 - barkB * bark2
-                        + excitation * (0.13 + 0.27 * smoothThrottle);
+                        + excitation * (0.075 + 0.15 * smoothThrottle);
                 bark2 = bark1;
                 bark1 = nextBark;
 
-                // Direct combustion-pressure wave: sharp attack, then a negative rarefaction tail.
-                // This is the piece that creates the individual low-RPM "thump" and turns into a
-                // compressed braap as the firing events overlap at high RPM.
+                // Wider pressure pulse means less click/buzz and more of the heavy thump that a
+                // large-bore single produces through the exhaust.
                 double phase = combustionPhase;
-                double pressurePulse = Math.exp(-phase * 31.0)
-                        - 0.27 * Math.exp(-phase * 6.5);
+                double pressurePulse = Math.exp(-phase * 21.0)
+                        - 0.24 * Math.exp(-phase * 5.0);
 
-                // Intake valve event occurs later in the 720-degree cycle. The narrow noisy burst
-                // becomes much more obvious under throttle, like a 450 airbox opening up.
                 double intakeDistance = Math.abs(phase - 0.56);
-                double intakeEnvelope = Math.exp(-intakeDistance * intakeDistance * 520.0);
-                double intake = noiseHigh * intakeEnvelope * (0.10 + 0.44 * smoothThrottle);
+                double intakeEnvelope = Math.exp(-intakeDistance * intakeDistance * 360.0);
+                double intake = noiseHigh * intakeEnvelope * (0.045 + 0.20 * smoothThrottle);
 
-                // Crank/valvetrain order content. Keep it quiet at low RPM and let it emerge toward
-                // redline so the motor gains metallic urgency without dominating the exhaust.
-                double mechanical = (0.040 + 0.085 * rpmNorm)
-                        * (Math.sin(crankPhase * 2.0)
-                        + 0.38 * Math.sin(crankPhase * 3.0)
-                        + 0.18 * Math.sin(crankPhase * 5.0));
+                // Keep the top-end mechanical order audible but well behind the exhaust. The old
+                // high-order stack was a major source of the electric/buzzy character.
+                double mechanical = (0.018 + 0.036 * rpmNorm)
+                        * (Math.sin(crankPhase)
+                        + 0.22 * Math.sin(crankPhase * 2.0)
+                        + 0.08 * Math.sin(crankPhase * 3.0));
 
-                // Broad exhaust rasp. More throttle and RPM increases the dry high-frequency edge.
-                double rasp = noiseHigh * (0.018 + 0.050 * smoothThrottle + 0.035 * rpmNorm);
+                double rasp = noiseHigh * (0.005 + 0.015 * smoothThrottle + 0.010 * rpmNorm);
 
-                // Upshifts get a short dry crack rather than only a volume dip.
-                double crack = noiseHigh * shiftCrack * 0.42;
-                shiftCrack *= 0.9981;
+                double crack = noiseHigh * shiftCrack * 0.24;
+                shiftCrack *= 0.9975;
                 if (shiftCrack < 0.0005) shiftCrack = 0.0;
 
-                double exhaustBody = low1 * 0.105 + mid1 * 0.070 + bark1 * 0.040;
-                double direct = pressurePulse * (0.20 + 0.34 * smoothThrottle) * load;
+                // Weight the lowest resonator most heavily. Mid/bark provide definition without
+                // dragging the apparent engine size upward.
+                double exhaustBody = low1 * 0.145 + mid1 * 0.060 + bark1 * 0.022;
+                double direct = pressurePulse * (0.24 + 0.38 * smoothThrottle) * load;
 
                 double sample = (exhaustBody + direct + intake + mechanical + rasp + crack)
                         * master;
 
-                // Soft saturation mimics the compressed, clipped pressure character of a loud
-                // single-cylinder exhaust and prevents resonator peaks from hard-clipping audio.
-                sample = Math.tanh(sample * 1.55) * 0.78;
+                // Softer saturation retains the pressure/compression feel without generating as
+                // many extra upper harmonics as the previous harder drive.
+                sample = Math.tanh(sample * 1.28) * 0.82;
                 buffer[i] = (short) (sample * 32767.0);
             }
 
