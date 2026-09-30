@@ -696,13 +696,14 @@ public final class BalancePointGame extends ApplicationAdapter {
         float cosView = MathUtils.cos(viewYaw);
 
         if (cockpitCamera) {
-            float helmetY = importedBikeLoaded ? 1.28f : 1.42f;
+            float helmetY = importedBikeLoaded ? 1.22f : 1.36f;
             float helmetZ = importedBikeLoaded ? 0.66f : (0.58f + riderLean * 0.10f);
             tempA.set(0f, helmetY, helmetZ).mul(bikeRoot);
             camera.position.set(tempA);
             float cp = MathUtils.cos(lookPitch);
             camera.direction.set(sinView * cp, MathUtils.sin(lookPitch), cosView * cp).nor();
             camera.up.set(Vector3.Y);
+            camera.fieldOfView = 80f;
         } else {
             float orbitPitch = MathUtils.clamp(lookPitch, -25f * MathUtils.degreesToRadians,
                     30f * MathUtils.degreesToRadians);
@@ -718,6 +719,7 @@ public final class BalancePointGame extends ApplicationAdapter {
                     bikeZ + MathUtils.cos(yaw) * 2.2f);
             camera.up.set(Vector3.Y);
             camera.lookAt(tempB);
+            camera.fieldOfView = 67f;
         }
         camera.update();
     }
