@@ -1,0 +1,55 @@
+name: Apply progressive airborne COM fix
+
+on:
+  push:
+    branches:
+      - physics/progressive-airborne-com
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: physics/progressive-airborne-com
+          fetch-depth: 0
+      - name: Patch wheelie COM transition
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('core/src/main/java/com/nyerahworks/balancepoint/BalancePointGame.java')
+          s = p.read_text()
+          old = '    private static final float AIRBORNE_COM_FORWARD = 1.00f;\n'
+          new = ('    private static final float AIRBORNE_COM_FORWARD = 1.00f;\n'
+                 '    private static final float AIRBORNE_COM_SHIFT_START = 25f * MathUtils.degreesToRadians;\n'
+                 '    private static final float AIRBORNE_COM_SHIFT_END = 55f * MathUtils.degreesToRadians;\n')
+          if old not in s:
+              raise SystemExit('AIRBORNE_COM_FORWARD anchor not found')
+          s = s.replace(old, new, 1)
+          old2 = '            float airborneComForward = AIRBORNE_COM_FORWARD + riderLean * RIDER_SHIFT;\n'
+          new2 = ('            // Keep the original 0.60 m COM while the bike is actually lofting, then\n'
+                  '            // progressively shift the effective airborne mass forward as angle builds.\n'
+                  '            // This raises the natural balance point without creating a target-angle hold\n'
+                  '            // or instantly applying a huge nose-down gravity torque at lift-off.\n'
+                  '            float airborneComBlend = MathUtils.clamp((pitch - AIRBORNE_COM_SHIFT_START)\n'
+                  '                    / (AIRBORNE_COM_SHIFT_END - AIRBORNE_COM_SHIFT_START), 0f, 1f);\n'
+                  '            airborneComBlend = airborneComBlend * airborneComBlend\n'
+                  '                    * (3f - 2f * airborneComBlend);\n'
+                  '            float airborneComForward = MathUtils.lerp(COM_FORWARD, AIRBORNE_COM_FORWARD,\n'
+                  '                    airborneComBlend) + riderLean * RIDER_SHIFT;\n')
+          if old2 not in s:
+              raise SystemExit('airborne COM calculation anchor not found')
+          s = s.replace(old2, new2, 1)
+          p.write_text(s)
+          PY
+      - name: Remove temporary workflow and commit
+        run: |
+          git rm .github/workflows/apply-progressive-airborne-com.yml
+          git add core/src/main/java/com/nyerahworks/balancepoint/BalancePointGame.java
+          git config user.name github-actions[bot]
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Make airborne COM shift progressive with wheelie angle'
+          git push origin physics/progressive-airborne-com
