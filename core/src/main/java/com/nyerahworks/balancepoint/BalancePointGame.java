@@ -26,9 +26,9 @@ import com.badlogic.gdx.utils.Array;
 /**
  * Balance Point - GMEE-focused lightweight 3D motorcycle prototype.
  *
- * Physics v3 keeps the load-transfer and traction model, adds a stronger
- * pitch-rate damper around balance point, rider weight shift, horizon-stabilized
- * helmet cam, free-look, and dedicated analog mobile controls.
+ * Physics v4 keeps the rear-axle inverted-pendulum model but removes the
+ * balance-point magnet. Pitch is lightly damped, free to accelerate through
+ * balance, and a fast throttle hit can add a small lift impulse at takeoff.
  */
 public final class BalancePointGame extends ApplicationAdapter {
     private static final float PHYSICS_DT = 1f / 120f;
@@ -51,13 +51,13 @@ public final class BalancePointGame extends ApplicationAdapter {
     private static final float ROLLING_RESISTANCE = 0.017f;
     private static final float AERO_DRAG = 0.34f;
 
-    private static final float PITCH_DAMPING_BASE = 85f;
-    private static final float PITCH_DAMPING_BALANCE = 360f;
-    private static final float BALANCE_RATE_DECAY = 3.2f;
-    private static final float BALANCE_FREE_RATE = 0.20f;
-    private static final float BALANCE_FULL_RATE = 0.95f;
-    private static final float BALANCE_DAMPING_BAND = 18f * MathUtils.degreesToRadians;
-    private static final float LOOP_ANGLE = 103f * MathUtils.degreesToRadians;
+    // MX-style wheelie tuning: the balance point is intentionally unstable.
+    private static final float PITCH_DAMPING = 24f;
+    private static final float MAX_PITCH_RATE = 6.5f;
+    private static final float LIFT_SEED_RATE = 0.08f;
+    private static final float THROTTLE_SNAP_RATE = 12f;
+    private static final float THROTTLE_SNAP_IMPULSE = 0.62f;
+    private static final float LOOP_ANGLE = 155f * MathUtils.degreesToRadians;
 
     // Placeholder rider transforms are retained for cockpit/camera experiments, but the
     // imported GLB path renders only the authored motorcycle geometry.
@@ -118,6 +118,8 @@ public final class BalancePointGame extends ApplicationAdapter {
 
     private float throttle;
     private float throttleTarget;
+    private float previousThrottleTarget;
+    private float throttleSnap;
     private float rearBrake;
     private float rearBrakeTarget;
     private float steer;
@@ -370,7 +372,13 @@ public final class BalancePointGame extends ApplicationAdapter {
         cameraTouchHeld = cameraTouch;
         looking = lookTouch;
 
-        throttleTarget = throttleTouch ? requestedThrottle : 0f;
+        float newThrottleTarget = throttleTouch ? requestedThrottle : 0f;
+        float throttleRiseRate = Math.max(0f, newThrottleTarget - previousThrottleTarget)
+                / Math.max(dt, 0.001f);
+        float snap = MathUtils.clamp(throttleRiseRate / THROTTLE_SNAP_RATE, 0f, 1f);
+        throttleSnap = Math.max(throttleSnap * Math.max(0f, 1f - dt * 3.5f), snap);
+        throttleTarget = newThrottleTarget;
+        previousThrottleTarget = newThrottleTarget;
         rearBrakeTarget = brakeTouch ? requestedBrake : 0f;
 
         if (leftArrowTouch == rightArrowTouch) {
@@ -383,7 +391,7 @@ public final class BalancePointGame extends ApplicationAdapter {
         riderLeanTarget = 0f;
 
         throttle = approach(throttle, throttleTarget,
-                (throttleTarget > throttle ? 7.0f : 11f) * dt);
+                (throttleTarget > throttle ? 10.5f : 12f) * dt);
         rearBrake = approach(rearBrake, rearBrakeTarget,
                 (rearBrakeTarget > rearBrake ? 24f : 22f) * dt);
 
@@ -456,35 +464,24 @@ public final class BalancePointGame extends ApplicationAdapter {
             if (frontNormalLoad <= 0f && speed > 2.5f) {
                 frontGrounded = false;
                 frontNormalLoad = 0f;
-                pitchVelocity = 0.035f;
+                pitchVelocity = LIFT_SEED_RATE + throttleSnap * THROTTLE_SNAP_IMPULSE;
+                throttleSnap = 0f;
             }
         } else {
             float sinPitch = MathUtils.sin(pitch);
             float cosPitch = MathUtils.cos(pitch);
             float comWorldForward = effectiveComForward * cosPitch - COM_HEIGHT * sinPitch;
             float comWorldHeight = effectiveComForward * sinPitch + COM_HEIGHT * cosPitch;
-            float balanceAngle = (float) Math.atan2(effectiveComForward, COM_HEIGHT);
-            float balanceDistance = Math.abs(pitch - balanceAngle);
-            float proximityLinear = 1f - MathUtils.clamp(balanceDistance / BALANCE_DAMPING_BAND, 0f, 1f);
-            float proximity = proximityLinear * proximityLinear;
 
-            float rateMagnitude = Math.abs(pitchVelocity);
-            float rateAssist = MathUtils.clamp(
-                    (rateMagnitude - BALANCE_FREE_RATE) / (BALANCE_FULL_RATE - BALANCE_FREE_RATE),
-                    0f, 1f);
-            rateAssist *= rateAssist;
-            float assist = proximity * rateAssist;
-            float angularDamping = PITCH_DAMPING_BASE + assist * PITCH_DAMPING_BALANCE;
-
+            // Rear contact is the pivot. No balance-point controller: below balance
+            // gravity restores, above balance gravity takes the bike over unless the
+            // rider changes acceleration with throttle or rear brake.
             float pitchTorque = MASS * longitudinalAcceleration * comWorldHeight
                     - MASS * GRAVITY * comWorldForward
-                    - pitchVelocity * angularDamping;
+                    - pitchVelocity * PITCH_DAMPING;
 
             pitchVelocity += (pitchTorque / PITCH_INERTIA) * dt;
-
-            float rateDecay = 0.45f + assist * BALANCE_RATE_DECAY;
-            pitchVelocity *= (float) Math.exp(-rateDecay * dt);
-            pitchVelocity = MathUtils.clamp(pitchVelocity, -1.90f, 1.90f);
+            pitchVelocity = MathUtils.clamp(pitchVelocity, -MAX_PITCH_RATE, MAX_PITCH_RATE);
             pitch += pitchVelocity * dt;
 
             if (pitch <= 0f) {
@@ -542,7 +539,8 @@ public final class BalancePointGame extends ApplicationAdapter {
         wheelSpin = 0f;
         longitudinalAcceleration = 0f;
         frontNormalLoad = MASS * GRAVITY * COM_FORWARD / WHEELBASE;
-        throttle = throttleTarget = 0f;
+        throttle = throttleTarget = previousThrottleTarget = 0f;
+        throttleSnap = 0f;
         rearBrake = rearBrakeTarget = 0f;
         steer = steerTarget = 0f;
         riderLean = riderLeanTarget = 0f;
