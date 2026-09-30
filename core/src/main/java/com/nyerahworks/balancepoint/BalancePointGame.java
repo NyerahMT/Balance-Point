@@ -58,6 +58,7 @@ public final class BalancePointGame extends ApplicationAdapter {
     private static final float PITCH_DAMPING = 30f;
     private static final float MAX_PITCH_RATE = 5.4f;
     private static final float LIFT_SEED_RATE = 0.08f;
+    private static final float LIFT_MARGIN_FOR_FULL_SEED = 0.25f;
     private static final float THROTTLE_SNAP_RATE = 12f;
     private static final float THROTTLE_SNAP_IMPULSE = 0.52f;
     private static final float LOOP_ANGLE = 155f * MathUtils.degreesToRadians;
@@ -458,6 +459,7 @@ public final class BalancePointGame extends ApplicationAdapter {
         speed += longitudinalAcceleration * dt;
         speed = MathUtils.clamp(speed, 0f, 48f);
 
+        float staticFrontLoad = MASS * GRAVITY * effectiveComForward / WHEELBASE;
         frontNormalLoad = (MASS * GRAVITY * effectiveComForward
                 - MASS * longitudinalAcceleration * COM_HEIGHT) / WHEELBASE;
 
@@ -465,9 +467,19 @@ public final class BalancePointGame extends ApplicationAdapter {
             pitch = 0f;
             pitchVelocity = 0f;
             if (frontNormalLoad <= 0f && speed > 2.5f) {
+                // Crossing zero front load is a physical contact condition, but the old
+                // model applied the full throttle-snap pitch impulse the instant it crossed.
+                // That made a tiny speed change flip from "loop it" to "cannot lift".
+                // Scale takeoff authority with actual negative-load margin so the launch
+                // naturally fades as the bike approaches its power-limited wheelie speed.
+                float liftMargin = MathUtils.clamp(-frontNormalLoad
+                        / Math.max(staticFrontLoad * LIFT_MARGIN_FOR_FULL_SEED, 1f), 0f, 1f);
+                float liftAuthority = liftMargin * liftMargin * (3f - 2f * liftMargin);
+
                 frontGrounded = false;
                 frontNormalLoad = 0f;
-                pitchVelocity = LIFT_SEED_RATE + throttleSnap * THROTTLE_SNAP_IMPULSE;
+                pitchVelocity = (LIFT_SEED_RATE + throttleSnap * THROTTLE_SNAP_IMPULSE)
+                        * liftAuthority;
                 throttleSnap = 0f;
             }
         } else {
