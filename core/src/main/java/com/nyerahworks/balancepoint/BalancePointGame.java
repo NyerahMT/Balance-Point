@@ -41,6 +41,7 @@ public final class BalancePointGame extends ApplicationAdapter {
     private static final float GRAVITY = 9.81f;
     private static final float PITCH_INERTIA = 168f;
     private static final float COM_FORWARD = 0.60f;
+    private static final float AIRBORNE_COM_FORWARD = 1.00f;
     private static final float COM_HEIGHT = 0.70f;
     private static final float RIDER_SHIFT = 0.14f;
 
@@ -470,8 +471,9 @@ public final class BalancePointGame extends ApplicationAdapter {
         } else {
             float sinPitch = MathUtils.sin(pitch);
             float cosPitch = MathUtils.cos(pitch);
-            float comWorldForward = effectiveComForward * cosPitch - COM_HEIGHT * sinPitch;
-            float comWorldHeight = effectiveComForward * sinPitch + COM_HEIGHT * cosPitch;
+            float airborneComForward = AIRBORNE_COM_FORWARD + riderLean * RIDER_SHIFT;
+            float comWorldForward = airborneComForward * cosPitch - COM_HEIGHT * sinPitch;
+            float comWorldHeight = airborneComForward * sinPitch + COM_HEIGHT * cosPitch;
 
             // Rear contact is the pivot. No balance-point controller: below balance
             // gravity restores, above balance gravity takes the bike over unless the
