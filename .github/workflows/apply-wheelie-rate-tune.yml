@@ -1,0 +1,41 @@
+name: Apply wheelie rate tune
+
+on:
+  push:
+    branches:
+      - physics/slow-loop-rate
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: physics/slow-loop-rate
+      - name: Slow pitch-rate build
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('core/src/main/java/com/nyerahworks/balancepoint/BalancePointGame.java')
+          s = p.read_text()
+          replacements = {
+              'private static final float PITCH_INERTIA = 126f;': 'private static final float PITCH_INERTIA = 168f;',
+              'private static final float PITCH_DAMPING = 24f;': 'private static final float PITCH_DAMPING = 30f;',
+              'private static final float MAX_PITCH_RATE = 6.5f;': 'private static final float MAX_PITCH_RATE = 5.4f;',
+              'private static final float THROTTLE_SNAP_IMPULSE = 0.62f;': 'private static final float THROTTLE_SNAP_IMPULSE = 0.52f;',
+          }
+          for old, new in replacements.items():
+              if old not in s:
+                  raise SystemExit(f'missing expected text: {old}')
+              s = s.replace(old, new, 1)
+          p.write_text(s)
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/apply-wheelie-rate-tune.yml
+          git add core/src/main/java/com/nyerahworks/balancepoint/BalancePointGame.java
+          git commit -m "Slow high-angle wheelie rotation build"
+          git push origin HEAD:physics/slow-loop-rate
