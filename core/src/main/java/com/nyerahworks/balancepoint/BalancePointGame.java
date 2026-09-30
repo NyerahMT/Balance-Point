@@ -42,6 +42,8 @@ public final class BalancePointGame extends ApplicationAdapter {
     private static final float PITCH_INERTIA = 168f;
     private static final float COM_FORWARD = 0.60f;
     private static final float AIRBORNE_COM_FORWARD = 1.00f;
+    private static final float AIRBORNE_COM_SHIFT_START = 25f * MathUtils.degreesToRadians;
+    private static final float AIRBORNE_COM_SHIFT_END = 55f * MathUtils.degreesToRadians;
     private static final float COM_HEIGHT = 0.70f;
     private static final float RIDER_SHIFT = 0.14f;
 
@@ -471,7 +473,16 @@ public final class BalancePointGame extends ApplicationAdapter {
         } else {
             float sinPitch = MathUtils.sin(pitch);
             float cosPitch = MathUtils.cos(pitch);
-            float airborneComForward = AIRBORNE_COM_FORWARD + riderLean * RIDER_SHIFT;
+            // Keep the original 0.60 m COM while the bike is actually lofting, then
+            // progressively shift the effective airborne mass forward as angle builds.
+            // This raises the natural balance point without creating a target-angle hold
+            // or instantly applying a huge nose-down gravity torque at lift-off.
+            float airborneComBlend = MathUtils.clamp((pitch - AIRBORNE_COM_SHIFT_START)
+                    / (AIRBORNE_COM_SHIFT_END - AIRBORNE_COM_SHIFT_START), 0f, 1f);
+            airborneComBlend = airborneComBlend * airborneComBlend
+                    * (3f - 2f * airborneComBlend);
+            float airborneComForward = MathUtils.lerp(COM_FORWARD, AIRBORNE_COM_FORWARD,
+                    airborneComBlend) + riderLean * RIDER_SHIFT;
             float comWorldForward = airborneComForward * cosPitch - COM_HEIGHT * sinPitch;
             float comWorldHeight = airborneComForward * sinPitch + COM_HEIGHT * cosPitch;
 
