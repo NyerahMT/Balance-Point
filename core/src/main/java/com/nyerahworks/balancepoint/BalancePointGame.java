@@ -50,7 +50,6 @@ public final class BalancePointGame extends ApplicationAdapter {
     private static final float TIRE_MU = 1.05f;
     private static final float MAX_ENGINE_FORCE = 2500f;
     private static final float MAX_REAR_BRAKE_FORCE = 3800f;
-    private static final float ENGINE_POWER = 44000f;
     private static final float ROLLING_RESISTANCE = 0.017f;
     private static final float AERO_DRAG = 0.34f;
 
@@ -72,6 +71,7 @@ public final class BalancePointGame extends ApplicationAdapter {
     private final Matrix4 importedSteeringRoot = new Matrix4();
     private final Vector3 tempA = new Vector3();
     private final Vector3 tempB = new Vector3();
+    private final MotorcycleDrivetrain drivetrain = new MotorcycleDrivetrain(WHEEL_RADIUS);
 
     private PerspectiveCamera camera;
     private OrthographicCamera uiCamera;
@@ -80,6 +80,7 @@ public final class BalancePointGame extends ApplicationAdapter {
     private ShapeRenderer shapes;
     private BitmapFont font;
     private Environment environment;
+    private EngineAudio engineAudio;
 
     private TerrainVisuals terrainVisuals;
     private ModelInstance[] roadSegments;
@@ -136,6 +137,8 @@ public final class BalancePointGame extends ApplicationAdapter {
     private boolean looking;
     private boolean cockpitCamera;
     private boolean cameraTouchHeld;
+    private boolean shiftDownHeld;
+    private boolean shiftUpHeld;
     private boolean frontGrounded = true;
     private boolean crashed;
     private float crashTimer;
@@ -150,6 +153,7 @@ public final class BalancePointGame extends ApplicationAdapter {
         spriteBatch = new SpriteBatch();
         shapes = new ShapeRenderer();
         font = new BitmapFont();
+        engineAudio = new EngineAudio();
 
         camera = new PerspectiveCamera(67f, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
         camera.near = 0.08f;
@@ -293,6 +297,10 @@ public final class BalancePointGame extends ApplicationAdapter {
         }
         if (steps == 8) physicsAccumulator = 0.0;
 
+        if (engineAudio != null) {
+            engineAudio.update(drivetrain.getRpm(), throttle, drivetrain.isShifting(), crashed);
+        }
+
         updateWorldInstances();
         updateBikeInstances();
         updateCamera(frameDt);
@@ -321,6 +329,8 @@ public final class BalancePointGame extends ApplicationAdapter {
         boolean brakeTouch = false;
         boolean leftArrowTouch = false;
         boolean rightArrowTouch = false;
+        boolean shiftDownTouch = false;
+        boolean shiftUpTouch = false;
         boolean lookTouch = false;
         float requestedThrottle = 0f;
         float requestedBrake = 0f;
@@ -361,6 +371,15 @@ public final class BalancePointGame extends ApplicationAdapter {
                 continue;
             }
 
+            if (x >= 0.34f && x < 0.44f && y > 0.70f && y < 0.92f) {
+                shiftDownTouch = true;
+                continue;
+            }
+            if (x >= 0.46f && x < 0.56f && y > 0.70f && y < 0.92f) {
+                shiftUpTouch = true;
+                continue;
+            }
+
             if (x > 0.30f && x < 0.70f && y > 0.10f && y < 0.66f) {
                 lookTouch = true;
                 lookYaw -= Gdx.input.getDeltaX(pointer) * 0.0048f;
@@ -375,6 +394,11 @@ public final class BalancePointGame extends ApplicationAdapter {
         if (cameraTouch && !cameraTouchHeld) cockpitCamera = !cockpitCamera;
         cameraTouchHeld = cameraTouch;
         looking = lookTouch;
+
+        if (shiftUpTouch && !shiftUpHeld) drivetrain.shiftUp();
+        if (shiftDownTouch && !shiftDownHeld) drivetrain.shiftDown(speed);
+        shiftUpHeld = shiftUpTouch;
+        shiftDownHeld = shiftDownTouch;
 
         float newThrottleTarget = throttleTouch ? requestedThrottle : 0f;
         float throttleRiseRate = Math.max(0f, newThrottleTarget - previousThrottleTarget)
@@ -419,6 +443,7 @@ public final class BalancePointGame extends ApplicationAdapter {
             throttle = 0f;
             rearBrake = 0f;
             speed = Math.max(0f, speed - 7f * dt);
+            drivetrain.update(speed, 0f, dt);
             pitchVelocity += 2.2f * dt;
             pitch += pitchVelocity * dt;
             roll += 1.35f * dt;
@@ -442,8 +467,8 @@ public final class BalancePointGame extends ApplicationAdapter {
         rearNormalEstimate = Math.max(0f, rearNormalEstimate);
         float tractionLimit = TIRE_MU * rearNormalEstimate;
 
-        float powerLimitedForce = ENGINE_POWER / Math.max(absSpeed, 6f);
-        float driveForce = Math.min(throttle * Math.min(MAX_ENGINE_FORCE, powerLimitedForce), tractionLimit);
+        float drivetrainForce = drivetrain.update(absSpeed, throttle, dt);
+        float driveForce = Math.min(Math.min(MAX_ENGINE_FORCE, drivetrainForce), tractionLimit);
 
         float brakeForce = 0f;
         if (rearBrake > 0f && absSpeed > 0.03f) {
@@ -570,6 +595,8 @@ public final class BalancePointGame extends ApplicationAdapter {
         steer = steerTarget = 0f;
         riderLean = riderLeanTarget = 0f;
         lookYaw = lookPitch = 0f;
+        shiftDownHeld = shiftUpHeld = false;
+        drivetrain.reset();
         frontGrounded = true;
         crashed = false;
         crashTimer = 0f;
@@ -769,7 +796,7 @@ public final class BalancePointGame extends ApplicationAdapter {
         shapes.setProjectionMatrix(uiCamera.combined);
         shapes.begin(ShapeRenderer.ShapeType.Filled);
         shapes.setColor(0f, 0f, 0f, 0.45f);
-        shapes.rect(18f, h - 142f, 300f, 120f);
+        shapes.rect(18f, h - 166f, 300f, 144f);
 
         float sliderX = w * 0.91f;
         float sliderBottom = h * 0.12f;
@@ -804,6 +831,15 @@ public final class BalancePointGame extends ApplicationAdapter {
                 steerRightX - steerR * 0.26f, steerY + steerR * 0.42f,
                 steerRightX - steerR * 0.26f, steerY - steerR * 0.42f);
 
+        float shiftDownX = w * 0.39f;
+        float shiftUpX = w * 0.51f;
+        float shiftY = h * 0.17f;
+        float shiftR = min * 0.055f;
+        shapes.setColor(1f, 1f, 1f, shiftDownHeld ? 0.48f : 0.16f);
+        shapes.circle(shiftDownX, shiftY, shiftR, 22);
+        shapes.setColor(1f, 1f, 1f, shiftUpHeld ? 0.48f : 0.16f);
+        shapes.circle(shiftUpX, shiftY, shiftR, 22);
+
         shapes.setColor(0f, 0f, 0f, 0.42f);
         shapes.rect(w - 145f, h - 66f, 125f, 45f);
         if (looking) {
@@ -834,11 +870,16 @@ public final class BalancePointGame extends ApplicationAdapter {
         font.draw(spriteBatch, frontGrounded
                 ? String.format(java.util.Locale.US, "FRONT LOAD %3.0f%%", frontPercent)
                 : "FRONT AIR", 34f, h - 119f);
+        font.draw(spriteBatch, String.format(java.util.Locale.US, "GEAR %d   RPM %5.0f",
+                drivetrain.getGear(), drivetrain.getRpm()), 34f, h - 144f);
         font.draw(spriteBatch, "FPS " + Gdx.graphics.getFramesPerSecond(), 225f, h - 44f);
 
         font.draw(spriteBatch, "THROTTLE", sliderX - 31f, sliderTop + 22f);
         font.draw(spriteBatch, "BRAKE", brakeX - 23f, brakeY + 5f);
         font.draw(spriteBatch, "STEER", w * 0.145f, steerY + steerR + 20f);
+        font.draw(spriteBatch, "-", shiftDownX - 4f, shiftY + 5f);
+        font.draw(spriteBatch, "+", shiftUpX - 5f, shiftY + 5f);
+        font.draw(spriteBatch, "SHIFT", w * 0.422f, shiftY + shiftR + 18f);
         font.draw(spriteBatch, "DRAG CENTER TO LOOK", w * 0.405f, h * 0.62f);
         font.draw(spriteBatch, cockpitCamera ? "CAM: HELMET" : "CAM: CHASE", w - 133f, h - 39f);
 
@@ -866,12 +907,19 @@ public final class BalancePointGame extends ApplicationAdapter {
     }
 
     @Override
+    public void pause() {
+        if (engineAudio != null) engineAudio.setActive(false);
+    }
+
+    @Override
     public void resume() {
         physicsAccumulator = 0.0;
+        if (engineAudio != null) engineAudio.setActive(true);
     }
 
     @Override
     public void dispose() {
+        if (engineAudio != null) engineAudio.dispose();
         if (modelBatch != null) modelBatch.dispose();
         if (spriteBatch != null) spriteBatch.dispose();
         if (shapes != null) shapes.dispose();
