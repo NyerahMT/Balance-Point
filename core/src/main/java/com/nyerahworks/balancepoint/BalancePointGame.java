@@ -24,11 +24,7 @@ import com.badlogic.gdx.math.Vector3;
 import com.badlogic.gdx.utils.Array;
 
 /**
- * Balance Point - GMEE-focused lightweight 3D motorcycle prototype.
- *
- * Physics v4 keeps the rear-axle inverted-pendulum model but removes the
- * balance-point magnet. Pitch is lightly damped, free to accelerate through
- * balance, and a fast throttle hit can add a small lift impulse at takeoff.
+ * Balance Point - lightweight 3D motorcycle prototype.
  */
 public final class BalancePointGame extends ApplicationAdapter {
     private static final float PHYSICS_DT = 1f / 120f;
@@ -53,7 +49,6 @@ public final class BalancePointGame extends ApplicationAdapter {
     private static final float ROLLING_RESISTANCE = 0.017f;
     private static final float AERO_DRAG = 0.34f;
 
-    // MX-style wheelie tuning: the balance point is intentionally unstable.
     private static final float PITCH_DAMPING = 30f;
     private static final float MAX_PITCH_RATE = 5.4f;
     private static final float LIFT_SEED_RATE = 0.08f;
@@ -61,9 +56,6 @@ public final class BalancePointGame extends ApplicationAdapter {
     private static final float THROTTLE_SNAP_RATE = 12f;
     private static final float THROTTLE_SNAP_IMPULSE = 0.52f;
     private static final float LOOP_ANGLE = 155f * MathUtils.degreesToRadians;
-
-    // Placeholder rider transforms are retained for cockpit/camera experiments, but the
-    // imported GLB path renders only the authored motorcycle geometry.
     private static final float IMPORTED_RIDER_SCALE = 0.82f;
 
     private final Array<Model> ownedModels = new Array<>();
@@ -106,6 +98,7 @@ public final class BalancePointGame extends ApplicationAdapter {
     private ModelInstance riderArmLeft;
     private ModelInstance riderArmRight;
     private ModelInstance frontNumberPlate;
+    private ModelInstance instrumentPanel;
 
     private DirtBikeMeshLoader.LoadedBike importedBike;
     private boolean importedBikeLoaded;
@@ -140,8 +133,15 @@ public final class BalancePointGame extends ApplicationAdapter {
     private boolean shiftDownHeld;
     private boolean shiftUpHeld;
     private boolean frontGrounded = true;
+
     private boolean crashed;
+    private boolean crashSettled;
     private float crashTimer;
+    private float crashPitchRate;
+    private float crashRollRate;
+    private float crashYawRate;
+    private float crashSide = 1f;
+
     private float wheelieTime;
     private float bestWheelieTime;
     private double physicsAccumulator;
@@ -225,7 +225,6 @@ public final class BalancePointGame extends ApplicationAdapter {
         }
         laneDashes = new ModelInstance[58];
         for (int i = 0; i < laneDashes.length; i++) laneDashes[i] = new ModelInstance(dash);
-
         terrainVisuals = new TerrainVisuals(ownedModels);
     }
 
@@ -237,6 +236,7 @@ public final class BalancePointGame extends ApplicationAdapter {
         Material orange = material(0.92f, 0.29f, 0.085f);
         Material rider = material(0.07f, 0.075f, 0.08f);
         Material visor = material(0.16f, 0.27f, 0.30f);
+        Material dashMat = material(0.025f, 0.030f, 0.032f);
 
         Model wheel = cylinder(b, WHEEL_RADIUS * 2f, 0.13f, WHEEL_RADIUS * 2f, 14, tire);
         Model hub = cylinder(b, 0.19f, 0.145f, 0.19f, 12, metal);
@@ -250,6 +250,7 @@ public final class BalancePointGame extends ApplicationAdapter {
         Model headM = sphere(b, 0.30f, 0.30f, 0.30f, 10, 8, rider);
         Model limbM = box(b, 0.10f, 0.62f, 0.10f, rider);
         Model plateM = box(b, 0.28f, 0.12f, 0.035f, visor);
+        Model dashM = box(b, 0.30f, 0.035f, 0.16f, dashMat);
 
         rearWheel = new ModelInstance(wheel);
         frontWheel = new ModelInstance(wheel);
@@ -269,6 +270,7 @@ public final class BalancePointGame extends ApplicationAdapter {
         riderArmLeft = new ModelInstance(limbM);
         riderArmRight = new ModelInstance(limbM);
         frontNumberPlate = new ModelInstance(plateM);
+        instrumentPanel = new ModelInstance(dashM);
 
         try {
             importedBike = DirtBikeMeshLoader.load(ownedModels,
@@ -337,7 +339,6 @@ public final class BalancePointGame extends ApplicationAdapter {
 
         for (int pointer = 0; pointer < 8; pointer++) {
             if (!Gdx.input.isTouched(pointer)) continue;
-
             float px = Gdx.input.getX(pointer);
             float py = Gdx.input.getY(pointer);
             float x = px / w;
@@ -347,21 +348,18 @@ public final class BalancePointGame extends ApplicationAdapter {
                 cameraTouch = true;
                 continue;
             }
-
             if (x > 0.82f && y > 0.46f && y < 0.90f) {
                 throttleTouch = true;
                 requestedThrottle = Math.max(requestedThrottle,
                         MathUtils.clamp((0.88f - y) / 0.40f, 0f, 1f));
                 continue;
             }
-
             if (x >= 0.70f && x <= 0.82f && y > 0.70f) {
                 brakeTouch = true;
                 float brake = MathUtils.clamp((y - 0.70f) / 0.24f, 0.50f, 1f);
                 requestedBrake = Math.max(requestedBrake, brake);
                 continue;
             }
-
             if (x >= 0.03f && x < 0.16f && y > 0.66f && y < 0.91f) {
                 leftArrowTouch = true;
                 continue;
@@ -370,7 +368,6 @@ public final class BalancePointGame extends ApplicationAdapter {
                 rightArrowTouch = true;
                 continue;
             }
-
             if (x >= 0.34f && x < 0.44f && y > 0.70f && y < 0.92f) {
                 shiftDownTouch = true;
                 continue;
@@ -379,7 +376,6 @@ public final class BalancePointGame extends ApplicationAdapter {
                 shiftUpTouch = true;
                 continue;
             }
-
             if (x > 0.30f && x < 0.70f && y > 0.10f && y < 0.66f) {
                 lookTouch = true;
                 lookYaw -= Gdx.input.getDeltaX(pointer) * 0.0048f;
@@ -395,21 +391,23 @@ public final class BalancePointGame extends ApplicationAdapter {
         cameraTouchHeld = cameraTouch;
         looking = lookTouch;
 
-        if (shiftUpTouch && !shiftUpHeld) drivetrain.shiftUp();
-        if (shiftDownTouch && !shiftDownHeld) drivetrain.shiftDown(speed);
+        if (!crashed) {
+            if (shiftUpTouch && !shiftUpHeld) drivetrain.shiftUp();
+            if (shiftDownTouch && !shiftDownHeld) drivetrain.shiftDown(speed);
+        }
         shiftUpHeld = shiftUpTouch;
         shiftDownHeld = shiftDownTouch;
 
-        float newThrottleTarget = throttleTouch ? requestedThrottle : 0f;
+        float newThrottleTarget = crashed ? 0f : (throttleTouch ? requestedThrottle : 0f);
         float throttleRiseRate = Math.max(0f, newThrottleTarget - previousThrottleTarget)
                 / Math.max(dt, 0.001f);
         float snap = MathUtils.clamp(throttleRiseRate / THROTTLE_SNAP_RATE, 0f, 1f);
         throttleSnap = Math.max(throttleSnap * Math.max(0f, 1f - dt * 3.5f), snap);
         throttleTarget = newThrottleTarget;
         previousThrottleTarget = newThrottleTarget;
-        rearBrakeTarget = brakeTouch ? requestedBrake : 0f;
+        rearBrakeTarget = crashed ? 0f : (brakeTouch ? requestedBrake : 0f);
 
-        if (leftArrowTouch == rightArrowTouch) {
+        if (crashed || leftArrowTouch == rightArrowTouch) {
             steerTarget = 0f;
         } else {
             steerTarget = leftArrowTouch ? 0.65f : -0.65f;
@@ -417,7 +415,6 @@ public final class BalancePointGame extends ApplicationAdapter {
 
         riderLean = 0f;
         riderLeanTarget = 0f;
-
         throttle = approach(throttle, throttleTarget,
                 (throttleTarget > throttle ? 10.5f : 12f) * dt);
         rearBrake = approach(rearBrake, rearBrakeTarget,
@@ -439,17 +436,7 @@ public final class BalancePointGame extends ApplicationAdapter {
 
     private void simulate(float dt) {
         if (crashed) {
-            crashTimer += dt;
-            throttle = 0f;
-            rearBrake = 0f;
-            speed = Math.max(0f, speed - 7f * dt);
-            drivetrain.update(speed, 0f, dt);
-            pitchVelocity += 2.2f * dt;
-            pitch += pitchVelocity * dt;
-            roll += 1.35f * dt;
-            bikeX += MathUtils.sin(yaw) * speed * dt;
-            bikeZ += MathUtils.cos(yaw) * speed * dt;
-            if (crashTimer > 1.35f) resetBike();
+            simulateCrash(dt);
             return;
         }
 
@@ -492,15 +479,9 @@ public final class BalancePointGame extends ApplicationAdapter {
             pitch = 0f;
             pitchVelocity = 0f;
             if (frontNormalLoad <= 0f && speed > 2.5f) {
-                // Crossing zero front load is a physical contact condition, but the old
-                // model applied the full throttle-snap pitch impulse the instant it crossed.
-                // That made a tiny speed change flip from "loop it" to "cannot lift".
-                // Scale takeoff authority with actual negative-load margin so the launch
-                // naturally fades as the bike approaches its power-limited wheelie speed.
                 float liftMargin = MathUtils.clamp(-frontNormalLoad
                         / Math.max(staticFrontLoad * LIFT_MARGIN_FOR_FULL_SEED, 1f), 0f, 1f);
                 float liftAuthority = liftMargin * liftMargin * (3f - 2f * liftMargin);
-
                 frontGrounded = false;
                 frontNormalLoad = 0f;
                 pitchVelocity = (LIFT_SEED_RATE + throttleSnap * THROTTLE_SNAP_IMPULSE)
@@ -510,22 +491,13 @@ public final class BalancePointGame extends ApplicationAdapter {
         } else {
             float sinPitch = MathUtils.sin(pitch);
             float cosPitch = MathUtils.cos(pitch);
-            // Keep the original 0.60 m COM while the bike is actually lofting, then
-            // progressively shift the effective airborne mass forward as angle builds.
-            // This raises the natural balance point without creating a target-angle hold
-            // or instantly applying a huge nose-down gravity torque at lift-off.
             float airborneComBlend = MathUtils.clamp((pitch - AIRBORNE_COM_SHIFT_START)
                     / (AIRBORNE_COM_SHIFT_END - AIRBORNE_COM_SHIFT_START), 0f, 1f);
-            airborneComBlend = airborneComBlend * airborneComBlend
-                    * (3f - 2f * airborneComBlend);
+            airborneComBlend = airborneComBlend * airborneComBlend * (3f - 2f * airborneComBlend);
             float airborneComForward = MathUtils.lerp(COM_FORWARD, AIRBORNE_COM_FORWARD,
                     airborneComBlend) + riderLean * RIDER_SHIFT;
             float comWorldForward = airborneComForward * cosPitch - COM_HEIGHT * sinPitch;
             float comWorldHeight = airborneComForward * sinPitch + COM_HEIGHT * cosPitch;
-
-            // Rear contact is the pivot. No balance-point controller: below balance
-            // gravity restores, above balance gravity takes the bike over unless the
-            // rider changes acceleration with throttle or rear brake.
             float pitchTorque = MASS * longitudinalAcceleration * comWorldHeight
                     - MASS * GRAVITY * comWorldForward
                     - pitchVelocity * PITCH_DAMPING;
@@ -561,7 +533,6 @@ public final class BalancePointGame extends ApplicationAdapter {
 
         bikeX += MathUtils.sin(yaw) * speed * dt;
         bikeZ += MathUtils.cos(yaw) * speed * dt;
-
         wheelSpin += speed / WHEEL_RADIUS * dt;
         if (wheelSpin > MathUtils.PI2) wheelSpin -= MathUtils.PI2;
 
@@ -574,9 +545,67 @@ public final class BalancePointGame extends ApplicationAdapter {
 
         if (pitch > LOOP_ANGLE || Math.abs(bikeX) > ROAD_HALF_WIDTH + 10f
                 || Float.isNaN(pitch) || Float.isNaN(speed) || Float.isNaN(yaw)) {
-            crashed = true;
-            crashTimer = 0f;
+            beginCrash();
         }
+    }
+
+    private void beginCrash() {
+        if (crashed) return;
+        crashed = true;
+        crashSettled = false;
+        crashTimer = 0f;
+        crashSide = roll < -0.05f ? -1f : (roll > 0.05f ? 1f : (steer < 0f ? -1f : 1f));
+        crashPitchRate = MathUtils.clamp(pitchVelocity + 0.75f, -1.2f, 3.2f);
+        crashRollRate = crashSide * (1.4f + MathUtils.clamp(speed * 0.045f, 0f, 1.5f));
+        crashYawRate = -steer * (0.4f + MathUtils.clamp(speed * 0.025f, 0f, 0.8f));
+        throttleTarget = 0f;
+        rearBrakeTarget = 0f;
+        steerTarget = 0f;
+    }
+
+    private void simulateCrash(float dt) {
+        crashTimer += dt;
+        throttle = approach(throttle, 0f, 14f * dt);
+        rearBrake = 0f;
+        drivetrain.update(speed, 0f, dt);
+
+        float slideDecel = 6.5f + speed * 0.95f;
+        speed = Math.max(0f, speed - slideDecel * dt);
+        bikeX += MathUtils.sin(yaw) * speed * dt;
+        bikeZ += MathUtils.cos(yaw) * speed * dt;
+        wheelSpin += speed / WHEEL_RADIUS * dt;
+        if (wheelSpin > MathUtils.PI2) wheelSpin -= MathUtils.PI2;
+
+        if (!crashSettled) {
+            if (crashTimer < 0.38f) {
+                pitch += crashPitchRate * dt;
+                roll += crashRollRate * dt;
+                yaw += crashYawRate * dt;
+                crashPitchRate *= Math.max(0f, 1f - 2.4f * dt);
+                crashRollRate *= Math.max(0f, 1f - 2.0f * dt);
+                crashYawRate *= Math.max(0f, 1f - 2.5f * dt);
+            } else {
+                float targetRoll = crashSide * 78f * MathUtils.degreesToRadians;
+                float targetPitch = 10f * MathUtils.degreesToRadians;
+                float settleResponse = Math.min(1f, dt * 5.5f);
+                roll += (targetRoll - roll) * settleResponse;
+                pitch += (targetPitch - pitch) * Math.min(1f, dt * 4.2f);
+                yaw += crashYawRate * dt;
+                crashYawRate *= Math.max(0f, 1f - 4f * dt);
+
+                if (crashTimer > 0.95f || speed < 0.45f) {
+                    roll = targetRoll;
+                    pitch = targetPitch;
+                    crashSettled = true;
+                }
+            }
+        }
+
+        if (crashSettled) {
+            speed = Math.max(0f, speed - 10f * dt);
+        }
+
+        if (crashTimer > 2.25f) resetBike();
     }
 
     private void resetBike() {
@@ -599,7 +628,10 @@ public final class BalancePointGame extends ApplicationAdapter {
         drivetrain.reset();
         frontGrounded = true;
         crashed = false;
+        crashSettled = false;
         crashTimer = 0f;
+        crashPitchRate = crashRollRate = crashYawRate = 0f;
+        crashSide = 1f;
         wheelieTime = 0f;
         physicsAccumulator = 0.0;
     }
@@ -613,24 +645,18 @@ public final class BalancePointGame extends ApplicationAdapter {
             shoulderLeft[i].transform.setToTranslation(-ROAD_HALF_WIDTH + 0.18f, 0.026f, z);
             shoulderRight[i].transform.setToTranslation(ROAD_HALF_WIDTH - 0.18f, 0.026f, z);
         }
-
         terrainVisuals.update(bikeZ);
-
         float dashStart = (float) Math.floor((bikeZ - 42f) / 6f) * 6f;
         for (int i = 0; i < laneDashes.length; i++)
             laneDashes[i].transform.setToTranslation(0f, 0.028f, dashStart + i * 6f);
-    }
-
-    private static int positiveMod(int value, int mod) {
-        int r = value % mod;
-        return r < 0 ? r + mod : r;
     }
 
     private void updateBikeInstances() {
         float pitchDeg = pitch * MathUtils.radiansToDegrees;
         float rollDeg = roll * MathUtils.radiansToDegrees;
         float yawDeg = yaw * MathUtils.radiansToDegrees;
-        bikeRoot.idt().translate(bikeX, WHEEL_RADIUS, bikeZ)
+        float rootHeight = crashed && crashSettled ? 0.22f : WHEEL_RADIUS;
+        bikeRoot.idt().translate(bikeX, rootHeight, bikeZ)
                 .rotate(Vector3.Y, yawDeg)
                 .rotate(Vector3.Z, rollDeg)
                 .rotate(Vector3.X, -pitchDeg);
@@ -652,6 +678,8 @@ public final class BalancePointGame extends ApplicationAdapter {
         setPart(handlebar, 0f, 0.91f, 1.04f);
         setPart(frontNumberPlate, 0f, 0.72f, 1.19f);
         frontNumberPlate.transform.rotate(Vector3.X, 10f);
+        setPart(instrumentPanel, 0f, 0.90f, 0.98f);
+        instrumentPanel.transform.rotate(Vector3.X, -24f);
 
         if (importedBikeLoaded) {
             setPart(riderTorso, 0f, 0.94f, 0.49f);
@@ -660,14 +688,12 @@ public final class BalancePointGame extends ApplicationAdapter {
             setPart(riderHead, 0f, 1.30f, 0.65f);
             riderHead.transform.scale(IMPORTED_RIDER_SCALE, IMPORTED_RIDER_SCALE,
                     IMPORTED_RIDER_SCALE);
-
             setPart(riderLegLeft, -0.13f, 0.56f, 0.42f);
             setPart(riderLegRight, 0.13f, 0.56f, 0.42f);
             riderLegLeft.transform.rotate(Vector3.X, 36f).scale(
                     IMPORTED_RIDER_SCALE, IMPORTED_RIDER_SCALE, IMPORTED_RIDER_SCALE);
             riderLegRight.transform.rotate(Vector3.X, 36f).scale(
                     IMPORTED_RIDER_SCALE, IMPORTED_RIDER_SCALE, IMPORTED_RIDER_SCALE);
-
             setPart(riderArmLeft, -0.17f, 0.91f, 0.82f);
             setPart(riderArmRight, 0.17f, 0.91f, 0.82f);
             riderArmLeft.transform.rotate(Vector3.X, 67f).scale(
@@ -690,29 +716,19 @@ public final class BalancePointGame extends ApplicationAdapter {
         }
 
         if (importedBikeLoaded) {
-            // Zero animation must reproduce the approved GLB pose exactly. The body is
-            // still in authored scene coordinates; moving assemblies are pivot-local.
             importedBike.body.transform.set(bikeRoot);
             importedBike.engine.transform.set(bikeRoot);
-
-            // Physics still uses the prototype's 0.31 m wheel radius. Correct the
-            // visual spin rate to the replacement model's measured tire radius.
             float importedSpinDeg = -wheelSpin * (WHEEL_RADIUS / importedBike.wheelRadius)
                     * MathUtils.radiansToDegrees;
             importedBike.rearWheel.transform.set(bikeRoot)
                     .translate(importedBike.rearAxleOffset)
                     .rotate(Vector3.X, importedSpinDeg);
-
-            // Stage 2: forks/bars/front hardware and the front wheel share the rake
-            // axis derived from the source fork geometry. No placement correction is
-            // applied: at zero steer this collapses exactly to the approved GLB pose.
             float visualSteerDeg = -steer * MathUtils.lerp(13f, 5f,
                     MathUtils.clamp(speed / 30f, 0f, 1f));
             importedSteeringRoot.set(bikeRoot)
                     .translate(importedBike.steeringHead)
                     .rotate(importedBike.steeringAxis, visualSteerDeg);
             importedBike.steering.transform.set(importedSteeringRoot);
-
             tempA.set(importedBike.frontAxleOffset).sub(importedBike.steeringHead);
             importedBike.frontWheel.transform.set(importedSteeringRoot)
                     .translate(tempA)
@@ -770,6 +786,7 @@ public final class BalancePointGame extends ApplicationAdapter {
             modelBatch.render(importedBike.steering, environment);
             modelBatch.render(importedBike.rearWheel, environment);
             modelBatch.render(importedBike.frontWheel, environment);
+            modelBatch.render(instrumentPanel, environment);
             return;
         }
 
@@ -779,6 +796,7 @@ public final class BalancePointGame extends ApplicationAdapter {
         modelBatch.render(seat, environment); modelBatch.render(frontFender, environment);
         modelBatch.render(forkLeft, environment); modelBatch.render(forkRight, environment);
         modelBatch.render(handlebar, environment); modelBatch.render(frontNumberPlate, environment);
+        modelBatch.render(instrumentPanel, environment);
         modelBatch.render(riderTorso, environment); modelBatch.render(riderHead, environment);
         modelBatch.render(riderLegLeft, environment); modelBatch.render(riderLegRight, environment);
         modelBatch.render(riderArmLeft, environment); modelBatch.render(riderArmRight, environment);
@@ -793,104 +811,142 @@ public final class BalancePointGame extends ApplicationAdapter {
         Gdx.gl.glEnable(GL20.GL_BLEND);
         Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA);
 
-        shapes.setProjectionMatrix(uiCamera.combined);
-        shapes.begin(ShapeRenderer.ShapeType.Filled);
-        shapes.setColor(0f, 0f, 0f, 0.45f);
-        shapes.rect(18f, h - 166f, 300f, 144f);
-
-        float sliderX = w * 0.91f;
-        float sliderBottom = h * 0.12f;
-        float sliderTop = h * 0.52f;
-        shapes.setColor(1f, 1f, 1f, 0.14f);
-        shapes.rect(sliderX - 16f, sliderBottom, 32f, sliderTop - sliderBottom);
-        float knobY = sliderBottom + throttleTarget * (sliderTop - sliderBottom);
-        shapes.setColor(1f, 1f, 1f, 0.48f);
-        shapes.circle(sliderX, knobY, min * 0.045f, 20);
-
-        float brakeX = w * 0.755f;
-        float brakeY = h * 0.17f;
-        shapes.setColor(1f, 1f, 1f, rearBrakeTarget > 0f ? 0.50f : 0.16f);
-        shapes.circle(brakeX, brakeY, min * 0.065f, 24);
-
-        float steerLeftX = w * 0.095f;
-        float steerRightX = w * 0.235f;
-        float steerY = h * 0.18f;
-        float steerR = min * 0.072f;
-
-        shapes.setColor(1f, 1f, 1f, steerTarget > 0.05f ? 0.46f : 0.14f);
-        shapes.circle(steerLeftX, steerY, steerR, 24);
-        shapes.setColor(1f, 1f, 1f, 0.78f);
-        shapes.triangle(steerLeftX - steerR * 0.38f, steerY,
-                steerLeftX + steerR * 0.26f, steerY + steerR * 0.42f,
-                steerLeftX + steerR * 0.26f, steerY - steerR * 0.42f);
-
-        shapes.setColor(1f, 1f, 1f, steerTarget < -0.05f ? 0.46f : 0.14f);
-        shapes.circle(steerRightX, steerY, steerR, 24);
-        shapes.setColor(1f, 1f, 1f, 0.78f);
-        shapes.triangle(steerRightX + steerR * 0.38f, steerY,
-                steerRightX - steerR * 0.26f, steerY + steerR * 0.42f,
-                steerRightX - steerR * 0.26f, steerY - steerR * 0.42f);
-
-        float shiftDownX = w * 0.39f;
-        float shiftUpX = w * 0.51f;
-        float shiftY = h * 0.17f;
-        float shiftR = min * 0.055f;
-        shapes.setColor(1f, 1f, 1f, shiftDownHeld ? 0.48f : 0.16f);
-        shapes.circle(shiftDownX, shiftY, shiftR, 22);
-        shapes.setColor(1f, 1f, 1f, shiftUpHeld ? 0.48f : 0.16f);
-        shapes.circle(shiftUpX, shiftY, shiftR, 22);
-
-        shapes.setColor(0f, 0f, 0f, 0.42f);
-        shapes.rect(w - 145f, h - 66f, 125f, 45f);
-        if (looking) {
-            shapes.setColor(1f, 1f, 1f, 0.09f);
-            shapes.rect(w * 0.30f, h * 0.34f, w * 0.40f, h * 0.32f);
-        }
-        if (crashed) {
-            shapes.setColor(0f, 0f, 0f, 0.55f);
-            shapes.rect(0f, 0f, w, h);
-        }
-        shapes.end();
+        drawTouchControls(w, h, min);
+        drawBikeGauge(w, h);
 
         spriteBatch.setProjectionMatrix(uiCamera.combined);
         spriteBatch.begin();
-        font.setColor(Color.WHITE);
-        font.getData().setScale(Math.max(0.85f, h / 720f * 1.15f));
+        font.setColor(1f, 1f, 1f, 0.92f);
 
-        float mph = speed * 2.23694f;
-        float angle = pitch * MathUtils.radiansToDegrees;
-        float effectiveComForward = MathUtils.clamp(COM_FORWARD + riderLean * RIDER_SHIFT, 0.48f, 0.82f);
-        float staticFrontLoad = MASS * GRAVITY * effectiveComForward / WHEELBASE;
-        float frontPercent = staticFrontLoad > 0f
-                ? MathUtils.clamp(frontNormalLoad / staticFrontLoad * 100f, 0f, 130f) : 0f;
-
-        font.draw(spriteBatch, String.format(java.util.Locale.US, "%03.0f MPH", mph), 34f, h - 44f);
-        font.draw(spriteBatch, String.format(java.util.Locale.US, "ANGLE %3.0f deg", angle), 34f, h - 69f);
-        font.draw(spriteBatch, String.format(java.util.Locale.US, "WHEELIE %.1fs  BEST %.1fs", wheelieTime, bestWheelieTime), 34f, h - 94f);
-        font.draw(spriteBatch, frontGrounded
-                ? String.format(java.util.Locale.US, "FRONT LOAD %3.0f%%", frontPercent)
-                : "FRONT AIR", 34f, h - 119f);
-        font.draw(spriteBatch, String.format(java.util.Locale.US, "GEAR %d   RPM %5.0f",
-                drivetrain.getGear(), drivetrain.getRpm()), 34f, h - 144f);
-        font.draw(spriteBatch, "FPS " + Gdx.graphics.getFramesPerSecond(), 225f, h - 44f);
-
-        font.draw(spriteBatch, "THROTTLE", sliderX - 31f, sliderTop + 22f);
-        font.draw(spriteBatch, "BRAKE", brakeX - 23f, brakeY + 5f);
-        font.draw(spriteBatch, "STEER", w * 0.145f, steerY + steerR + 20f);
-        font.draw(spriteBatch, "-", shiftDownX - 4f, shiftY + 5f);
-        font.draw(spriteBatch, "+", shiftUpX - 5f, shiftY + 5f);
-        font.draw(spriteBatch, "SHIFT", w * 0.422f, shiftY + shiftR + 18f);
-        font.draw(spriteBatch, "DRAG CENTER TO LOOK", w * 0.405f, h * 0.62f);
-        font.draw(spriteBatch, cockpitCamera ? "CAM: HELMET" : "CAM: CHASE", w - 133f, h - 39f);
+        if (!crashed && !frontGrounded && pitch > 8f * MathUtils.degreesToRadians) {
+            font.getData().setScale(Math.max(0.9f, h / 720f * 1.08f));
+            String wheelie = String.format(java.util.Locale.US, "%.1fs   %02.0f°",
+                    wheelieTime, pitch * MathUtils.radiansToDegrees);
+            font.draw(spriteBatch, wheelie, w * 0.47f, h - 32f);
+        }
 
         if (crashed) {
-            font.getData().setScale(Math.max(1.6f, h / 720f * 2.2f));
-            font.draw(spriteBatch, "LOOPED IT", w * 0.40f, h * 0.54f);
+            font.getData().setScale(Math.max(1.1f, h / 720f * 1.45f));
+            font.setColor(1f, 1f, 1f, MathUtils.clamp(1f - Math.max(0f, crashTimer - 1.35f), 0f, 1f));
+            font.draw(spriteBatch, crashSettled ? "DOWN" : "CRASH", w * 0.47f, h * 0.78f);
         }
         spriteBatch.end();
 
         Gdx.gl.glDisable(GL20.GL_BLEND);
         Gdx.gl.glEnable(GL20.GL_DEPTH_TEST);
+    }
+
+    private void drawTouchControls(int w, int h, float min) {
+        float sliderX = w * 0.91f;
+        float sliderBottom = h * 0.12f;
+        float sliderTop = h * 0.52f;
+        float brakeX = w * 0.755f;
+        float brakeY = h * 0.17f;
+        float steerLeftX = w * 0.095f;
+        float steerRightX = w * 0.235f;
+        float steerY = h * 0.18f;
+        float steerR = min * 0.064f;
+        float shiftDownX = w * 0.39f;
+        float shiftUpX = w * 0.51f;
+        float shiftY = h * 0.17f;
+        float shiftR = min * 0.047f;
+
+        shapes.setProjectionMatrix(uiCamera.combined);
+        shapes.begin(ShapeRenderer.ShapeType.Filled);
+
+        // Throttle: thin unobtrusive rail with fill rather than a giant labeled slider.
+        shapes.setColor(1f, 1f, 1f, 0.08f);
+        shapes.rect(sliderX - 4f, sliderBottom, 8f, sliderTop - sliderBottom);
+        shapes.setColor(1f, 1f, 1f, 0.34f);
+        shapes.rect(sliderX - 4f, sliderBottom, 8f,
+                (sliderTop - sliderBottom) * throttleTarget);
+        float knobY = sliderBottom + throttleTarget * (sliderTop - sliderBottom);
+        shapes.setColor(1f, 1f, 1f, 0.26f);
+        shapes.circle(sliderX, knobY, min * 0.027f, 20);
+
+        // Rear brake.
+        shapes.setColor(1f, 1f, 1f, rearBrakeTarget > 0f ? 0.36f : 0.09f);
+        shapes.circle(brakeX, brakeY, min * 0.055f, 24);
+        shapes.setColor(1f, 1f, 1f, 0.28f);
+        shapes.circle(brakeX, brakeY, min * 0.025f, 20);
+
+        // Steering pads.
+        shapes.setColor(1f, 1f, 1f, steerTarget > 0.05f ? 0.30f : 0.075f);
+        shapes.circle(steerLeftX, steerY, steerR, 24);
+        shapes.setColor(1f, 1f, 1f, 0.35f);
+        shapes.triangle(steerLeftX - steerR * 0.34f, steerY,
+                steerLeftX + steerR * 0.20f, steerY + steerR * 0.34f,
+                steerLeftX + steerR * 0.20f, steerY - steerR * 0.34f);
+
+        shapes.setColor(1f, 1f, 1f, steerTarget < -0.05f ? 0.30f : 0.075f);
+        shapes.circle(steerRightX, steerY, steerR, 24);
+        shapes.setColor(1f, 1f, 1f, 0.35f);
+        shapes.triangle(steerRightX + steerR * 0.34f, steerY,
+                steerRightX - steerR * 0.20f, steerY + steerR * 0.34f,
+                steerRightX - steerR * 0.20f, steerY - steerR * 0.34f);
+
+        // Shift buttons.
+        shapes.setColor(1f, 1f, 1f, shiftDownHeld ? 0.32f : 0.075f);
+        shapes.circle(shiftDownX, shiftY, shiftR, 22);
+        shapes.setColor(1f, 1f, 1f, shiftUpHeld ? 0.32f : 0.075f);
+        shapes.circle(shiftUpX, shiftY, shiftR, 22);
+
+        // Small camera button; no permanent label panel.
+        shapes.setColor(0f, 0f, 0f, 0.22f);
+        shapes.circle(w * 0.93f, h * 0.93f, min * 0.040f, 22);
+        shapes.end();
+
+        spriteBatch.setProjectionMatrix(uiCamera.combined);
+        spriteBatch.begin();
+        font.setColor(1f, 1f, 1f, 0.58f);
+        font.getData().setScale(Math.max(0.72f, h / 720f * 0.88f));
+        font.draw(spriteBatch, "−", shiftDownX - 4f, shiftY + 5f);
+        font.draw(spriteBatch, "+", shiftUpX - 5f, shiftY + 5f);
+        font.draw(spriteBatch, "B", brakeX - 4f, brakeY + 5f);
+        font.draw(spriteBatch, "C", w * 0.93f - 4f, h * 0.93f + 5f);
+        spriteBatch.end();
+    }
+
+    private void drawBikeGauge(int w, int h) {
+        if (crashed && crashSettled) return;
+
+        tempA.set(0f, 0.93f, 1.00f).mul(bikeRoot);
+        float distance = camera.position.dst(tempA);
+        camera.project(tempA);
+        if (tempA.z < 0f || tempA.z > 1f || tempA.x < -80f || tempA.x > w + 80f
+                || tempA.y < -60f || tempA.y > h + 60f) return;
+
+        float scale = MathUtils.clamp(4.2f / Math.max(distance, 0.45f), 0.62f, 1.20f);
+        float panelW = 116f * scale;
+        float panelH = 52f * scale;
+        float x = tempA.x - panelW * 0.5f;
+        float y = tempA.y - panelH * 0.48f;
+        float rpmNorm = MathUtils.clamp(drivetrain.getRpm() / drivetrain.getRedlineRpm(), 0f, 1f);
+
+        shapes.setProjectionMatrix(uiCamera.combined);
+        shapes.begin(ShapeRenderer.ShapeType.Filled);
+        shapes.setColor(0.01f, 0.015f, 0.016f, 0.82f);
+        shapes.rect(x, y, panelW, panelH);
+        shapes.setColor(1f, 1f, 1f, 0.12f);
+        shapes.rect(x + 7f * scale, y + 7f * scale, panelW - 14f * scale, 4f * scale);
+        shapes.setColor(0.86f, 0.92f, 0.88f, 0.80f);
+        shapes.rect(x + 7f * scale, y + 7f * scale,
+                (panelW - 14f * scale) * rpmNorm, 4f * scale);
+        shapes.end();
+
+        spriteBatch.setProjectionMatrix(uiCamera.combined);
+        spriteBatch.begin();
+        font.setColor(0.92f, 0.96f, 0.93f, 0.96f);
+        font.getData().setScale(Math.max(0.62f, scale * 0.78f));
+        String speedText = String.format(java.util.Locale.US, "%02.0f", speed * 2.23694f);
+        font.draw(spriteBatch, speedText, x + 9f * scale, y + 36f * scale);
+        font.getData().setScale(Math.max(0.72f, scale * 1.02f));
+        font.draw(spriteBatch, Integer.toString(drivetrain.getGear()),
+                x + panelW - 26f * scale, y + 37f * scale);
+        font.getData().setScale(Math.max(0.48f, scale * 0.55f));
+        font.setColor(1f, 1f, 1f, 0.52f);
+        font.draw(spriteBatch, "MPH", x + 9f * scale, y + 20f * scale);
+        spriteBatch.end();
     }
 
     @Override
