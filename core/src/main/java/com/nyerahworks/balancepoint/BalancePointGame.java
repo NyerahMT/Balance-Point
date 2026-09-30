@@ -27,7 +27,7 @@ import com.badlogic.gdx.utils.Array;
  * Balance Point - GMEE-focused lightweight 3D motorcycle prototype.
  *
  * Physics v3 keeps the load-transfer and traction model, adds a stronger
- * pitch-rate damper around balance point, rider weight shift, horizon-stabilized
+ * pitch-rate damper around balance point, rider weight shift, rider-stabilized
  * helmet cam, free-look, and dedicated analog mobile controls.
  */
 public final class BalancePointGame extends ApplicationAdapter {
@@ -131,6 +131,7 @@ public final class BalancePointGame extends ApplicationAdapter {
     private boolean looking;
     private boolean cockpitCamera;
     private boolean cameraTouchHeld;
+    private boolean helmetCameraInitialized;
     private boolean frontGrounded = true;
     private boolean crashed;
     private float crashTimer;
@@ -369,7 +370,10 @@ public final class BalancePointGame extends ApplicationAdapter {
             }
         }
 
-        if (cameraTouch && !cameraTouchHeld) cockpitCamera = !cockpitCamera;
+        if (cameraTouch && !cameraTouchHeld) {
+            cockpitCamera = !cockpitCamera;
+            helmetCameraInitialized = false;
+        }
         cameraTouchHeld = cameraTouch;
         looking = lookTouch;
 
@@ -554,6 +558,7 @@ public final class BalancePointGame extends ApplicationAdapter {
         crashed = false;
         crashTimer = 0f;
         wheelieTime = 0f;
+        helmetCameraInitialized = false;
         physicsAccumulator = 0.0;
     }
 
@@ -694,20 +699,52 @@ public final class BalancePointGame extends ApplicationAdapter {
         float viewYaw = yaw + lookYaw;
         float sinView = MathUtils.sin(viewYaw);
         float cosView = MathUtils.cos(viewYaw);
+        float speedBlend = MathUtils.clamp(speed / 32f, 0f, 1f);
 
         if (cockpitCamera) {
-            float helmetY = importedBikeLoaded ? 1.28f : 1.42f;
-            float helmetZ = importedBikeLoaded ? 0.66f : (0.58f + riderLean * 0.10f);
-            tempA.set(0f, helmetY, helmetZ).mul(bikeRoot);
-            camera.position.set(tempA);
-            float cp = MathUtils.cos(lookPitch);
-            camera.direction.set(sinView * cp, MathUtils.sin(lookPitch), cosView * cp).nor();
-            camera.up.set(Vector3.Y);
+            // Put the eye where a helmet actually rides on the bike, then let the
+            // position follow the chassis tightly with a tiny amount of inertial lag.
+            float helmetY = importedBikeLoaded ? 1.26f : 1.42f;
+            float helmetZ = importedBikeLoaded ? 0.62f : (0.58f + riderLean * 0.10f);
+            float accelLag = MathUtils.clamp(longitudinalAcceleration * 0.010f, -0.05f, 0.05f);
+            tempA.set(0f, helmetY, helmetZ - accelLag).mul(bikeRoot);
+
+            if (!helmetCameraInitialized) {
+                camera.position.set(tempA);
+                helmetCameraInitialized = true;
+            } else {
+                float positionResponse = 1f - (float) Math.exp(-18f * dt);
+                camera.position.lerp(tempA, positionResponse);
+            }
+
+            // A rider's head does not stay world-level, but it also does not rigidly
+            // follow every degree of chassis pitch/roll. Follow most of a wheelie and
+            // about half the lean so the bike feels alive without making the horizon
+            // nauseating. Free-look remains relative to that stabilized head pose.
+            float stabilizedPitch = pitch * 0.58f + lookPitch;
+            stabilizedPitch = MathUtils.clamp(stabilizedPitch,
+                    -55f * MathUtils.degreesToRadians,
+                    78f * MathUtils.degreesToRadians);
+            float cp = MathUtils.cos(stabilizedPitch);
+            camera.direction.set(sinView * cp,
+                    MathUtils.sin(stabilizedPitch),
+                    cosView * cp).nor();
+
+            float visualRollDeg = roll * 0.55f * MathUtils.radiansToDegrees;
+            camera.up.set(Vector3.Y).rotate(camera.direction, visualRollDeg);
+            tempB.set(camera.direction).crs(camera.up).nor();
+            camera.up.set(tempB).crs(camera.direction).nor();
+
+            camera.fieldOfView = MathUtils.lerp(74f, 82f, speedBlend);
+            camera.near = 0.045f;
         } else {
+            helmetCameraInitialized = false;
             float orbitPitch = MathUtils.clamp(lookPitch, -25f * MathUtils.degreesToRadians,
                     30f * MathUtils.degreesToRadians);
-            float horizontalDistance = 5.7f * MathUtils.cos(orbitPitch);
-            float desiredHeight = 2.65f + 5.7f * MathUtils.sin(orbitPitch);
+            float horizontalDistance = MathUtils.lerp(5.45f, 6.15f, speedBlend)
+                    * MathUtils.cos(orbitPitch);
+            float desiredHeight = 2.65f + MathUtils.lerp(5.45f, 6.15f, speedBlend)
+                    * MathUtils.sin(orbitPitch);
             tempA.set(bikeX - sinView * horizontalDistance,
                     Math.max(0.9f, desiredHeight),
                     bikeZ - cosView * horizontalDistance);
@@ -718,6 +755,8 @@ public final class BalancePointGame extends ApplicationAdapter {
                     bikeZ + MathUtils.cos(yaw) * 2.2f);
             camera.up.set(Vector3.Y);
             camera.lookAt(tempB);
+            camera.fieldOfView = MathUtils.lerp(67f, 72f, speedBlend);
+            camera.near = 0.08f;
         }
         camera.update();
     }
