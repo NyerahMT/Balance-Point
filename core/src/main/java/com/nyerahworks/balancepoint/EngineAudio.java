@@ -5,41 +5,61 @@ import com.badlogic.gdx.audio.AudioDevice;
 import com.badlogic.gdx.math.MathUtils;
 
 /**
- * Lightweight physical-ish audio model for a 450-class four-stroke single.
+ * Lightweight pressure/flow audio model for a 450-class four-stroke single.
  *
- * The audible source is exhaust pressure/flow, not an RPM-tracked oscillator. A 720-degree crank
- * cycle drives combustion, exhaust-valve blowdown and intake flow. The pressure pulse then travels
- * through fractional-delay feedback lines representing the header and silencer before being
- * converted to audio. This signal-flow approach is inspired by the MIT-licensed Engine Simulator
- * by Ange Yaghi, but is a small Java model written specifically for Balance Point.
+ * The source is cylinder/exhaust pressure, not an RPM-tracked oscillator. A 720-degree crank cycle
+ * drives combustion and valve flow, then the pressure wave travels through a multi-section exhaust
+ * network: header, expanding midpipe, packed muffler body and outlet. Cross-sectional area changes
+ * create scattering/reflections and the muffler splits energy across multiple lossy paths, avoiding
+ * the narrow "straight tube" character of a single feedback delay line.
  */
 final class EngineAudio {
     private static final int SAMPLE_RATE = 44_100;
     private static final int BUFFER_SAMPLES = 512;
+    private static final int DELAY_BUFFER_SIZE = 2048;
 
-    // Representative modern 449 cc MX single geometry / timing. These are audio-model parameters,
-    // not tuning data for a particular production motorcycle.
     private static final double COMPRESSION_RATIO = 13.0;
-    private static final double ROD_RATIO = 3.45; // connecting-rod length / crank radius
+    private static final double ROD_RATIO = 3.45;
     private static final double IGNITION_DEG = 356.0;
     private static final double EXHAUST_OPEN_DEG = 500.0;
     private static final double EXHAUST_CLOSE_DEG = 22.0;
     private static final double INTAKE_OPEN_DEG = 700.0;
     private static final double INTAKE_CLOSE_DEG = 220.0;
 
-    // Acoustic lengths are round-trip waveguide lengths, converted to samples using the current
-    // exhaust-gas speed of sound. A hot, loaded engine therefore changes pipe character subtly.
-    private static final double HEADER_LENGTH_M = 0.82;
-    private static final double SILENCER_LENGTH_M = 0.46;
-    private static final int DELAY_BUFFER_SIZE = 512;
+    // Representative dimensions for a modern 450 MX exhaust. Diameter matters here because area
+    // changes control acoustic impedance and therefore reflection/transmission strength.
+    private static final double HEADER_LENGTH_M = 0.58;
+    private static final double MIDPIPE_LENGTH_M = 0.28;
+    private static final double MUFFLER_SHORT_PATH_M = 0.24;
+    private static final double MUFFLER_LONG_PATH_M = 0.46;
+    private static final double OUTLET_LENGTH_M = 0.17;
+
+    private static final double HEADER_DIAMETER_M = 0.044;
+    private static final double MIDPIPE_DIAMETER_M = 0.052;
+    private static final double MUFFLER_BODY_DIAMETER_M = 0.112;
+    private static final double OUTLET_DIAMETER_M = 0.040;
+
+    private static final double HEADER_AREA = area(HEADER_DIAMETER_M);
+    private static final double MIDPIPE_AREA = area(MIDPIPE_DIAMETER_M);
+    private static final double MUFFLER_BODY_AREA = area(MUFFLER_BODY_DIAMETER_M);
+    private static final double OUTLET_AREA = area(OUTLET_DIAMETER_M);
 
     private final AudioDevice device;
     private final Thread audioThread;
 
-    private final double[] headerDelay = new double[DELAY_BUFFER_SIZE];
-    private final double[] silencerDelay = new double[DELAY_BUFFER_SIZE];
+    // Directional-ish delay paths. Using several paths with different lengths/losses spreads the
+    // exhaust energy across a wide acoustic body instead of one high-Q comb resonance.
+    private final double[] headerLine = new double[DELAY_BUFFER_SIZE];
+    private final double[] midLine = new double[DELAY_BUFFER_SIZE];
+    private final double[] mufflerShortLine = new double[DELAY_BUFFER_SIZE];
+    private final double[] mufflerLongLine = new double[DELAY_BUFFER_SIZE];
+    private final double[] outletLine = new double[DELAY_BUFFER_SIZE];
+
     private int headerWrite;
-    private int silencerWrite;
+    private int midWrite;
+    private int mufflerShortWrite;
+    private int mufflerLongWrite;
+    private int outletWrite;
 
     private volatile boolean running;
     private volatile boolean active = true;
@@ -51,10 +71,17 @@ final class EngineAudio {
     private double cycleStrength = 0.30;
     private int combustionCount;
 
+    private double headerReflectionLp;
+    private double midReflectionLp;
+    private double mufflerPressure;
+    private double mufflerBodyLp;
+    private double mufflerEdgeLp;
+    private double outletDc;
+    private double outletBodyLp;
+    private double outletEdgeLp;
+    private double previousOutlet;
+
     private double intakeNoiseLow;
-    private double tailDc;
-    private double tailLowPass;
-    private double previousTail;
     private double afterfire;
     private int noiseState = 0x13579BDF;
 
@@ -62,7 +89,7 @@ final class EngineAudio {
         AudioDevice created = null;
         try {
             created = Gdx.audio.newAudioDevice(SAMPLE_RATE, true);
-            created.setVolume(0.72f);
+            created.setVolume(0.74f);
         } catch (Throwable t) {
             Gdx.app.error("BalancePoint", "Engine audio unavailable", t);
         }
@@ -104,30 +131,40 @@ final class EngineAudio {
 
             boolean shiftTarget = targetShifting;
             if (shiftTarget && !previousShiftTarget && smoothThrottle > 0.42f) {
-                // Real four-stroke shifts often produce a pressure event in the pipe when ignition
-                // and torque are cut. Feed it through the exhaust model instead of playing a click.
-                afterfire = Math.max(afterfire, 0.72 + smoothThrottle * 0.45);
+                afterfire = Math.max(afterfire, 0.58 + smoothThrottle * 0.42);
             }
             previousShiftTarget = shiftTarget;
 
             float rpmNorm = MathUtils.clamp((smoothRpm - 1_800f) / 11_400f, 0f, 1f);
-            float load = 0.24f + smoothThrottle * 0.76f;
+            float load = 0.23f + smoothThrottle * 0.77f;
             double degreesPerSample = smoothRpm * 6.0 / SAMPLE_RATE;
 
-            // Hot exhaust gas transmits pressure waves faster than cold air. This small dynamic
-            // change prevents the pipe from behaving like one static comb filter at every load.
-            double soundSpeed = 430.0 + smoothThrottle * 72.0 + rpmNorm * 28.0;
-            double headerDelaySamples = 2.0 * HEADER_LENGTH_M / soundSpeed * SAMPLE_RATE;
-            double silencerDelaySamples = 2.0 * SILENCER_LENGTH_M / soundSpeed * SAMPLE_RATE;
+            // Hot exhaust raises wave speed. Keep the range modest so the pipe character moves
+            // naturally with load without turning into a pitch effect.
+            double soundSpeed = 438.0 + smoothThrottle * 60.0 + rpmNorm * 24.0;
+            double headerSamples = HEADER_LENGTH_M / soundSpeed * SAMPLE_RATE;
+            double midSamples = MIDPIPE_LENGTH_M / soundSpeed * SAMPLE_RATE;
+            double mufflerShortSamples = MUFFLER_SHORT_PATH_M / soundSpeed * SAMPLE_RATE;
+            double mufflerLongSamples = MUFFLER_LONG_PATH_M / soundSpeed * SAMPLE_RATE;
+            double outletSamples = OUTLET_LENGTH_M / soundSpeed * SAMPLE_RATE;
 
-            // Pressure reflection: expansion at the open end inverts much of the returning wave;
-            // the silencer is more lossy than the header.
-            double headerReflection = -0.58 - smoothThrottle * 0.05;
-            double silencerReflection = -0.34 - smoothThrottle * 0.04;
+            // Area-junction reflection coefficients. Expansions reflect pressure with opposite sign;
+            // contractions reflect with the same sign. Values come from acoustic impedance Z~1/A.
+            double headerToMidR = areaReflection(HEADER_AREA, MIDPIPE_AREA);
+            double midToBodyR = areaReflection(MIDPIPE_AREA, MUFFLER_BODY_AREA);
+            double bodyToOutletR = areaReflection(MUFFLER_BODY_AREA, OUTLET_AREA);
 
-            // Enough top end to preserve valve/exhaust texture without recreating the old buzz.
-            double cutoffHz = 3_200.0 + 1_350.0 * smoothThrottle + 450.0 * rpmNorm;
-            double lpAlpha = 1.0 - Math.exp(-2.0 * Math.PI * cutoffHz / SAMPLE_RATE);
+            double headerToMidT = 1.0 + headerToMidR;
+            double midToBodyT = 1.0 + midToBodyR;
+            double bodyToOutletT = 1.0 + bodyToOutletR;
+
+            // The packing kills high frequencies far harder than low frequencies. Two separate
+            // smoothing bands let the muffler retain a deep pressure body while bleeding off the
+            // metallic pipe edge that dominated the previous version.
+            double bodyAlpha = onePoleAlpha(720.0 + 260.0 * smoothThrottle);
+            double edgeAlpha = onePoleAlpha(2_600.0 + 900.0 * smoothThrottle);
+            double outletBodyAlpha = onePoleAlpha(1_050.0 + 250.0 * smoothThrottle);
+            double outletEdgeAlpha = onePoleAlpha(3_600.0 + 650.0 * smoothThrottle);
 
             for (int i = 0; i < buffer.length; i++) {
                 double previousDeg = cycleDeg;
@@ -136,7 +173,7 @@ final class EngineAudio {
 
                 noiseState = noiseState * 1664525 + 1013904223;
                 double white = (((noiseState >>> 8) & 0xFFFF) / 32767.5) - 1.0;
-                intakeNoiseLow += (white - intakeNoiseLow) * 0.055;
+                intakeNoiseLow += (white - intakeNoiseLow) * 0.050;
                 double intakeNoise = white - intakeNoiseLow;
 
                 if (crossedAngle(previousDeg, cycleDeg, IGNITION_DEG)) {
@@ -146,10 +183,8 @@ final class EngineAudio {
                     if (limiterCut) {
                         cycleStrength = 0.035;
                     } else {
-                        // Idle still needs genuine combustion pressure. Throttle/load then raises
-                        // the pressure dramatically, with mild cycle-to-cycle irregularity.
                         double variation = 0.965 + 0.07 * Math.abs(white);
-                        cycleStrength = (0.31 + 1.58 * load) * variation;
+                        cycleStrength = (0.30 + 1.62 * load) * variation;
                     }
                 }
 
@@ -158,96 +193,128 @@ final class EngineAudio {
                 double intakeLift = wrappedValveLift(cycleDeg,
                         INTAKE_OPEN_DEG, INTAKE_CLOSE_DEG);
 
-                // Approximate cylinder volume from crank-slider geometry. The compression ratio
-                // matters because blowdown pressure should change with piston position, not simply
-                // decay as an arbitrary audio envelope.
                 double volume = normalizedCylinderVolume(cycleDeg);
                 double clearance = 1.0 / COMPRESSION_RATIO;
 
                 double sinceIgnition = wrap720(cycleDeg - IGNITION_DEG);
                 double combustionPressure = 0.0;
-                if (sinceIgnition < 310.0) {
-                    // Heat release rises quickly just after ignition, then expansion lowers pressure
-                    // as piston volume increases. The exponent is intentionally softer than a full
-                    // thermodynamic solver so the compact model remains stable and musical.
-                    double burnRise = 1.0 - Math.exp(-sinceIgnition / 11.0);
-                    double heatDecay = Math.exp(-sinceIgnition / 235.0);
-                    double expansion = Math.pow(clearance / Math.max(clearance, volume), 0.72);
-                    combustionPressure = cycleStrength * burnRise * heatDecay * expansion * 8.7;
+                if (sinceIgnition < 315.0) {
+                    double burnRise = 1.0 - Math.exp(-sinceIgnition / 10.5);
+                    double heatDecay = Math.exp(-sinceIgnition / 240.0);
+                    double expansion = Math.pow(clearance / Math.max(clearance, volume), 0.70);
+                    combustionPressure = cycleStrength * burnRise * heatDecay * expansion * 9.0;
                 }
 
-                // Compression/pumping component adds the characteristic pressure motion between
-                // firing events. Closed throttle reduces trapped charge, while open throttle lets
-                // the compression pulse become more pronounced.
                 double compression = 0.0;
                 if (cycleDeg >= 180.0 && cycleDeg < IGNITION_DEG) {
-                    double trappedCharge = 0.18 + smoothThrottle * 0.82;
+                    double trappedCharge = 0.16 + smoothThrottle * 0.84;
                     compression = trappedCharge
-                            * (Math.pow(1.0 / Math.max(volume, clearance), 1.18) - 1.0)
-                            * 0.055;
+                            * (Math.pow(1.0 / Math.max(volume, clearance), 1.17) - 1.0)
+                            * 0.050;
                 }
 
-                // Exhaust-valve flow is the actual acoustic source. Blowdown near EVO is strong;
-                // later in the exhaust stroke piston pumping keeps a broader pressure tail alive.
                 double exhaustPressure = combustionPressure + compression;
-                double pumping = exhaustLift * (0.035 + 0.12 * load)
-                        * Math.sin(Math.PI * MathUtils.clamp(
-                        (float) wrapRange(cycleDeg, EXHAUST_OPEN_DEG, EXHAUST_CLOSE_DEG),
-                        0f, 1f));
-                double exhaustSource = exhaustLift * exhaustPressure * 0.48 + pumping;
+                double exhaustWindow = wrapRange(cycleDeg,
+                        EXHAUST_OPEN_DEG, EXHAUST_CLOSE_DEG);
+                double pumping = exhaustLift * (0.030 + 0.105 * load)
+                        * Math.sin(Math.PI * exhaustWindow);
+
+                // Pressure/flow at the valve is the acoustic source. A slightly wider blowdown
+                // term gives the large-bore single a dense thump rather than a sharp click.
+                double exhaustSource = exhaustLift * exhaustPressure * 0.50 + pumping;
 
                 if (afterfire > 0.0001) {
-                    // A short combustion event injected ahead of the header naturally gets colored
-                    // by every pipe reflection instead of sounding like a generic shift pop sample.
-                    exhaustSource += afterfire * 0.22;
-                    afterfire *= 0.9945;
+                    exhaustSource += afterfire * 0.18;
+                    afterfire *= 0.9950;
                 } else {
                     afterfire = 0.0;
                 }
 
-                // Intake roar is turbulent flow rather than a pitched oscillator. Keep it behind
-                // the tailpipe but let it become obvious under a wide-open throttle.
                 double intakeFlow = intakeLift * intakeNoise
-                        * (0.012 + 0.105 * smoothThrottle)
+                        * (0.010 + 0.085 * smoothThrottle)
                         * (0.45 + 0.55 * rpmNorm);
 
-                // Fractional-delay feedback waveguides. These produce propagation/reflection timing
-                // from physical pipe lengths rather than fixed musical resonant frequencies.
-                double headerReturn = readDelay(headerDelay, headerWrite, headerDelaySamples);
-                double headerInput = exhaustSource + headerReturn * headerReflection;
-                headerDelay[headerWrite] = headerInput;
+                // HEADER: mostly clean pressure propagation with a lightly damped return from the
+                // area increase into the midpipe. Reflection is filtered to mimic wall/thermal loss.
+                double headerFeedback = headerReflectionLp * headerToMidR * 0.34;
+                headerLine[headerWrite] = exhaustSource + headerFeedback;
+                double headerAtMid = readDelay(headerLine, headerWrite, headerSamples);
                 headerWrite = (headerWrite + 1) & (DELAY_BUFFER_SIZE - 1);
+                headerReflectionLp += (headerAtMid - headerReflectionLp) * 0.14;
+                double intoMid = headerAtMid * headerToMidT;
 
-                double silencerReturn = readDelay(silencerDelay, silencerWrite,
-                        silencerDelaySamples);
-                double silencerInput = headerReturn * 0.88
-                        + silencerReturn * silencerReflection;
-                silencerDelay[silencerWrite] = silencerInput;
-                silencerWrite = (silencerWrite + 1) & (DELAY_BUFFER_SIZE - 1);
+                // MIDPIPE: second area expansion before the can. Lower-Q feedback deliberately
+                // avoids the single resonant tube effect while preserving authentic pulse timing.
+                double midFeedback = midReflectionLp * midToBodyR * 0.23;
+                midLine[midWrite] = intoMid + midFeedback;
+                double midAtBody = readDelay(midLine, midWrite, midSamples);
+                midWrite = (midWrite + 1) & (DELAY_BUFFER_SIZE - 1);
+                midReflectionLp += (midAtBody - midReflectionLp) * 0.10;
+                double intoBody = midAtBody * midToBodyT;
 
-                double tailPressure = silencerReturn * 0.92 + headerReturn * 0.16;
+                // MUFFLER VOLUME: pressure enters a much larger cross-sectional area. The reservoir
+                // stores low-frequency energy while packing damps the fast pressure edge.
+                mufflerPressure += (intoBody - mufflerPressure) * 0.030;
+                mufflerPressure *= 0.9991;
 
-                // Engine Simulator's useful insight here is that pressure itself is not yet the
-                // finished audio. Remove DC, add a restrained pressure-derivative component, then
-                // let turbulence modulate the result before band-limiting it.
-                tailDc += (tailPressure - tailDc) * 0.0028;
-                double acPressure = tailPressure - tailDc;
-                double derivative = acPressure - previousTail;
-                previousTail = acPressure;
+                mufflerBodyLp += (intoBody - mufflerBodyLp) * bodyAlpha;
+                mufflerEdgeLp += (intoBody - mufflerEdgeLp) * edgeAlpha;
+                double bodyBand = mufflerBodyLp;
+                double edgeBand = mufflerEdgeLp - mufflerBodyLp;
 
-                double turbulentAir = 1.0 + intakeNoise * (0.012 + 0.025 * load);
-                double raw = (acPressure * 0.88 + derivative * 0.13) * turbulentAir
+                // Split the can into two lossy acoustic paths. A real packed muffler has a direct
+                // perforated-core path plus energy traveling through the surrounding volume. Their
+                // different delays smear narrow resonances into the broad "450 can" character.
+                double shortFeed = bodyBand * 0.70 + edgeBand * 0.20 + mufflerPressure * 0.26;
+                double longFeed = bodyBand * 0.48 + edgeBand * 0.08 + mufflerPressure * 0.44;
+
+                mufflerShortLine[mufflerShortWrite] = shortFeed;
+                double shortOut = readDelay(mufflerShortLine, mufflerShortWrite,
+                        mufflerShortSamples);
+                mufflerShortWrite = (mufflerShortWrite + 1) & (DELAY_BUFFER_SIZE - 1);
+
+                mufflerLongLine[mufflerLongWrite] = longFeed;
+                double longOut = readDelay(mufflerLongLine, mufflerLongWrite,
+                        mufflerLongSamples);
+                mufflerLongWrite = (mufflerLongWrite + 1) & (DELAY_BUFFER_SIZE - 1);
+
+                // Recombine the paths with slight opposite polarity. That represents expansion-
+                // chamber scattering and prevents both paths from summing into one rigid comb tone.
+                double canOut = shortOut * 0.72 - longOut * 0.36 + mufflerPressure * 0.18;
+                canOut *= bodyToOutletT;
+
+                // OUTLET: short tailpipe with much lower feedback than the old model. The positive
+                // reflection from the contraction adds punch, not a long metallic ring.
+                outletLine[outletWrite] = canOut + previousOutlet * bodyToOutletR * 0.055;
+                double tailPressure = readDelay(outletLine, outletWrite, outletSamples);
+                outletWrite = (outletWrite + 1) & (DELAY_BUFFER_SIZE - 1);
+
+                outletDc += (tailPressure - outletDc) * 0.0025;
+                double acPressure = tailPressure - outletDc;
+                double pressureVelocity = acPressure - previousOutlet;
+                previousOutlet = acPressure;
+
+                // Split final tone into body and edge. The body dominates; the edge only provides
+                // enough crack to remain recognizably a high-compression four-stroke at high RPM.
+                outletBodyLp += (acPressure - outletBodyLp) * outletBodyAlpha;
+                outletEdgeLp += (acPressure - outletEdgeLp) * outletEdgeAlpha;
+                double outletBody = outletBodyLp;
+                double outletEdge = outletEdgeLp - outletBodyLp;
+
+                double turbulence = intakeNoise * (0.006 + 0.018 * load);
+                double raw = outletBody * 1.12
+                        + outletEdge * (0.23 + 0.08 * smoothThrottle)
+                        + pressureVelocity * 0.035
+                        + turbulence
                         + intakeFlow;
 
-                tailLowPass += (raw - tailLowPass) * lpAlpha;
+                double shiftGain = 1.0 - smoothShift * 0.28;
+                double output = raw * shiftGain * smoothGain;
 
-                // Shift torque cut should lower exhaust energy instead of muting the whole engine.
-                double shiftGain = 1.0 - smoothShift * 0.30;
-                double output = tailLowPass * shiftGain * smoothGain;
-
-                // Gentle compression approximates microphone/exhaust saturation while leaving the
-                // pressure-wave timing intact. No hard clipping and no harmonic oscillator stack.
-                output = Math.tanh(output * 1.15) * 0.84;
+                // Gentle asymmetrical compression gives the exhaust pulse density without turning
+                // the outlet back into a buzzy harmonic generator.
+                double positiveDrive = output >= 0.0 ? 1.03 : 0.91;
+                output = Math.tanh(output * positiveDrive) * 0.88;
                 buffer[i] = (short) Math.round(output * 32767.0);
             }
 
@@ -257,6 +324,19 @@ final class EngineAudio {
                 running = false;
             }
         }
+    }
+
+    private static double area(double diameter) {
+        double radius = diameter * 0.5;
+        return Math.PI * radius * radius;
+    }
+
+    private static double areaReflection(double fromArea, double toArea) {
+        return (fromArea - toArea) / (fromArea + toArea);
+    }
+
+    private static double onePoleAlpha(double cutoffHz) {
+        return 1.0 - Math.exp(-2.0 * Math.PI * cutoffHz / SAMPLE_RATE);
     }
 
     private static boolean crossedAngle(double previous, double current, double angle) {
@@ -269,11 +349,10 @@ final class EngineAudio {
         return degrees < 0.0 ? degrees + 720.0 : degrees;
     }
 
-    /** Returns 0..1 progress through a possibly wrap-around crank-angle window. */
     private static double wrapRange(double angle, double open, double close) {
         double total = wrap720(close - open);
         double position = wrap720(angle - open);
-        if (position > total) return position < 360.0 ? 0.0 : 1.0;
+        if (position > total) return 0.0;
         return total > 0.0 ? position / total : 0.0;
     }
 
@@ -282,13 +361,11 @@ final class EngineAudio {
         double position = wrap720(angle - open);
         if (position > total || total <= 0.0) return 0.0;
         double x = position / total;
-        // Smooth, rounded cam-lobe approximation with zero velocity at open and close.
         double s = Math.sin(Math.PI * x);
         return s * s;
     }
 
     private static double normalizedCylinderVolume(double phaseDeg) {
-        // TDCs occur at 0, 360 and 720 degrees; BDCs at 180 and 540 degrees.
         double theta = Math.toRadians(phaseDeg % 360.0);
         double halfStroke = 1.0;
         double rodLength = ROD_RATIO * halfStroke;
@@ -302,8 +379,8 @@ final class EngineAudio {
     }
 
     private static double readDelay(double[] line, int writeIndex, double delaySamples) {
-        double read = writeIndex - MathUtils.clamp((float) delaySamples, 2f,
-                line.length - 3f);
+        double clamped = Math.max(2.0, Math.min(line.length - 3.0, delaySamples));
+        double read = writeIndex - clamped;
         while (read < 0.0) read += line.length;
         int i0 = ((int) Math.floor(read)) & (line.length - 1);
         int i1 = (i0 + 1) & (line.length - 1);
