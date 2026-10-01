@@ -179,26 +179,48 @@ final class TerrainVisuals {
         return t * t * t * (t * (t * 6f - 15f) + 10f);
     }
 
+    // The terrain underlay is intentionally sunk very slightly beneath the separate road mesh
+    // so the asphalt never z-fights with the flat corridor. Keep that offset in the shared
+    // vertex sampler instead of applying it only at render time; off-road collision then lands
+    // on the exact triangles the player sees.
+    private static final float TERRAIN_Y_OFFSET = -0.028f;
+
     /**
-     * Height on the same triangle surface used by the render mesh. This is deliberately not
-     * bilinear interpolation: each source cell is split along the same diagonal as the mesh so
-     * collision cannot disagree with the visible ground between vertices.
+     * Height of the actual rendered terrain triangle at a world point. The render mesh uses a
+     * dense 1.5 m grid near the road and progressively wider X columns farther out. Collision
+     * resolves against those exact X columns and the same global 1.5 m Z rows, then uses the
+     * same a-b-c / b-d-c diagonal split as buildSegmentModel().
      */
     float groundHeight(float x, float z) {
+        // The dedicated road mesh/physics owns the corridor. The terrain underlay stays sunk
+        // beneath it and begins contributing immediately outside the road edge.
         if (Math.abs(x) <= ROAD_EDGE) return 0f;
-        CellSample c = cell(x, z);
-        if (c.fx + c.fz <= 1f) {
-            return c.h00 + c.fx * (c.h10 - c.h00) + c.fz * (c.h01 - c.h00);
+
+        int xi = renderXCell(x);
+        float x0 = X_SAMPLES[xi];
+        float x1 = X_SAMPLES[xi + 1];
+        float zStep = SEGMENT_LENGTH / Z_CELLS;
+        float z0 = MathUtils.floor(z / zStep) * zStep;
+        float z1 = z0 + zStep;
+
+        float fx = MathUtils.clamp((x - x0) / (x1 - x0), 0f, 1f);
+        float fz = MathUtils.clamp((z - z0) / zStep, 0f, 1f);
+        float h00 = meshVertexHeight(x0, z0);
+        float h10 = meshVertexHeight(x1, z0);
+        float h01 = meshVertexHeight(x0, z1);
+        float h11 = meshVertexHeight(x1, z1);
+
+        if (fx + fz <= 1f) {
+            return h00 + fx * (h10 - h00) + fz * (h01 - h00);
         }
-        return c.h11 + (1f - c.fx) * (c.h01 - c.h11)
-                + (1f - c.fz) * (c.h10 - c.h11);
+        return h11 + (1f - fx) * (h01 - h11)
+                + (1f - fz) * (h10 - h11);
     }
 
     float groundSlopeX(float x, float z) {
         if (Math.abs(x) <= ROAD_EDGE) return 0f;
-        // Average grade over a 6 m window instead of inheriting the slope of one 1.5 m
-        // triangle. Geometry still uses the same heightfield, but normals/contact response
-        // no longer jump at every cell diagonal.
+        // Average grade over a 6 m window instead of inheriting the slope of one triangle.
+        // The sampled heights still come from the exact rendered surface.
         float r = sampleSpacing * 2f;
         return (groundHeight(x + r, z) - groundHeight(x - r, z)) / (2f * r);
     }
@@ -209,7 +231,42 @@ final class TerrainVisuals {
         return (groundHeight(x, z + r) - groundHeight(x, z - r)) / (2f * r);
     }
 
-    private CellSample cell(float x, float z) {
+    /** Height of one render-mesh vertex before triangle interpolation. */
+    private float meshVertexHeight(float x, float z) {
+        float base = Math.abs(x) <= ROAD_EDGE ? 0f : sourceHeight(x, z);
+        return base + TERRAIN_Y_OFFSET;
+    }
+
+    /**
+     * Sample the baked 1.5 m source heightfield. This is used only to create render vertices;
+     * wheel collision must use groundHeight() so coarsened render columns cannot diverge from
+     * physics between vertices.
+     */
+    private float sourceHeight(float x, float z) {
+        CellSample c = sourceCell(x, z);
+        if (c.fx + c.fz <= 1f) {
+            return c.h00 + c.fx * (c.h10 - c.h00) + c.fz * (c.h01 - c.h00);
+        }
+        return c.h11 + (1f - c.fx) * (c.h01 - c.h11)
+                + (1f - c.fz) * (c.h10 - c.h11);
+    }
+
+    private int renderXCell(float x) {
+        if (x <= X_SAMPLES[0]) return 0;
+        int last = X_SAMPLES.length - 1;
+        if (x >= X_SAMPLES[last]) return last - 1;
+
+        int lo = 0;
+        int hi = last;
+        while (hi - lo > 1) {
+            int mid = (lo + hi) >>> 1;
+            if (X_SAMPLES[mid] <= x) lo = mid;
+            else hi = mid;
+        }
+        return lo;
+    }
+
+    private CellSample sourceCell(float x, float z) {
         float gx = MathUtils.clamp((x - originX) / sampleSpacing, 0f, mapWidth - 1.001f);
         float gz = MathUtils.clamp((z - originZ) / sampleSpacing, 0f, mapHeight - 1.001f);
         int ix = MathUtils.floor(gx);
@@ -270,7 +327,7 @@ final class TerrainVisuals {
         for (int zi = 0; zi < zCount; zi++) {
             float z = zStart + zi * zStep;
             for (float x : X_SAMPLES) {
-                float y = groundHeight(x, z) - 0.028f;
+                float y = meshVertexHeight(x, z);
                 float sx = groundSlopeX(x, z);
                 float sz = groundSlopeZ(x, z);
                 float inv = 1f / (float) Math.sqrt(1f + sx * sx + sz * sz);
@@ -295,7 +352,7 @@ final class TerrainVisuals {
                 short b = (short) (row0 + xi + 1);
                 short c = (short) (row1 + xi);
                 short d = (short) (row1 + xi + 1);
-                // Same diagonal convention as groundHeight(): a-b-c and b-d-c.
+                // Collision uses this exact diagonal convention: a-b-c and b-d-c.
                 indices[io++] = a;
                 indices[io++] = b;
                 indices[io++] = c;

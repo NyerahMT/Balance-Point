@@ -665,11 +665,13 @@ private final WheelContact frontPostContact = new WheelContact();
         float bw = w * 0.32f;
         float bh = h * 0.075f;
 
-        if (inside(x, y, bx, h * 0.55f, bw, bh)) {
+        if (inside(x, y, bx, h * 0.56f, bw, bh)) {
             resumeRide();
-        } else if (inside(x, y, bx, h * 0.44f, bw, bh)) {
+        } else if (inside(x, y, bx, h * 0.45f, bw, bh)) {
             restartRide();
-        } else if (inside(x, y, bx, h * 0.33f, bw, bh)) {
+        } else if (inside(x, y, bx, h * 0.34f, bw, bh)) {
+            toggleQuality();
+        } else if (inside(x, y, bx, h * 0.23f, bw, bh)) {
             enterMainMenu();
         }
     }
@@ -1620,16 +1622,16 @@ private void solveWheelContact(WheelContact out, float worldX, float wheelY, flo
             font.draw(spriteBatch, "RIDE", bx + bw * 0.10f, h * 0.285f + bh * 0.61f);
         }
         font.setColor(1f, 1f, 1f, 0.82f);
-        font.draw(spriteBatch, highQuality ? "QUALITY   HIGH" : "QUALITY   LOW",
+        font.draw(spriteBatch, highQuality ? "GRAPHICS   HIGH" : "GRAPHICS   LOW",
                 bx + bw * 0.10f, h * 0.155f + bh * 0.61f);
         spriteBatch.end();
     }
 
     private void drawPauseMenu(int w, int h, float min) {
         float panelX = w * 0.29f;
-        float panelY = h * 0.24f;
+        float panelY = h * 0.17f;
         float panelW = w * 0.42f;
-        float panelH = h * 0.52f;
+        float panelH = h * 0.64f;
         float bx = w * 0.34f;
         float bw = w * 0.32f;
         float bh = h * 0.075f;
@@ -1643,20 +1645,28 @@ private void solveWheelContact(WheelContact out, float worldX, float wheelY, flo
         shapes.setColor(0.95f, 0.42f, 0.10f, 0.95f);
         shapes.rect(panelX, panelY + panelH - Math.max(4f, min * 0.007f),
                 panelW, Math.max(4f, min * 0.007f));
-        drawUiButtonShape(bx, h * 0.55f, bw, bh, true);
-        drawUiButtonShape(bx, h * 0.44f, bw, bh, false);
-        drawUiButtonShape(bx, h * 0.33f, bw, bh, false);
+        drawUiButtonShape(bx, h * 0.56f, bw, bh, true);
+        drawUiButtonShape(bx, h * 0.45f, bw, bh, false);
+        drawUiButtonShape(bx, h * 0.34f, bw, bh, false);
+        drawUiButtonShape(bx, h * 0.23f, bw, bh, false);
         shapes.end();
 
         spriteBatch.setProjectionMatrix(uiCamera.combined);
         spriteBatch.begin();
         font.setColor(1f, 1f, 1f, 0.96f);
         font.getData().setScale(Math.max(1.25f, h / 720f * 1.65f));
-        font.draw(spriteBatch, "PAUSED", w * 0.405f, h * 0.69f);
+        font.draw(spriteBatch, "PAUSED", w * 0.405f, h * 0.735f);
         font.getData().setScale(Math.max(0.82f, h / 720f * 1.02f));
-        font.draw(spriteBatch, "RESUME", bx + bw * 0.10f, h * 0.55f + bh * 0.61f);
-        font.draw(spriteBatch, "RESTART", bx + bw * 0.10f, h * 0.44f + bh * 0.61f);
-        font.draw(spriteBatch, "MAIN MENU", bx + bw * 0.10f, h * 0.33f + bh * 0.61f);
+        font.draw(spriteBatch, "RESUME", bx + bw * 0.10f, h * 0.56f + bh * 0.61f);
+        font.draw(spriteBatch, "RESTART", bx + bw * 0.10f, h * 0.45f + bh * 0.61f);
+        font.draw(spriteBatch, highQuality ? "GRAPHICS   HIGH" : "GRAPHICS   LOW",
+                bx + bw * 0.10f, h * 0.34f + bh * 0.61f);
+        font.draw(spriteBatch, "MAIN MENU", bx + bw * 0.10f, h * 0.23f + bh * 0.61f);
+
+        font.getData().setScale(Math.max(0.60f, h / 720f * 0.72f));
+        font.setColor(1f, 1f, 1f, 0.52f);
+        String rideStats = String.format(java.util.Locale.US, "BEST WHEELIE  %.1fs", bestWheelieTime);
+        font.draw(spriteBatch, rideStats, bx + bw * 0.10f, h * 0.195f);
         spriteBatch.end();
     }
 
