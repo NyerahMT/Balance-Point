@@ -9,46 +9,71 @@ import com.badlogic.gdx.graphics.g3d.ModelBatch;
 import com.badlogic.gdx.graphics.g3d.ModelInstance;
 import com.badlogic.gdx.graphics.g3d.attributes.ColorAttribute;
 import com.badlogic.gdx.graphics.g3d.utils.ModelBuilder;
+import com.badlogic.gdx.math.MathUtils;
+import com.badlogic.gdx.math.Vector3;
 import com.badlogic.gdx.utils.Array;
 
-/** Lightweight deterministic rural terrain dressing around the flat road corridor. */
+/**
+ * Deterministic roadside terrain shared by rendering and the bike ground model.
+ *
+ * The road sits inside a broad flat rural corridor. Farther out the ground rolls through
+ * a short, rideable grass/dirt foothill before blending into steep mountain terrain. The
+ * flat edge and terrain profile vary slowly along Z so the transition never reads as a
+ * perfectly straight wall and broad clearings remain available for trails/residential use.
+ */
 final class TerrainVisuals {
     static final float FLAT_CORRIDOR_HALF_WIDTH = 27f;
 
     private static final float SEGMENT_LENGTH = 20f;
     private static final int SEGMENTS = 18;
+    private static final int BANDS = 7;
+    private static final int SHALLOW_BANDS = 3;
     private static final int TREES_PER_SEGMENT = 5;
+
+    private static final float GRASS_INNER_EDGE = 6.40f;
+    private static final float MOUNTAIN_VISUAL_RUN = 31f;
 
     private final ModelInstance[] flatLeft = new ModelInstance[SEGMENTS];
     private final ModelInstance[] flatRight = new ModelInstance[SEGMENTS];
     private final ModelInstance[] gravelLeft = new ModelInstance[SEGMENTS];
     private final ModelInstance[] gravelRight = new ModelInstance[SEGMENTS];
-    private final ModelInstance[] hillLeftNear = new ModelInstance[SEGMENTS];
-    private final ModelInstance[] hillRightNear = new ModelInstance[SEGMENTS];
-    private final ModelInstance[] hillLeftFar = new ModelInstance[SEGMENTS];
-    private final ModelInstance[] hillRightFar = new ModelInstance[SEGMENTS];
+    private final ModelInstance[][] slopeLeft = new ModelInstance[SEGMENTS][BANDS];
+    private final ModelInstance[][] slopeRight = new ModelInstance[SEGMENTS][BANDS];
+    private final ModelInstance[] ridgeLeft = new ModelInstance[SEGMENTS];
+    private final ModelInstance[] ridgeRight = new ModelInstance[SEGMENTS];
     private final ModelInstance[] trees = new ModelInstance[SEGMENTS * TREES_PER_SEGMENT * 2];
     private final ModelInstance[] trunks = new ModelInstance[SEGMENTS * TREES_PER_SEGMENT * 2];
 
     TerrainVisuals(Array<Model> ownedModels) {
         ModelBuilder b = new ModelBuilder();
-        Material grassA = material(0.31f, 0.39f, 0.25f);
-        Material grassB = material(0.25f, 0.34f, 0.21f);
+
+        Material grassA = material(0.31f, 0.40f, 0.25f);
+        Material grassB = material(0.27f, 0.36f, 0.22f);
         Material gravel = material(0.42f, 0.40f, 0.34f);
-        Material hillNear = material(0.22f, 0.31f, 0.20f);
-        Material hillFar = material(0.17f, 0.25f, 0.19f);
+        Material slopeGrass = material(0.26f, 0.36f, 0.21f);
+        Material slopeDirt = material(0.37f, 0.32f, 0.22f);
+        Material mountainLow = material(0.22f, 0.29f, 0.20f);
+        Material mountainHigh = material(0.20f, 0.23f, 0.19f);
+        Material ridge = material(0.16f, 0.21f, 0.17f);
         Material foliage = material(0.12f, 0.25f, 0.12f);
         Material trunk = material(0.26f, 0.18f, 0.10f);
 
-        Model flatA = b.createBox(22f, 0.08f, SEGMENT_LENGTH, grassA,
+        // Unit-width strips are scaled and rotated into the deterministic terrain profile.
+        Model flatA = b.createBox(1f, 0.08f, SEGMENT_LENGTH * 1.06f, grassA,
                 VertexAttributes.Usage.Position | VertexAttributes.Usage.Normal);
-        Model flatB = b.createBox(22f, 0.08f, SEGMENT_LENGTH, grassB,
+        Model flatB = b.createBox(1f, 0.08f, SEGMENT_LENGTH * 1.06f, grassB,
                 VertexAttributes.Usage.Position | VertexAttributes.Usage.Normal);
-        Model gravelStrip = b.createBox(2.2f, 0.05f, SEGMENT_LENGTH, gravel,
+        Model gravelStrip = b.createBox(2.2f, 0.05f, SEGMENT_LENGTH * 1.04f, gravel,
                 VertexAttributes.Usage.Position | VertexAttributes.Usage.Normal);
-        Model nearHill = b.createSphere(2f, 2f, 2f, 12, 6, hillNear,
+        Model shallowGrass = b.createBox(1f, 0.10f, SEGMENT_LENGTH * 1.08f, slopeGrass,
                 VertexAttributes.Usage.Position | VertexAttributes.Usage.Normal);
-        Model farHill = b.createSphere(2f, 2f, 2f, 12, 6, hillFar,
+        Model shallowDirt = b.createBox(1f, 0.10f, SEGMENT_LENGTH * 1.08f, slopeDirt,
+                VertexAttributes.Usage.Position | VertexAttributes.Usage.Normal);
+        Model mountainA = b.createBox(1f, 0.14f, SEGMENT_LENGTH * 1.10f, mountainLow,
+                VertexAttributes.Usage.Position | VertexAttributes.Usage.Normal);
+        Model mountainB = b.createBox(1f, 0.16f, SEGMENT_LENGTH * 1.12f, mountainHigh,
+                VertexAttributes.Usage.Position | VertexAttributes.Usage.Normal);
+        Model farRidge = b.createSphere(2f, 2f, 2f, 12, 6, ridge,
                 VertexAttributes.Usage.Position | VertexAttributes.Usage.Normal);
         Model canopy = b.createCone(2f, 4.8f, 2f, 8, foliage,
                 VertexAttributes.Usage.Position | VertexAttributes.Usage.Normal);
@@ -58,8 +83,11 @@ final class TerrainVisuals {
         ownedModels.add(flatA);
         ownedModels.add(flatB);
         ownedModels.add(gravelStrip);
-        ownedModels.add(nearHill);
-        ownedModels.add(farHill);
+        ownedModels.add(shallowGrass);
+        ownedModels.add(shallowDirt);
+        ownedModels.add(mountainA);
+        ownedModels.add(mountainB);
+        ownedModels.add(farRidge);
         ownedModels.add(canopy);
         ownedModels.add(trunkModel);
 
@@ -68,11 +96,25 @@ final class TerrainVisuals {
             flatRight[i] = new ModelInstance((i & 1) == 0 ? flatB : flatA);
             gravelLeft[i] = new ModelInstance(gravelStrip);
             gravelRight[i] = new ModelInstance(gravelStrip);
-            hillLeftNear[i] = new ModelInstance(nearHill);
-            hillRightNear[i] = new ModelInstance(nearHill);
-            hillLeftFar[i] = new ModelInstance(farHill);
-            hillRightFar[i] = new ModelInstance(farHill);
+            ridgeLeft[i] = new ModelInstance(farRidge);
+            ridgeRight[i] = new ModelInstance(farRidge);
+
+            for (int band = 0; band < BANDS; band++) {
+                Model leftModel;
+                Model rightModel;
+                if (band < SHALLOW_BANDS) {
+                    // Dirt appears in irregular foothill patches instead of as a hard biome line.
+                    leftModel = ((i + band) % 4 == 0) ? shallowDirt : shallowGrass;
+                    rightModel = ((i * 2 + band) % 5 == 0) ? shallowDirt : shallowGrass;
+                } else {
+                    leftModel = band < 5 ? mountainA : mountainB;
+                    rightModel = band < 5 ? mountainA : mountainB;
+                }
+                slopeLeft[i][band] = new ModelInstance(leftModel);
+                slopeRight[i][band] = new ModelInstance(rightModel);
+            }
         }
+
         for (int i = 0; i < trees.length; i++) {
             trees[i] = new ModelInstance(canopy);
             trunks[i] = new ModelInstance(trunkModel);
@@ -83,6 +125,49 @@ final class TerrainVisuals {
         return new Material(ColorAttribute.createDiffuse(new Color(r, g, b, 1f)));
     }
 
+    /** World-space terrain height used by both the renderer and motorcycle ground contact. */
+    float groundHeight(float x, float z) {
+        float ax = Math.abs(x);
+        float flatEdge = flatEdge(z);
+        if (ax <= flatEdge) return 0f;
+
+        float shallowWidth = shallowWidth(z);
+        float shallowRise = shallowRise(z);
+        float shallowEnd = flatEdge + shallowWidth;
+        if (ax <= shallowEnd) {
+            float t = MathUtils.clamp((ax - flatEdge) / shallowWidth, 0f, 1f);
+            // Gentle roll-in, then progressively steeper. No abrupt ramp at the field edge.
+            float curved = 0.18f * t + 0.82f * t * t;
+            return shallowRise * curved;
+        }
+
+        float dx = ax - shallowEnd;
+        float mountainSlope = mountainSlope(z);
+        float blend = 2.4f;
+        float mountainRise;
+        if (dx < blend) {
+            // Ease from the shallow hill into the mountain rather than forming a crease.
+            mountainRise = mountainSlope * dx * dx / (2f * blend);
+        } else {
+            float afterBlend = dx - blend;
+            mountainRise = mountainSlope * (dx - blend * 0.5f)
+                    + 0.010f * afterBlend * afterBlend;
+        }
+
+        float maxMountainRise = 22f + smoothNoise(z, 125f, 107) * 10f;
+        return shallowRise + Math.min(mountainRise, maxMountainRise);
+    }
+
+    float groundSlopeX(float x, float z) {
+        final float e = 0.30f;
+        return (groundHeight(x + e, z) - groundHeight(x - e, z)) / (2f * e);
+    }
+
+    float groundSlopeZ(float x, float z) {
+        final float e = 0.55f;
+        return (groundHeight(x, z + e) - groundHeight(x, z - e)) / (2f * e);
+    }
+
     void update(float bikeZ) {
         float firstCenter = (float) Math.floor((bikeZ - 80f) / SEGMENT_LENGTH) * SEGMENT_LENGTH
                 + SEGMENT_LENGTH * 0.5f;
@@ -90,45 +175,110 @@ final class TerrainVisuals {
         int treeIndex = 0;
         for (int i = 0; i < SEGMENTS; i++) {
             float z = firstCenter + i * SEGMENT_LENGTH;
-            int wi = (int) Math.floor(z / SEGMENT_LENGTH);
+            float edge = flatEdge(z);
+            float shallow = shallowWidth(z);
 
-            flatLeft[i].transform.setToTranslation(-16f, -0.07f, z);
-            flatRight[i].transform.setToTranslation(16f, -0.07f, z);
+            float flatWidth = Math.max(1f, edge - GRASS_INNER_EDGE);
+            flatLeft[i].transform.idt()
+                    .translate(-(GRASS_INNER_EDGE + flatWidth * 0.5f), -0.04f, z)
+                    .scale(flatWidth, 1f, 1f);
+            flatRight[i].transform.idt()
+                    .translate(GRASS_INNER_EDGE + flatWidth * 0.5f, -0.04f, z)
+                    .scale(flatWidth, 1f, 1f);
             gravelLeft[i].transform.setToTranslation(-5.3f, -0.015f, z);
             gravelRight[i].transform.setToTranslation(5.3f, -0.015f, z);
 
-            float nearHeightL = 5.2f + hash01(wi, 11) * 4.2f;
-            float nearHeightR = 5.2f + hash01(wi, 17) * 4.2f;
-            float nearXL = 39f + hash01(wi, 23) * 7f;
-            float nearXR = 39f + hash01(wi, 29) * 7f;
-            hillLeftNear[i].transform.setToTranslation(-nearXL, nearHeightL * 0.38f - 0.6f, z)
-                    .scale(13f + hash01(wi, 31) * 6f, nearHeightL, 11f + hash01(wi, 37) * 8f);
-            hillRightNear[i].transform.setToTranslation(nearXR, nearHeightR * 0.38f - 0.6f, z)
-                    .scale(13f + hash01(wi, 41) * 6f, nearHeightR, 11f + hash01(wi, 43) * 8f);
+            float inner = edge;
+            for (int band = 0; band < BANDS; band++) {
+                float width;
+                if (band < SHALLOW_BANDS) {
+                    width = shallow / SHALLOW_BANDS;
+                } else {
+                    // Widen the bands as the terrain gets steeper so the mountain reads as
+                    // a continuous mass rather than a stack of equal terraces.
+                    width = band == 3 ? 4.5f : band == 4 ? 6.0f : band == 5 ? 8.0f : 12.5f;
+                }
+                float outer = inner + width;
+                float h1 = groundHeight(inner, z);
+                float h2 = groundHeight(outer, z);
+                placeSlopeStrip(slopeLeft[i][band], -1f, inner, width, h1, h2, z);
+                placeSlopeStrip(slopeRight[i][band], 1f, inner, width, h1, h2, z);
+                inner = outer;
+            }
 
-            float farHeightL = 10f + hash01(wi, 47) * 7f;
-            float farHeightR = 10f + hash01(wi, 53) * 7f;
-            hillLeftFar[i].transform.setToTranslation(-67f, farHeightL * 0.40f - 1.0f, z + 5f)
-                    .scale(24f, farHeightL, 19f);
-            hillRightFar[i].transform.setToTranslation(67f, farHeightR * 0.40f - 1.0f, z - 4f)
-                    .scale(24f, farHeightR, 19f);
+            float ridgeX = edge + shallow + MOUNTAIN_VISUAL_RUN + 18f;
+            float ridgeBase = groundHeight(edge + shallow + MOUNTAIN_VISUAL_RUN, z);
+            float ridgeHeightL = 13f + smoothNoise(z, 82f, 131) * 13f;
+            float ridgeHeightR = 13f + smoothNoise(z + 31f, 91f, 137) * 13f;
+            ridgeLeft[i].transform.setToTranslation(-ridgeX, ridgeBase + ridgeHeightL * 0.25f, z + 3f)
+                    .scale(18f, ridgeHeightL, 16f);
+            ridgeRight[i].transform.setToTranslation(ridgeX, ridgeBase + ridgeHeightR * 0.25f, z - 4f)
+                    .scale(18f, ridgeHeightR, 16f);
 
             for (int t = 0; t < TREES_PER_SEGMENT; t++) {
                 float localZ = z - SEGMENT_LENGTH * 0.46f
                         + (t + 0.5f) * (SEGMENT_LENGTH * 0.92f / TREES_PER_SEGMENT);
-                placeTree(treeIndex++, -1f, wi, t, localZ);
-                placeTree(treeIndex++, 1f, wi, t, localZ);
+                placeTree(treeIndex++, -1f, i, t, localZ);
+                placeTree(treeIndex++, 1f, i, t, localZ);
             }
         }
     }
 
-    private void placeTree(int index, float side, int wi, int t, float z) {
-        float random = hash01(wi * 13 + t, side < 0f ? 61 : 67);
-        float x = side * (29f + random * 12f);
-        float scale = 0.72f + hash01(wi * 7 + t, 71) * 0.62f;
-        float zJitter = (hash01(wi * 5 + t, 73) - 0.5f) * 2.8f;
-        trunks[index].transform.setToTranslation(x, 1.22f * scale, z + zJitter).scale(scale, scale, scale);
-        trees[index].transform.setToTranslation(x, 4.15f * scale, z + zJitter).scale(scale, scale, scale);
+    private void placeSlopeStrip(ModelInstance instance, float side, float inner,
+                                 float width, float h1, float h2, float z) {
+        float rise = h2 - h1;
+        float angle = (float) Math.atan2(rise, width);
+        float projectedCos = Math.max(0.22f, MathUtils.cos(angle));
+        float localWidth = width / projectedCos;
+        float signedAngle = side * angle * MathUtils.radiansToDegrees;
+        instance.transform.idt()
+                .translate(side * (inner + width * 0.5f), (h1 + h2) * 0.5f - 0.05f, z)
+                .rotate(Vector3.Z, signedAngle)
+                .scale(localWidth, 1f, 1f);
+    }
+
+    private void placeTree(int index, float side, int segmentIndex, int t, float z) {
+        int seed = segmentIndex * 17 + t;
+        float edge = flatEdge(z);
+        float random = hash01(seed, side < 0f ? 61 : 67);
+        // Most trees live around the flat/foothill transition; some climb the low slope.
+        float outward = -4f + random * (shallowWidth(z) + 9f);
+        float x = side * Math.max(GRASS_INNER_EDGE + 4f, edge + outward);
+        float scale = 0.72f + hash01(seed, 71) * 0.62f;
+        float zJitter = (hash01(seed, 73) - 0.5f) * 2.8f;
+        float treeZ = z + zJitter;
+        float ground = groundHeight(x, treeZ);
+        trunks[index].transform.setToTranslation(x, ground + 1.22f * scale, treeZ)
+                .scale(scale, scale, scale);
+        trees[index].transform.setToTranslation(x, ground + 4.15f * scale, treeZ)
+                .scale(scale, scale, scale);
+    }
+
+    private static float flatEdge(float z) {
+        // 24-34 m: long broad clearings remain possible while other stretches tighten up.
+        return 24f + smoothNoise(z, 95f, 83) * 10f;
+    }
+
+    private static float shallowWidth(float z) {
+        // Roughly 20-27 ft of genuinely rideable hillside before mountain terrain takes over.
+        return 6.2f + smoothNoise(z, 72f, 89) * 2.0f;
+    }
+
+    private static float shallowRise(float z) {
+        return 1.7f + smoothNoise(z, 88f, 97) * 1.5f;
+    }
+
+    private static float mountainSlope(float z) {
+        // dy/dx = 0.95-1.65 -> about 44-59 degrees before the extra curvature term.
+        return 0.95f + smoothNoise(z, 110f, 101) * 0.70f;
+    }
+
+    private static float smoothNoise(float z, float wavelength, int salt) {
+        float cell = z / wavelength;
+        int i0 = MathUtils.floor(cell);
+        float t = cell - i0;
+        t = t * t * (3f - 2f * t);
+        return MathUtils.lerp(hash01(i0, salt), hash01(i0 + 1, salt), t);
     }
 
     private static float hash01(int a, int b) {
@@ -144,10 +294,14 @@ final class TerrainVisuals {
         for (ModelInstance m : flatRight) batch.render(m, environment);
         for (ModelInstance m : gravelLeft) batch.render(m, environment);
         for (ModelInstance m : gravelRight) batch.render(m, environment);
-        for (ModelInstance m : hillLeftFar) batch.render(m, environment);
-        for (ModelInstance m : hillRightFar) batch.render(m, environment);
-        for (ModelInstance m : hillLeftNear) batch.render(m, environment);
-        for (ModelInstance m : hillRightNear) batch.render(m, environment);
+        for (int i = 0; i < SEGMENTS; i++) {
+            for (int band = BANDS - 1; band >= 0; band--) {
+                batch.render(slopeLeft[i][band], environment);
+                batch.render(slopeRight[i][band], environment);
+            }
+        }
+        for (ModelInstance m : ridgeLeft) batch.render(m, environment);
+        for (ModelInstance m : ridgeRight) batch.render(m, environment);
         for (ModelInstance m : trunks) batch.render(m, environment);
         for (ModelInstance m : trees) batch.render(m, environment);
     }
