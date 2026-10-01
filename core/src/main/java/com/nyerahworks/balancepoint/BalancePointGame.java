@@ -262,14 +262,8 @@ public final class BalancePointGame extends ApplicationAdapter {
         resize(Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
 
         environment = new Environment();
-        // Daylight with real separation instead of CAD-viewport flat ambient. The cool fill
-        // keeps shadow-facing geometry readable while the warm key gives terrain/bike shape.
-        environment.set(new ColorAttribute(ColorAttribute.AmbientLight,
-                0.36f, 0.395f, 0.42f, 1f));
-        environment.add(new DirectionalLight().set(
-                1.08f, 1.00f, 0.88f, -0.48f, -1f, -0.31f));
-        environment.add(new DirectionalLight().set(
-                0.18f, 0.225f, 0.30f, 0.58f, -0.34f, 0.70f));
+        environment.set(new ColorAttribute(ColorAttribute.AmbientLight, 0.62f, 0.65f, 0.63f, 1f));
+        environment.add(new DirectionalLight().set(0.95f, 0.88f, 0.76f, -0.45f, -1f, -0.28f));
 
         createWorldModels();
         createBikeModels();
@@ -310,11 +304,11 @@ public final class BalancePointGame extends ApplicationAdapter {
     private void createWorldModels() {
         ModelBuilder b = new ModelBuilder();
         Model road = box(b, ROAD_HALF_WIDTH * 2f, 0.08f, SEGMENT_LENGTH,
-                material(0.095f, 0.102f, 0.108f));
+                material(0.13f, 0.14f, 0.145f));
         Model edgeLine = box(b, 0.10f, 0.025f, SEGMENT_LENGTH,
-                material(0.91f, 0.90f, 0.84f));
+                material(0.82f, 0.80f, 0.72f));
         Model dash = box(b, 0.10f, 0.025f, 2.8f,
-                material(0.96f, 0.72f, 0.15f));
+                material(0.90f, 0.74f, 0.26f));
 
         int n = 30;
         roadSegments = new ModelInstance[n];
@@ -444,8 +438,9 @@ public final class BalancePointGame extends ApplicationAdapter {
         updateCamera(frameDt);
 
         Gdx.gl.glViewport(0, 0, Gdx.graphics.getBackBufferWidth(), Gdx.graphics.getBackBufferHeight());
-        Gdx.gl.glClearColor(0.66f, 0.76f, 0.80f, 1f);
+        Gdx.gl.glClearColor(0.58f, 0.72f, 0.80f, 1f);
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT | GL20.GL_DEPTH_BUFFER_BIT);
+
         modelBatch.begin(camera);
         terrainVisuals.render(modelBatch, environment);
         for (ModelInstance m : roadSegments) modelBatch.render(m, environment);

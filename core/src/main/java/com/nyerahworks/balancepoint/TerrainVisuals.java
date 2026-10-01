@@ -77,9 +77,7 @@ final class TerrainVisuals {
         terrainTexture.setWrap(Texture.TextureWrap.ClampToEdge, Texture.TextureWrap.ClampToEdge);
         terrainMaterial = new Material(
                 TextureAttribute.createDiffuse(terrainTexture),
-                // Small daylight tint keeps the baked albedo from reading oversaturated under
-                // the stronger sun while retaining its grass/dirt/rock variation.
-                ColorAttribute.createDiffuse(new Color(0.95f, 0.985f, 0.92f, 1f)),
+                ColorAttribute.createDiffuse(Color.WHITE),
                 IntAttribute.createCullFace(GL20.GL_NONE));
 
         for (int i = 0; i < terrainWorldIndex.length; i++) {
@@ -87,25 +85,16 @@ final class TerrainVisuals {
         }
 
         ModelBuilder b = new ModelBuilder();
-        Material foliageA = material(0.090f, 0.205f, 0.078f);
-        Material foliageB = material(0.125f, 0.255f, 0.095f);
-        Material foliageC = material(0.075f, 0.175f, 0.072f);
-        Material trunk = material(0.235f, 0.155f, 0.085f);
-        Model canopyA = b.createCone(2.05f, 4.8f, 2.05f, 8, foliageA,
-                VertexAttributes.Usage.Position | VertexAttributes.Usage.Normal);
-        Model canopyB = b.createCone(2.30f, 5.25f, 2.30f, 9, foliageB,
-                VertexAttributes.Usage.Position | VertexAttributes.Usage.Normal);
-        Model canopyC = b.createCone(1.90f, 4.35f, 1.90f, 7, foliageC,
+        Material foliage = material(0.105f, 0.235f, 0.095f);
+        Material trunk = material(0.25f, 0.17f, 0.09f);
+        Model canopy = b.createCone(2f, 4.8f, 2f, 8, foliage,
                 VertexAttributes.Usage.Position | VertexAttributes.Usage.Normal);
         Model trunkModel = b.createCylinder(0.38f, 2.7f, 0.38f, 7, trunk,
                 VertexAttributes.Usage.Position | VertexAttributes.Usage.Normal);
-        ownedModels.add(canopyA);
-        ownedModels.add(canopyB);
-        ownedModels.add(canopyC);
+        ownedModels.add(canopy);
         ownedModels.add(trunkModel);
 
         for (int i = 0; i < trees.length; i++) {
-            Model canopy = (i % 3 == 0) ? canopyA : (i % 3 == 1 ? canopyB : canopyC);
             trees[i] = new ModelInstance(canopy);
             trunks[i] = new ModelInstance(trunkModel);
             hideTree(i);
@@ -348,12 +337,7 @@ final class TerrainVisuals {
     private void placeTree(int index, float side, int worldIndex, int t, float zStart) {
         int salt = side < 0f ? 211 : 223;
         float keep = hash01(worldIndex * 43 + t, salt);
-        // Density varies in broad ~100 m groves rather than being statistically identical
-        // every chunk. This creates natural open meadows followed by denser tree lines.
-        int groveCell = Math.floorDiv(worldIndex, 4);
-        float grove = hash01(groveCell, salt + 71);
-        float keepThreshold = MathUtils.lerp(0.08f, 0.40f, grove);
-        if (keep < keepThreshold) {
+        if (keep < 0.22f) {
             hideTree(index);
             return;
         }
@@ -372,17 +356,11 @@ final class TerrainVisuals {
         }
 
         float scale = 0.70f + hash01(worldIndex * 67 + t, salt + 13) * 0.72f;
-        float widthVariation = 0.82f + hash01(worldIndex * 71 + t, salt + 17) * 0.38f;
-        float heightVariation = 0.90f + hash01(worldIndex * 73 + t, salt + 19) * 0.26f;
-        float yawDeg = hash01(worldIndex * 79 + t, salt + 23) * 360f;
         float ground = groundHeight(x, treeZ);
         trunks[index].transform.setToTranslation(x, ground + 1.22f * scale, treeZ)
-                .rotate(com.badlogic.gdx.math.Vector3.Y, yawDeg)
-                .scale(scale * 0.92f, scale * heightVariation, scale * 0.92f);
-        trees[index].transform.setToTranslation(x, ground + 4.15f * scale * heightVariation, treeZ)
-                .rotate(com.badlogic.gdx.math.Vector3.Y, yawDeg)
-                .scale(scale * widthVariation, scale * heightVariation,
-                        scale * (1.02f - (widthVariation - 0.82f) * 0.20f));
+                .scale(scale, scale, scale);
+        trees[index].transform.setToTranslation(x, ground + 4.15f * scale, treeZ)
+                .scale(scale, scale, scale);
     }
 
     private void hideTree(int index) {
