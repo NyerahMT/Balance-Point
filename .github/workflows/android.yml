@@ -66,19 +66,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          SHORT_SHA="${GITHUB_SHA::7}"
-          UNIQUE="BalancePoint-Android-r${GITHUB_RUN_NUMBER}-${SHORT_SHA}.apk"
           cp app/build/outputs/apk/debug/app-debug.apk BalancePoint-latest.apk
-          cp app/build/outputs/apk/debug/app-debug.apk "$UNIQUE"
           if gh release view dev-build >/dev/null 2>&1; then
-            gh release upload dev-build BalancePoint-latest.apk "$UNIQUE" --clobber
+            gh release upload dev-build BalancePoint-latest.apk --clobber
           else
-            gh release create dev-build BalancePoint-latest.apk "$UNIQUE" \
+            gh release create dev-build BalancePoint-latest.apk \
               --title "Latest Test Builds" \
               --notes "Automatically updated Android and iOS development builds from main." \
               --prerelease
           fi
-          echo "Published Android build $UNIQUE with versionCode ${GITHUB_RUN_NUMBER}"
+          echo "Published rolling Android test build with versionCode ${GITHUB_RUN_NUMBER}"
 
   ios:
     name: iOS Feather-compatible IPA
@@ -177,15 +174,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          SHORT_SHA="${GITHUB_SHA::7}"
-          UNIQUE="BalancePoint-iOS-r${GITHUB_RUN_NUMBER}-${SHORT_SHA}-unsigned.ipa"
-          cp BalancePoint-latest-unsigned.ipa "$UNIQUE"
           if gh release view dev-build >/dev/null 2>&1; then
-            gh release upload dev-build BalancePoint-latest-unsigned.ipa "$UNIQUE" --clobber
+            gh release upload dev-build BalancePoint-latest-unsigned.ipa --clobber
           else
-            gh release create dev-build BalancePoint-latest-unsigned.ipa "$UNIQUE" \
+            gh release create dev-build BalancePoint-latest-unsigned.ipa \
               --title "Latest Test Builds" \
               --notes "Automatically updated Android and iOS development builds from main." \
               --prerelease
           fi
-          echo "Published iOS build $UNIQUE with CFBundleVersion ${GITHUB_RUN_NUMBER}"
+          echo "Published rolling iOS test build with CFBundleVersion ${GITHUB_RUN_NUMBER}"
