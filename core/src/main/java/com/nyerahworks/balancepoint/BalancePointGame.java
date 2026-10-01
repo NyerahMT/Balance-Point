@@ -43,10 +43,14 @@ public final class BalancePointGame extends ApplicationAdapter {
     private static final float PITCH_INERTIA = 168f;
     // Unified wheel/terrain contact. Wheels generate forces continuously from local terrain
     // penetration and point velocity; wheelies, jumps and landings are results, not modes.
-    private static final float CONTACT_STIFFNESS = 52_000f;
-    private static final float CONTACT_DAMPING = 4_500f;
-    private static final float CONTACT_BUMP_START = 0.050f;
-    private static final float CONTACT_BUMP_STIFFNESS = 180_000f;
+    // Off-road suspension tune: softer spring, light compression damping so square edges do
+    // not kick the chassis upward, and stronger rebound damping so stored spring energy is
+    // dissipated instead of producing repeated pogo oscillations.
+    private static final float CONTACT_STIFFNESS = 44_000f;
+    private static final float CONTACT_COMPRESSION_DAMPING = 3_300f;
+    private static final float CONTACT_REBOUND_DAMPING = 6_800f;
+    private static final float CONTACT_BUMP_START = 0.060f;
+    private static final float CONTACT_BUMP_STIFFNESS = 115_000f;
     private static final float MAX_CONTACT_FORCE = MASS * GRAVITY * 10f;
     private static final float RIGID_PITCH_DAMPING = 0.45f;
     // Neutral combined bike+rider COM. 0.36 m above the axles plus the 0.337 m tire
@@ -423,13 +427,14 @@ public final class BalancePointGame extends ApplicationAdapter {
         boolean cameraTouch = false;
         boolean throttleTouch = false;
         boolean brakeTouch = false;
-        boolean leftArrowTouch = false;
-        boolean rightArrowTouch = false;
+        boolean controlBoxTouch = false;
         boolean shiftDownTouch = false;
         boolean shiftUpTouch = false;
         boolean lookTouch = false;
         float requestedThrottle = 0f;
         float requestedBrake = 0f;
+        float requestedSteer = 0f;
+        float requestedLean = 0f;
 
         for (int pointer = 0; pointer < 8; pointer++) {
             if (!Gdx.input.isTouched(pointer)) continue;
@@ -454,12 +459,13 @@ public final class BalancePointGame extends ApplicationAdapter {
                 requestedBrake = Math.max(requestedBrake, brake);
                 continue;
             }
-            if (x >= 0.03f && x < 0.16f && y > 0.66f && y < 0.91f) {
-                leftArrowTouch = true;
-                continue;
-            }
-            if (x >= 0.17f && x < 0.30f && y > 0.66f && y < 0.91f) {
-                rightArrowTouch = true;
+            // Rectangular two-axis rider control. Axes are independent rather than radial, so
+            // full steering and full fore/aft body movement can be commanded simultaneously.
+            // Input Y is top-origin: touching above center therefore maps to positive (forward) lean.
+            if (x >= 0.035f && x <= 0.295f && y >= 0.64f && y <= 0.94f) {
+                controlBoxTouch = true;
+                requestedSteer = applyAxisDeadzone(MathUtils.clamp((x - 0.165f) / 0.130f, -1f, 1f), 0.055f);
+                requestedLean = applyAxisDeadzone(MathUtils.clamp((0.790f - y) / 0.150f, -1f, 1f), 0.055f);
                 continue;
             }
             if (x >= 0.34f && x < 0.44f && y > 0.70f && y < 0.92f) {
@@ -501,21 +507,18 @@ public final class BalancePointGame extends ApplicationAdapter {
         previousThrottleTarget = newThrottleTarget;
         rearBrakeTarget = crashed ? 0f : (brakeTouch ? requestedBrake : 0f);
 
-        if (crashed || leftArrowTouch == rightArrowTouch) {
-            steerTarget = 0f;
-        } else {
-            steerTarget = leftArrowTouch ? 1.0f : -1.0f;
-        }
-
-        riderLean = 0f;
-        riderLeanTarget = 0f;
+        steerTarget = crashed || !controlBoxTouch ? 0f : requestedSteer;
+        riderLeanTarget = crashed || !controlBoxTouch ? 0f : requestedLean;
         throttle = approach(throttle, throttleTarget,
                 (throttleTarget > throttle ? 10.5f : 12f) * dt);
         rearBrake = approach(rearBrake, rearBrakeTarget,
                 (rearBrakeTarget > rearBrake ? 24f : 22f) * dt);
 
-        float steerResponse = 1.65f + Math.min(speed * 0.018f, 0.55f);
+        float steerResponse = 2.8f + Math.min(Math.abs(speed) * 0.020f, 0.65f);
         steer += (steerTarget - steer) * Math.min(1f, dt * steerResponse);
+        // Body movement is deliberately slower than handlebar input, but still responsive
+        // enough to preload the bike before a crest or move forward under acceleration.
+        riderLean += (riderLeanTarget - riderLean) * Math.min(1f, dt * 5.2f);
 
         if (!looking) {
             lookYaw *= Math.max(0f, 1f - dt * 1.65f);
@@ -526,6 +529,13 @@ public final class BalancePointGame extends ApplicationAdapter {
     private static float approach(float value, float target, float amount) {
         if (value < target) return Math.min(value + amount, target);
         return Math.max(value - amount, target);
+    }
+
+    private static float applyAxisDeadzone(float value, float deadzone) {
+        float magnitude = Math.abs(value);
+        if (magnitude <= deadzone) return 0f;
+        float rescaled = (magnitude - deadzone) / (1f - deadzone);
+        return Math.signum(value) * MathUtils.clamp(rescaled, 0f, 1f);
     }
 
     private void simulate(float dt) {
@@ -646,11 +656,15 @@ public final class BalancePointGame extends ApplicationAdapter {
 
         // Apply contact forces at actual tire contact patches and integrate the resulting moment
         // about the COM. There is no wheelie/jump/landing torque branch here.
-        float rearContactForwardArm = rearForward
+        // Rider fore/aft input shifts the combined COM relative to both tire patches. Positive
+        // lean moves the COM forward, loading the front; negative lean moves it rearward. This
+        // changes force moments continuously instead of applying a scripted wheelie torque.
+        float comShiftForward = riderLean * RIDER_SHIFT;
+        float rearContactForwardArm = rearForward - comShiftForward
                 - WHEEL_RADIUS * rearContactState.normalForward;
         float rearContactVerticalArm = rearVertical
                 - WHEEL_RADIUS * rearContactState.normalUp;
-        float frontContactForwardArm = frontForward
+        float frontContactForwardArm = frontForward - comShiftForward
                 - WHEEL_RADIUS * frontContactState.normalForward;
         float frontContactVerticalArm = frontVertical
                 - WHEEL_RADIUS * frontContactState.normalUp;
@@ -746,8 +760,10 @@ public final class BalancePointGame extends ApplicationAdapter {
 
         float normalVelocity = pointForwardVelocity * out.normalForward
                 + pointVerticalVelocity * out.normalUp;
+        float damping = normalVelocity < 0f
+                ? CONTACT_COMPRESSION_DAMPING : CONTACT_REBOUND_DAMPING;
         float force = CONTACT_STIFFNESS * virtualCompression
-                - CONTACT_DAMPING * normalVelocity;
+                - damping * normalVelocity;
 
         float actualPenetration = Math.max(0f, -out.gap);
         if (actualPenetration > CONTACT_BUMP_START) {
@@ -1122,10 +1138,12 @@ public final class BalancePointGame extends ApplicationAdapter {
         float sliderTop = h * 0.52f;
         float brakeX = w * 0.755f;
         float brakeY = h * 0.17f;
-        float steerLeftX = w * 0.095f;
-        float steerRightX = w * 0.235f;
-        float steerY = h * 0.18f;
-        float steerR = min * 0.064f;
+        float controlLeft = w * 0.035f;
+        float controlBottom = h * 0.06f;
+        float controlWidth = w * 0.260f;
+        float controlHeight = h * 0.300f;
+        float controlCenterX = controlLeft + controlWidth * 0.5f;
+        float controlCenterY = controlBottom + controlHeight * 0.5f;
         float shiftDownX = w * 0.39f;
         float shiftUpX = w * 0.51f;
         float shiftY = h * 0.17f;
@@ -1150,20 +1168,21 @@ public final class BalancePointGame extends ApplicationAdapter {
         shapes.setColor(1f, 1f, 1f, 0.28f);
         shapes.circle(brakeX, brakeY, min * 0.025f, 20);
 
-        // Steering pads.
-        shapes.setColor(1f, 1f, 1f, steerTarget > 0.05f ? 0.30f : 0.075f);
-        shapes.circle(steerLeftX, steerY, steerR, 24);
-        shapes.setColor(1f, 1f, 1f, 0.35f);
-        shapes.triangle(steerLeftX - steerR * 0.34f, steerY,
-                steerLeftX + steerR * 0.20f, steerY + steerR * 0.34f,
-                steerLeftX + steerR * 0.20f, steerY - steerR * 0.34f);
+        // Independent rectangular steer/lean pad. Horizontal: left -1 / right +1.
+        // Vertical: backward -1 / forward +1. Unlike a circular stick, the corners permit
+        // simultaneous full steering and full body movement.
+        shapes.setColor(1f, 1f, 1f, 0.075f);
+        shapes.rect(controlLeft, controlBottom, controlWidth, controlHeight);
+        shapes.setColor(1f, 1f, 1f, 0.16f);
+        shapes.rect(controlCenterX - 1f, controlBottom, 2f, controlHeight);
+        shapes.rect(controlLeft, controlCenterY - 1f, controlWidth, 2f);
 
-        shapes.setColor(1f, 1f, 1f, steerTarget < -0.05f ? 0.30f : 0.075f);
-        shapes.circle(steerRightX, steerY, steerR, 24);
-        shapes.setColor(1f, 1f, 1f, 0.35f);
-        shapes.triangle(steerRightX + steerR * 0.34f, steerY,
-                steerRightX - steerR * 0.20f, steerY + steerR * 0.34f,
-                steerRightX - steerR * 0.20f, steerY - steerR * 0.34f);
+        float controlKnobX = controlCenterX + steerTarget * controlWidth * 0.5f;
+        float controlKnobY = controlCenterY + riderLeanTarget * controlHeight * 0.5f;
+        float knobHalf = min * 0.018f;
+        shapes.setColor(1f, 1f, 1f, 0.34f);
+        shapes.rect(controlKnobX - knobHalf, controlKnobY - knobHalf,
+                knobHalf * 2f, knobHalf * 2f);
 
         // Shift buttons.
         shapes.setColor(1f, 1f, 1f, shiftDownHeld ? 0.32f : 0.075f);
