@@ -4,7 +4,6 @@ import com.badlogic.gdx.ApplicationAdapter;
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.GL20;
-import com.badlogic.gdx.graphics.PerspectiveCamera;
 import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.VertexAttributes;
 import com.badlogic.gdx.graphics.g3d.Environment;
@@ -115,11 +114,10 @@ public final class BalancePointGame extends ApplicationAdapter {
     private final Matrix4 bikeRoot = new Matrix4();
     private final Matrix4 importedSteeringRoot = new Matrix4();
     private final Vector3 tempA = new Vector3();
-    private final Vector3 tempB = new Vector3();
     private final Vector3 tempC = new Vector3();
     private final MotorcycleDrivetrain drivetrain = new MotorcycleDrivetrain(WHEEL_RADIUS);
 
-    private PerspectiveCamera camera;
+    private GameCamera gameCamera;
     private ModelBatch modelBatch;
     private GameHud hud;
     private InstrumentDisplay instrumentDisplay;
@@ -199,10 +197,6 @@ public final class BalancePointGame extends ApplicationAdapter {
 
     private float lookYaw;
     private float lookPitch;
-    // Helmet pitch follows the bike's forward path, not chassis attitude or a fixed horizon.
-    // A damped angular state prevents suspension/terrain chatter from shaking the rider view.
-    private float helmetTrajectoryPitch;
-    private float helmetTrajectoryPitchVelocity;
     private boolean looking;
     private boolean cockpitCamera;
     private boolean cameraTouchHeld;
@@ -226,8 +220,6 @@ public final class BalancePointGame extends ApplicationAdapter {
     private boolean hasActiveRide;
     private boolean pauseTouchHeld;
     private boolean highQuality = true;
-    private float menuCameraZ;
-    private float menuCameraBobPhase;
 
     private static final class WheelContact {
         float normalForce;
@@ -259,13 +251,7 @@ public final class BalancePointGame extends ApplicationAdapter {
         highQuality = Gdx.app.getPreferences("balance-point")
                 .getBoolean("qualityHigh", true);
 
-        camera = new PerspectiveCamera(67f, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
-        camera.near = 0.08f;
-        camera.far = 900f;
-        camera.position.set(0f, 2.5f, -5.4f);
-        camera.lookAt(0f, 0.8f, 4f);
-        camera.update();
-
+        gameCamera = new GameCamera();
         resize(Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
 
         environment = new Environment();
@@ -459,7 +445,7 @@ public final class BalancePointGame extends ApplicationAdapter {
         }
         updateCamera(frameDt);
 
-        float worldCenterZ = gameState == GameState.MAIN_MENU ? menuCameraZ : bikeZ;
+        float worldCenterZ = gameCamera.worldCenterZ(bikeZ);
         updateWorldInstances(worldCenterZ);
 
         Gdx.gl.glViewport(0, 0, Gdx.graphics.getBackBufferWidth(), Gdx.graphics.getBackBufferHeight());
@@ -468,7 +454,7 @@ public final class BalancePointGame extends ApplicationAdapter {
 
         boolean shadowsEnabled = highQuality && gameState != GameState.MAIN_MENU;
         if (shadowsEnabled) {
-            shadowLight.begin(tempC.set(bikeX, bikeY + 0.65f, worldCenterZ), camera.direction);
+            shadowLight.begin(tempC.set(bikeX, bikeY + 0.65f, worldCenterZ), gameCamera.camera().direction);
             shadowBatch.begin(shadowLight.getCamera());
             renderBikeShadow();
             shadowBatch.end();
@@ -477,7 +463,7 @@ public final class BalancePointGame extends ApplicationAdapter {
         }
         environment.shadowMap = shadowsEnabled ? shadowLight : null;
 
-        modelBatch.begin(camera);
+        modelBatch.begin(gameCamera.camera());
         terrainVisuals.render(modelBatch, environment, worldCenterZ, highQuality);
         for (ModelInstance m : roadSegments) modelBatch.render(m, environment);
         for (ModelInstance m : shoulderLeft) modelBatch.render(m, environment);
@@ -716,21 +702,8 @@ public final class BalancePointGame extends ApplicationAdapter {
         physicsAccumulator = 0.0;
         pauseTouchHeld = false;
         cameraTouchHeld = false;
-        menuCameraZ = MathUtils.random(-100f, 5000f);
-        menuCameraBobPhase = MathUtils.random(0f, MathUtils.PI2);
+        if (gameCamera != null) gameCamera.enterMainMenu();
         if (engineAudio != null) engineAudio.setActive(false);
-    }
-
-    private void updateMenuCamera(float dt) {
-        menuCameraZ += dt * 5.5f;
-        if (menuCameraZ > 5200f) menuCameraZ = -120f;
-        menuCameraBobPhase += dt * 0.42f;
-        float cameraY = 1.22f + MathUtils.sin(menuCameraBobPhase) * 0.028f;
-        camera.position.set(0f, cameraY, menuCameraZ);
-        camera.up.set(Vector3.Y);
-        camera.lookAt(0f, 0.52f, menuCameraZ + 15f);
-        camera.fieldOfView = 64f;
-        camera.update();
     }
 
     private static float approach(float value, float target, float amount) {
@@ -1237,7 +1210,7 @@ private void solveWheelContact(WheelContact out, float worldX, float wheelY, flo
         steer = steerTarget = 0f;
         riderLean = riderLeanTarget = 0f;
         lookYaw = lookPitch = 0f;
-        helmetTrajectoryPitch = helmetTrajectoryPitchVelocity = 0f;
+        if (gameCamera != null) gameCamera.resetRide();
         shiftDownHeld = shiftUpHeld = false;
         drivetrain.reset();
         frontGrounded = true;
@@ -1394,92 +1367,25 @@ private void solveWheelContact(WheelContact out, float worldX, float wheelY, flo
     }
 
     private void updateCamera(float dt) {
-        if (gameState == GameState.MAIN_MENU) {
-            updateMenuCamera(dt);
-            return;
-        }
-
-        float viewYaw = yaw + lookYaw;
-        float sinView = MathUtils.sin(viewYaw);
-        float cosView = MathUtils.cos(viewYaw);
-
-        if (cockpitCamera) {
-            // Slightly lower/rearward helmet viewpoint for a more natural rider eye position.
-            float helmetY = importedBikeLoaded ? 1.16f : 1.30f;
-            float helmetZ = importedBikeLoaded ? 0.60f : (0.52f + riderLean * 0.10f);
-            tempA.set(0f, helmetY, helmetZ).mul(bikeRoot);
-            camera.position.set(tempA);
-
-            // Look along the bike's FORWARD TRAJECTORY rather than locking pitch to either
-            // the horizon or chassis. Grounded trajectory follows the locally averaged grade;
-            // in flight it follows the ballistic velocity vector. A critically damped angular
-            // state keeps suspension motion from turning into helmet-camera shake.
-            float trajectoryPitchTarget;
-            if (terrainAirborne) {
-                trajectoryPitchTarget = (float) Math.atan2(verticalVelocity,
-                        Math.max(1.5f, Math.abs(speed)));
-            } else if (terrainVisuals != null) {
-                float pathSlopeX = terrainVisuals.groundSlopeX(bikeX, bikeZ);
-                float pathSlopeZ = terrainVisuals.groundSlopeZ(bikeX, bikeZ);
-                float pathGrade = pathSlopeX * MathUtils.sin(yaw)
-                        + pathSlopeZ * MathUtils.cos(yaw);
-                trajectoryPitchTarget = (float) Math.atan(pathGrade);
-            } else {
-                trajectoryPitchTarget = 0f;
-            }
-            float cameraPitchFrequency = 6.2f;
-            float cameraPitchDamping = 1.08f;
-            float cameraPitchAccel = (trajectoryPitchTarget - helmetTrajectoryPitch)
-                    * cameraPitchFrequency * cameraPitchFrequency
-                    - 2f * cameraPitchDamping * cameraPitchFrequency
-                    * helmetTrajectoryPitchVelocity;
-            helmetTrajectoryPitchVelocity += cameraPitchAccel * dt;
-            helmetTrajectoryPitch += helmetTrajectoryPitchVelocity * dt;
-            float viewPitch = MathUtils.clamp(helmetTrajectoryPitch + lookPitch,
-                    -60f * MathUtils.degreesToRadians, 60f * MathUtils.degreesToRadians);
-            float cp = MathUtils.cos(viewPitch);
-            camera.direction.set(MathUtils.sin(viewYaw) * cp,
-                    MathUtils.sin(viewPitch), MathUtils.cos(viewYaw) * cp).nor();
-
-            // Do not resample raw terrain under the camera. The chassis already carries
-            // critically damped roll plus filtered sidehill support bank; re-reading a single
-            // terrain cell here was the last source of the old sideways helmet-camera twitch.
-            float cameraBank = roll + terrainRoll;
-            tempB.set(camera.direction).crs(Vector3.Y).nor();
-            camera.up.set(tempB).crs(camera.direction).nor()
-                    .rotate(camera.direction, cameraBank * MathUtils.radiansToDegrees).nor();
-            camera.fieldOfView = 80f;
-        } else {
-            // Compact chase camera: keep a fixed physical distance from the bike and use
-            // FOV, not camera pull-back, to communicate speed. The old slow lerp created
-            // a velocity-dependent trailing error that made the camera drift farther away
-            // the faster the bike travelled.
-            float orbitPitch = MathUtils.clamp(lookPitch, -22f * MathUtils.degreesToRadians,
-                    24f * MathUtils.degreesToRadians);
-            float chaseDistance = 3.90f;
-            float horizontalDistance = chaseDistance * MathUtils.cos(orbitPitch);
-            float desiredHeight = bikeY + 1.57f + chaseDistance * MathUtils.sin(orbitPitch);
-            tempA.set(bikeX - sinView * horizontalDistance,
-                    Math.max(0.82f, desiredHeight),
-                    bikeZ - cosView * horizontalDistance);
-
-            // At speed the camera nearly locks to the desired rig position so relative
-            // distance stays constant. At low speed a little smoothing keeps U-turns and
-            // orbit input from looking robotic.
-            float followResponse = Math.min(1f, dt * (11.5f + speed * 1.35f));
-            camera.position.lerp(tempA, followResponse);
-
-            float targetLead = 1.15f;
-            tempB.set(bikeX + MathUtils.sin(yaw) * targetLead,
-                    bikeY + 0.57f + MathUtils.sin(pitch) * 0.42f,
-                    bikeZ + MathUtils.cos(yaw) * targetLead);
-            camera.up.set(Vector3.Y);
-            camera.lookAt(tempB);
-
-            float speedFov = MathUtils.clamp(speed / 38f, 0f, 1f);
-            camera.fieldOfView = MathUtils.lerp(68f, 76f, speedFov);
-        }
-        camera.update();
+        GameCamera.State state = gameCamera.state();
+        state.gameState = gameState;
+        state.bikeRoot = bikeRoot;
+        state.importedBikeLoaded = importedBikeLoaded;
+        state.terrainAirborne = terrainAirborne;
+        state.cockpitCamera = cockpitCamera;
+        state.bikeX = bikeX;
+        state.bikeY = bikeY;
+        state.bikeZ = bikeZ;
+        state.speed = speed;
+        state.verticalVelocity = verticalVelocity;
+        state.pitch = pitch;
+        state.roll = roll;
+        state.yaw = yaw;
+        state.terrainRoll = terrainRoll;
+        state.riderLean = riderLean;
+        state.lookYaw = lookYaw;
+        state.lookPitch = lookPitch;
+        gameCamera.update(dt, terrainVisuals);
     }
 
     private void renderBikeShadow() {
@@ -1558,11 +1464,7 @@ private void solveWheelContact(WheelContact out, float worldX, float wheelY, flo
 
     @Override
     public void resize(int width, int height) {
-        if (camera != null) {
-            camera.viewportWidth = Math.max(1, width);
-            camera.viewportHeight = Math.max(1, height);
-            camera.update();
-        }
+        if (gameCamera != null) gameCamera.resize(width, height);
         if (hud != null) hud.resize(width, height);
     }
 
