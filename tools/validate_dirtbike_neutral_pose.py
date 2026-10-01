@@ -17,7 +17,7 @@ bin_chunk = ns["bin_chunk"]
 read_positions = ns["read_positions"]
 transform_point = ns["transform_point"]
 
-# BalancePointGame raises BikeRoot by 0.31 m. The loader gets exactly one
+# GameScene raises BikeRoot by 0.31 m. The loader gets exactly one
 # scene-wide translation so the source rear tire touches that existing ground
 # convention. Every moving-part pivot is derived only after this rigid move.
 GAME_ROOT_LIFT = 0.31
@@ -192,8 +192,8 @@ loader = Path(
 facade = Path(
     "core/src/main/java/com/nyerahworks/balancepoint/DirtBikeMeshLoader.java"
 ).read_text(encoding="utf-8")
-game = Path(
-    "core/src/main/java/com/nyerahworks/balancepoint/BalancePointGame.java"
+scene = Path(
+    "core/src/main/java/com/nyerahworks/balancepoint/GameScene.java"
 ).read_text(encoding="utf-8")
 model_dir = Path("app/src/main/assets/models")
 
@@ -207,7 +207,7 @@ required = (
     ".rotate(importedBike.steeringAxis, visualSteerDeg)",
     "tempA.set(importedBike.frontAxleOffset).sub(importedBike.steeringHead)",
 )
-combined = loader + "\n" + facade + "\n" + game
+combined = loader + "\n" + facade + "\n" + scene
 for snippet in required:
     if snippet not in combined:
         raise SystemExit(f"Missing source-derived rig invariant: {snippet}")
