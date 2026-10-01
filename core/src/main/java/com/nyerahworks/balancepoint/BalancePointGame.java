@@ -17,6 +17,7 @@ import com.badlogic.gdx.graphics.g3d.Model;
 import com.badlogic.gdx.graphics.g3d.ModelBatch;
 import com.badlogic.gdx.graphics.g3d.ModelInstance;
 import com.badlogic.gdx.graphics.g3d.attributes.ColorAttribute;
+import com.badlogic.gdx.graphics.g3d.attributes.IntAttribute;
 import com.badlogic.gdx.graphics.g3d.attributes.TextureAttribute;
 import com.badlogic.gdx.graphics.g3d.environment.DirectionalLight;
 import com.badlogic.gdx.graphics.g3d.utils.ModelBuilder;
@@ -258,6 +259,9 @@ public final class BalancePointGame extends ApplicationAdapter {
         dashTextureAttribute.scaleV = -1f;
         Material dashScreenMat = new Material(dashTextureAttribute,
                 ColorAttribute.createDiffuse(Color.WHITE));
+        // The UV-corrected quad faces the opposite winding from the generated bike geometry.
+        // Keep the LCD double-sided so global back-face culling cannot make it disappear.
+        dashScreenMat.set(IntAttribute.createCullFace(GL20.GL_NONE));
 
         Model wheel = cylinder(b, WHEEL_RADIUS * 2f, 0.13f, WHEEL_RADIUS * 2f, 14, tire);
         Model hub = cylinder(b, 0.19f, 0.145f, 0.19f, 12, metal);
@@ -449,7 +453,7 @@ public final class BalancePointGame extends ApplicationAdapter {
         if (crashed || leftArrowTouch == rightArrowTouch) {
             steerTarget = 0f;
         } else {
-            steerTarget = leftArrowTouch ? 0.65f : -0.65f;
+            steerTarget = leftArrowTouch ? 1.0f : -1.0f;
         }
 
         riderLean = 0f;
@@ -552,8 +556,11 @@ public final class BalancePointGame extends ApplicationAdapter {
             }
         }
 
+        // Dirt-bike steering needs real low-speed lock for switchbacks/U-turns, while
+        // high-speed steering must remain small enough to stay controllable.
         float speedBlend = MathUtils.clamp(speed / 30f, 0f, 1f);
-        float maxSteerDeg = MathUtils.lerp(16f, 4.5f, speedBlend);
+        speedBlend = speedBlend * speedBlend * (3f - 2f * speedBlend);
+        float maxSteerDeg = MathUtils.lerp(34f, 5.0f, speedBlend);
         float steerAngle = steer * maxSteerDeg * MathUtils.degreesToRadians;
         float steeringAuthority = frontGrounded ? 1f : 0.14f;
         float yawRate = speed > 0.35f
@@ -566,7 +573,7 @@ public final class BalancePointGame extends ApplicationAdapter {
         float lateralAcceleration = speed * yawRate;
         float rollTarget = -(float) Math.atan2(lateralAcceleration, GRAVITY);
         rollTarget = MathUtils.clamp(rollTarget,
-                -46f * MathUtils.degreesToRadians, 46f * MathUtils.degreesToRadians);
+                -60f * MathUtils.degreesToRadians, 60f * MathUtils.degreesToRadians);
         float rollResponse = frontGrounded ? 3.0f : 1.65f;
         roll += (rollTarget - roll) * Math.min(1f, dt * rollResponse);
 
@@ -582,8 +589,11 @@ public final class BalancePointGame extends ApplicationAdapter {
             wheelieTime = 0f;
         }
 
-        if (pitch > LOOP_ANGLE || Math.abs(bikeX) > ROAD_HALF_WIDTH + 10f
-                || Float.isNaN(pitch) || Float.isNaN(speed) || Float.isNaN(yaw)) {
+        // Leaving the road is not a crash. The old lateral boundary check made any
+        // committed turn or U-turn eventually trigger an artificial game-over.
+        if (pitch > LOOP_ANGLE
+                || Float.isNaN(pitch) || Float.isNaN(speed) || Float.isNaN(yaw)
+                || Float.isNaN(roll) || Float.isNaN(bikeX) || Float.isNaN(bikeZ)) {
             beginCrash();
         }
     }
@@ -770,8 +780,9 @@ public final class BalancePointGame extends ApplicationAdapter {
             importedBike.rearWheel.transform.set(bikeRoot)
                     .translate(importedBike.rearAxleOffset)
                     .rotate(Vector3.X, importedSpinDeg);
-            float visualSteerDeg = -steer * MathUtils.lerp(13f, 5f,
-                    MathUtils.clamp(speed / 30f, 0f, 1f));
+            float visualSteerBlend = MathUtils.clamp(speed / 30f, 0f, 1f);
+            visualSteerBlend = visualSteerBlend * visualSteerBlend * (3f - 2f * visualSteerBlend);
+            float visualSteerDeg = -steer * MathUtils.lerp(28f, 5f, visualSteerBlend);
             importedSteeringRoot.set(bikeRoot)
                     .translate(importedBike.steeringHead)
                     .rotate(importedBike.steeringAxis, visualSteerDeg);
