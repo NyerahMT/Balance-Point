@@ -65,7 +65,10 @@ public final class BalancePointGame extends ApplicationAdapter {
             * (WHEELBASE - COM_FORWARD) / WHEELBASE / CONTACT_STIFFNESS;
     private static final float FRONT_CONTACT_PRELOAD = MASS * GRAVITY
             * COM_FORWARD / WHEELBASE / CONTACT_STIFFNESS;
-    private static final float RIDER_SHIFT = 0.14f;
+    // Maximum fore/aft shift of the combined bike+rider COM from rider body movement.
+    // About 180 mm gives meaningful weight transfer while staying plausible for a rider
+    // moving between the tank and rear of the seat.
+    private static final float RIDER_SHIFT = 0.18f;
 
     private static final float TIRE_MU = 1.05f;
     private static final float MAX_ENGINE_FORCE = 2500f;
@@ -549,11 +552,16 @@ public final class BalancePointGame extends ApplicationAdapter {
         float sinPitch = MathUtils.sin(pitch);
         float cosPitch = MathUtils.cos(pitch);
 
-        // Axle locations relative to the COM, expressed in the forward/up plane.
-        float rearForward = -COM_FORWARD * cosPitch + COM_HEIGHT * sinPitch;
-        float rearVertical = -COM_FORWARD * sinPitch - COM_HEIGHT * cosPitch;
-        float frontForward = (WHEELBASE - COM_FORWARD) * cosPitch + COM_HEIGHT * sinPitch;
-        float frontVertical = (WHEELBASE - COM_FORWARD) * sinPitch - COM_HEIGHT * cosPitch;
+        // Axle locations relative to the CURRENT combined COM. Positive rider lean moves
+        // the mass forward; negative lean moves it rearward. Contact geometry, velocities
+        // and force moments all use the same shifted COM instead of applying a late torque
+        // correction after wheel contact has already been solved.
+        float effectiveComForward = MathUtils.clamp(COM_FORWARD + riderLean * RIDER_SHIFT,
+                0.48f, 0.88f);
+        float rearForward = -effectiveComForward * cosPitch + COM_HEIGHT * sinPitch;
+        float rearVertical = -effectiveComForward * sinPitch - COM_HEIGHT * cosPitch;
+        float frontForward = (WHEELBASE - effectiveComForward) * cosPitch + COM_HEIGHT * sinPitch;
+        float frontVertical = (WHEELBASE - effectiveComForward) * sinPitch - COM_HEIGHT * cosPitch;
 
         float rearX = bikeX + sinYaw * rearForward;
         float rearZ = bikeZ + cosYaw * rearForward;
@@ -654,17 +662,14 @@ public final class BalancePointGame extends ApplicationAdapter {
             wheelReactionTorque = actualAngularAcceleration * REAR_WHEEL_INERTIA;
         }
 
-        // Apply contact forces at actual tire contact patches and integrate the resulting moment
-        // about the COM. There is no wheelie/jump/landing torque branch here.
-        // Rider fore/aft input shifts the combined COM relative to both tire patches. Positive
-        // lean moves the COM forward, loading the front; negative lean moves it rearward. This
-        // changes force moments continuously instead of applying a scripted wheelie torque.
-        float comShiftForward = riderLean * RIDER_SHIFT;
-        float rearContactForwardArm = rearForward - comShiftForward
+        // Apply contact forces at the actual tire contact patches and integrate the resulting
+        // moment about the already-shifted COM. No second COM offset is applied here: axle
+        // geometry above already contains the rider weight transfer.
+        float rearContactForwardArm = rearForward
                 - WHEEL_RADIUS * rearContactState.normalForward;
         float rearContactVerticalArm = rearVertical
                 - WHEEL_RADIUS * rearContactState.normalUp;
-        float frontContactForwardArm = frontForward - comShiftForward
+        float frontContactForwardArm = frontForward
                 - WHEEL_RADIUS * frontContactState.normalForward;
         float frontContactVerticalArm = frontVertical
                 - WHEEL_RADIUS * frontContactState.normalUp;
@@ -702,7 +707,9 @@ public final class BalancePointGame extends ApplicationAdapter {
         float speedBlend = MathUtils.clamp(speed / 30f, 0f, 1f);
         speedBlend = speedBlend * speedBlend * (3f - 2f * speedBlend);
         float maxSteerDeg = MathUtils.lerp(34f, 5.0f, speedBlend);
-        float steerAngle = steer * maxSteerDeg * MathUtils.degreesToRadians;
+        // UI/control convention is X<0 left, X>0 right. The world yaw convention used by
+        // this prototype is opposite, so convert once here rather than reversing the pad axis.
+        float steerAngle = -steer * maxSteerDeg * MathUtils.degreesToRadians;
         float frontAuthority = MathUtils.clamp(frontContactState.normalForce
                 / (MASS * GRAVITY * 0.32f), 0f, 1f);
         float yawRate = speed > 0.35f
@@ -986,7 +993,9 @@ public final class BalancePointGame extends ApplicationAdapter {
                     .rotate(Vector3.X, importedSpinDeg);
             float visualSteerBlend = MathUtils.clamp(speed / 30f, 0f, 1f);
             visualSteerBlend = visualSteerBlend * visualSteerBlend * (3f - 2f * visualSteerBlend);
-            float visualSteerDeg = -steer * MathUtils.lerp(28f, 5f, visualSteerBlend);
+            // Match the imported fork/wheel to the same left-negative/right-positive control
+            // convention used by the rectangular pad.
+            float visualSteerDeg = steer * MathUtils.lerp(28f, 5f, visualSteerBlend);
             importedSteeringRoot.set(bikeRoot)
                     .translate(importedBike.steeringHead)
                     .rotate(importedBike.steeringAxis, visualSteerDeg);
@@ -1013,8 +1022,9 @@ public final class BalancePointGame extends ApplicationAdapter {
         float cosView = MathUtils.cos(viewYaw);
 
         if (cockpitCamera) {
-            float helmetY = importedBikeLoaded ? 1.22f : 1.36f;
-            float helmetZ = importedBikeLoaded ? 0.66f : (0.58f + riderLean * 0.10f);
+            // Slightly lower/rearward helmet viewpoint for a more natural rider eye position.
+            float helmetY = importedBikeLoaded ? 1.16f : 1.30f;
+            float helmetZ = importedBikeLoaded ? 0.60f : (0.52f + riderLean * 0.10f);
             tempA.set(0f, helmetY, helmetZ).mul(bikeRoot);
             camera.position.set(tempA);
 
