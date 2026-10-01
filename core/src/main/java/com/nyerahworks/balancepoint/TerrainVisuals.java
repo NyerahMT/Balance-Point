@@ -52,6 +52,11 @@ final class TerrainVisuals {
     private final int[] terrainWorldIndex = new int[SEGMENTS];
     private final ModelInstance[] trees = new ModelInstance[SEGMENTS * TREES_PER_SEGMENT * 2];
     private final ModelInstance[] trunks = new ModelInstance[SEGMENTS * TREES_PER_SEGMENT * 2];
+    // Hidden vegetation used to remain in the render submission list at Y=-1000. Track
+    // visibility explicitly so it costs zero draw submissions, and retain world Z for the
+    // Low-quality distance/density cull without touching gameplay or terrain geometry.
+    private final boolean[] treeActive = new boolean[SEGMENTS * TREES_PER_SEGMENT * 2];
+    private final float[] treeWorldZ = new float[SEGMENTS * TREES_PER_SEGMENT * 2];
 
     private int mapWidth;
     private int mapHeight;
@@ -362,9 +367,13 @@ final class TerrainVisuals {
                 .scale(scale, scale, scale);
         trees[index].transform.setToTranslation(x, ground + 4.15f * scale, treeZ)
                 .scale(scale, scale, scale);
+        treeActive[index] = true;
+        treeWorldZ[index] = treeZ;
     }
 
     private void hideTree(int index) {
+        treeActive[index] = false;
+        treeWorldZ[index] = 0f;
         trunks[index].transform.setToTranslation(0f, -1000f, 0f);
         trees[index].transform.setToTranslation(0f, -1000f, 0f);
     }
@@ -377,12 +386,25 @@ final class TerrainVisuals {
         return (x & 0x7fffffff) / (float) 0x7fffffff;
     }
 
-    void render(ModelBatch batch, Environment environment) {
+    void render(ModelBatch batch, Environment environment, float centerZ, boolean highQuality) {
         for (ModelInstance instance : terrainInstances) {
             if (instance != null) batch.render(instance, environment);
         }
-        for (ModelInstance m : trunks) batch.render(m, environment);
-        for (ModelInstance m : trees) batch.render(m, environment);
+
+        final float lowTreeDistance = 145f;
+        final float lowFullDensityDistance = 78f;
+        for (int i = 0; i < trees.length; i++) {
+            if (!treeActive[i]) continue;
+            if (!highQuality) {
+                float distance = Math.abs(treeWorldZ[i] - centerZ);
+                if (distance > lowTreeDistance) continue;
+                // Keep the nearby riding envelope fully populated, then halve density in the
+                // middle distance where the weak mobile GPU benefits far more than the eye notices.
+                if (distance > lowFullDensityDistance && (i & 1) != 0) continue;
+            }
+            batch.render(trunks[i], environment);
+            batch.render(trees[i], environment);
+        }
     }
 
     void dispose() {

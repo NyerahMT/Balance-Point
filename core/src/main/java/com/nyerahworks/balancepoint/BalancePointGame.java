@@ -236,6 +236,7 @@ public final class BalancePointGame extends ApplicationAdapter {
     private GameState gameState = GameState.MAIN_MENU;
     private boolean hasActiveRide;
     private boolean pauseTouchHeld;
+    private boolean highQuality = true;
     private float menuCameraZ;
     private float menuCameraBobPhase;
 
@@ -267,6 +268,8 @@ private final WheelContact frontPostContact = new WheelContact();
         shapes = new ShapeRenderer();
         font = new BitmapFont();
         engineAudio = new EngineAudio();
+        highQuality = Gdx.app.getPreferences("balance-point")
+                .getBoolean("qualityHigh", true);
 
         camera = new PerspectiveCamera(67f, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
         camera.near = 0.08f;
@@ -288,7 +291,10 @@ private final WheelContact frontPostContact = new WheelContact();
         shadowLight.getDepthMap().minFilter = Texture.TextureFilter.Linear;
         shadowLight.getDepthMap().magFilter = Texture.TextureFilter.Linear;
         environment.add(shadowLight);
-        environment.shadowMap = shadowLight;
+        // Shadow sampling is attached only while High quality is actively rendering gameplay.
+        // The directional light itself remains in the Environment in both modes, preserving
+        // the same scene lighting while Low avoids both the depth pass and shadow shader cost.
+        environment.shadowMap = null;
         shadowBatch = new ModelBatch(new DepthShaderProvider());
 
         createWorldModels();
@@ -477,17 +483,19 @@ private final WheelContact frontPostContact = new WheelContact();
         Gdx.gl.glClearColor(0.58f, 0.72f, 0.80f, 1f);
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT | GL20.GL_DEPTH_BUFFER_BIT);
 
-        float shadowX = gameState == GameState.MAIN_MENU ? 0f : bikeX;
-        float shadowY = gameState == GameState.MAIN_MENU ? 0.65f : bikeY + 0.65f;
-        shadowLight.begin(tempC.set(shadowX, shadowY, worldCenterZ), camera.direction);
-        shadowBatch.begin(shadowLight.getCamera());
-        if (gameState != GameState.MAIN_MENU) renderBikeShadow();
-        shadowBatch.end();
-        shadowLight.end();
-        Gdx.gl.glViewport(0, 0, Gdx.graphics.getBackBufferWidth(), Gdx.graphics.getBackBufferHeight());
+        boolean shadowsEnabled = highQuality && gameState != GameState.MAIN_MENU;
+        if (shadowsEnabled) {
+            shadowLight.begin(tempC.set(bikeX, bikeY + 0.65f, worldCenterZ), camera.direction);
+            shadowBatch.begin(shadowLight.getCamera());
+            renderBikeShadow();
+            shadowBatch.end();
+            shadowLight.end();
+            Gdx.gl.glViewport(0, 0, Gdx.graphics.getBackBufferWidth(), Gdx.graphics.getBackBufferHeight());
+        }
+        environment.shadowMap = shadowsEnabled ? shadowLight : null;
 
         modelBatch.begin(camera);
-        terrainVisuals.render(modelBatch, environment);
+        terrainVisuals.render(modelBatch, environment, worldCenterZ, highQuality);
         for (ModelInstance m : roadSegments) modelBatch.render(m, environment);
         for (ModelInstance m : shoulderLeft) modelBatch.render(m, environment);
         for (ModelInstance m : shoulderRight) modelBatch.render(m, environment);
@@ -631,6 +639,12 @@ private final WheelContact frontPostContact = new WheelContact();
         float bx = w * 0.075f;
         float bw = w * 0.30f;
         float bh = h * 0.085f;
+        float qualityY = h * 0.155f;
+
+        if (inside(x, y, bx, qualityY, bw, bh)) {
+            toggleQuality();
+            return;
+        }
 
         if (hasActiveRide) {
             if (inside(x, y, bx, h * 0.36f, bw, bh)) {
@@ -662,6 +676,15 @@ private final WheelContact frontPostContact = new WheelContact();
 
     private static boolean inside(float px, float py, float x, float y, float w, float h) {
         return px >= x && px <= x + w && py >= y && py <= y + h;
+    }
+
+    private void toggleQuality() {
+        highQuality = !highQuality;
+        Gdx.app.getPreferences("balance-point")
+                .putBoolean("qualityHigh", highQuality)
+                .flush();
+        // Do not leave a stale shadow map attached for even one frame after switching Low.
+        if (!highQuality && environment != null) environment.shadowMap = null;
     }
 
     private void startNewRide() {
@@ -1576,6 +1599,7 @@ private void solveWheelContact(WheelContact out, float worldX, float wheelY, flo
         } else {
             drawUiButtonShape(bx, h * 0.285f, bw, bh, true);
         }
+        drawUiButtonShape(bx, h * 0.155f, bw, bh, false);
         shapes.end();
 
         spriteBatch.setProjectionMatrix(uiCamera.combined);
@@ -1595,6 +1619,9 @@ private void solveWheelContact(WheelContact out, float worldX, float wheelY, flo
         } else {
             font.draw(spriteBatch, "RIDE", bx + bw * 0.10f, h * 0.285f + bh * 0.61f);
         }
+        font.setColor(1f, 1f, 1f, 0.82f);
+        font.draw(spriteBatch, highQuality ? "QUALITY   HIGH" : "QUALITY   LOW",
+                bx + bw * 0.10f, h * 0.155f + bh * 0.61f);
         spriteBatch.end();
     }
 
