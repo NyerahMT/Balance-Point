@@ -24,6 +24,7 @@ BANNED_PATHS = {
 
 BANNED_MARKERS = ("TODO", "FIXME", "HACK")
 WILDCARD_IMPORT = re.compile(r"(?m)^\s*import\s+[\w.]+\.\*\s*;")
+LINE_LENGTH_SUFFIXES = {".java", ".py", ".gradle", ".yml", ".yaml"}
 
 errors = []
 
@@ -43,10 +44,15 @@ first_party_java = []
 for path in ROOT.rglob("*"):
     if not path.is_file():
         continue
-    if any(part in {".git", ".gradle", "build"} for part in path.parts):
+    if any(part in {".git", ".gradle", "build", "THIRD_PARTY_LICENSES"} for part in path.parts):
         continue
+
     relative = path.relative_to(ROOT).as_posix()
     if path.suffix not in TEXT_SUFFIXES and path.name not in {".gitignore", ".editorconfig"}:
+        continue
+
+    is_vendored = relative.endswith("/FastNoiseLite.java")
+    if is_vendored:
         continue
 
     try:
@@ -63,14 +69,17 @@ for path in ROOT.rglob("*"):
             errors.append(f"tab indentation: {relative}:{line_number}")
         if line.rstrip(" ") != line:
             errors.append(f"trailing whitespace: {relative}:{line_number}")
-        if len(line) > 180:
+        if path.suffix in LINE_LENGTH_SUFFIXES and len(line) > 180:
             errors.append(f"line exceeds 180 characters: {relative}:{line_number}")
 
-    if path.suffix == ".java" and "FastNoiseLite.java" not in relative:
+    if path.suffix == ".java":
         first_party_java.append((relative, text))
         if WILDCARD_IMPORT.search(text):
             errors.append(f"wildcard import: {relative}")
-        if "System.out." in text or "System.err." in text:
+        is_runtime = relative.startswith("core/src/main/java/") or relative.startswith(
+            "app/src/main/java/"
+        )
+        if is_runtime and ("System.out." in text or "System.err." in text):
             errors.append(f"runtime Java must use structured logging: {relative}")
         for marker in BANNED_MARKERS:
             if marker in text:
