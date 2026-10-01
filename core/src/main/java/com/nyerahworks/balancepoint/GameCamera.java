@@ -53,6 +53,10 @@ final class GameCamera {
         return state;
     }
 
+    float worldCenterZ(float rideZ) {
+        return state.gameState == GameState.MAIN_MENU ? menuCameraZ : rideZ;
+    }
+
     void resize(int width, int height) {
         camera.viewportWidth = Math.max(1, width);
         camera.viewportHeight = Math.max(1, height);
