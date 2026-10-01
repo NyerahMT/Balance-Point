@@ -46,13 +46,16 @@ public final class BalancePointGame extends ApplicationAdapter {
     // Off-road suspension tune: softer spring, light compression damping so square edges do
     // not kick the chassis upward, and stronger rebound damping so stored spring energy is
     // dissipated instead of producing repeated pogo oscillations.
-    private static final float CONTACT_STIFFNESS = 44_000f;
-    private static final float CONTACT_COMPRESSION_DAMPING = 3_300f;
-    private static final float CONTACT_REBOUND_DAMPING = 6_800f;
-    private static final float CONTACT_BUMP_START = 0.060f;
-    private static final float CONTACT_BUMP_STIFFNESS = 115_000f;
-    private static final float MAX_CONTACT_FORCE = MASS * GRAVITY * 10f;
-    private static final float RIGID_PITCH_DAMPING = 0.45f;
+    private static final float CONTACT_STIFFNESS = 43_000f;
+    private static final float CONTACT_COMPRESSION_DAMPING = 3_600f;
+    // High-speed damping is quadratic in compression velocity: ordinary bumps stay compliant,
+    // but drop landings shed far more kinetic energy instead of storing it in the spring.
+    private static final float CONTACT_HIGH_SPEED_COMPRESSION = 650f;
+    private static final float CONTACT_REBOUND_DAMPING = 8_600f;
+    private static final float CONTACT_BUMP_START = 0.075f;
+    private static final float CONTACT_BUMP_STIFFNESS = 68_000f;
+    private static final float MAX_CONTACT_FORCE = MASS * GRAVITY * 9f;
+    private static final float RIGID_PITCH_DAMPING = 1.35f;
     // Neutral combined bike+rider COM. 0.36 m above the axles plus the 0.337 m tire
     // radius puts the system COM about 0.70 m above level ground. 0.67 m forward of the
     // rear axle yields a believable ~55/45 rear/front static load split.
@@ -767,14 +770,21 @@ public final class BalancePointGame extends ApplicationAdapter {
 
         float normalVelocity = pointForwardVelocity * out.normalForward
                 + pointVerticalVelocity * out.normalUp;
-        float damping = normalVelocity < 0f
-                ? CONTACT_COMPRESSION_DAMPING : CONTACT_REBOUND_DAMPING;
-        float force = CONTACT_STIFFNESS * virtualCompression
-                - damping * normalVelocity;
+        float force = CONTACT_STIFFNESS * virtualCompression;
+        if (normalVelocity < 0f) {
+            float compressionSpeed = -normalVelocity;
+            force += CONTACT_COMPRESSION_DAMPING * compressionSpeed
+                    + CONTACT_HIGH_SPEED_COMPRESSION * compressionSpeed * compressionSpeed;
+        } else {
+            force -= CONTACT_REBOUND_DAMPING * normalVelocity;
+        }
 
         float actualPenetration = Math.max(0f, -out.gap);
         if (actualPenetration > CONTACT_BUMP_START) {
-            force += (actualPenetration - CONTACT_BUMP_START) * CONTACT_BUMP_STIFFNESS;
+            // Softer progressive bump stop: prevents tunneling/bottoming without acting like
+            // a second stiff launch spring on the way back out.
+            float bumpTravel = actualPenetration - CONTACT_BUMP_START;
+            force += CONTACT_BUMP_STIFFNESS * bumpTravel * (1f + bumpTravel * 3.5f);
         }
         out.normalForce = MathUtils.clamp(force, 0f, MAX_CONTACT_FORCE);
     }
