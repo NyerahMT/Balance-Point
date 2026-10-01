@@ -1,0 +1,63 @@
+name: One-shot sync bike geometry
+
+on:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Sync current main
+        run: |
+          git fetch origin main
+          git reset --hard origin/main
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Sync physics geometry to imported GLB
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('core/src/main/java/com/nyerahworks/balancepoint/BalancePointGame.java')
+          s = p.read_text()
+          replacements = {
+              'private static final float WHEELBASE = 1.478f;':
+                  'private static final float WHEELBASE = 1.403232f;',
+              'private static final float WHEEL_RADIUS = 0.337f;':
+                  'private static final float WHEEL_RADIUS = 0.334978f;',
+              'private static final float COM_FORWARD = 0.67f;':
+                  'private static final float COM_FORWARD = 0.636107f;',
+          }
+          for old, new in replacements.items():
+              if old not in s:
+                  raise SystemExit(f'missing expected source line: {old}')
+              s = s.replace(old, new, 1)
+          s = s.replace(
+              '// Neutral combined bike+rider COM. 0.36 m above the axles plus the 0.337 m tire\n'
+              '// radius puts the system COM about 0.70 m above level ground. 0.67 m forward of the\n'
+              '// rear axle yields a believable ~55/45 rear/front static load split.',
+              '// Neutral combined bike+rider COM. Wheelbase/radius are synchronized to the imported\n'
+              '// GLB geometry. COM_FORWARD preserves the previous percentage of wheelbase so static\n'
+              '// rear/front load balance stays unchanged while visual and physical axles coincide.'
+          )
+          p.write_text(s)
+          PY
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+      - name: Compile core
+        run: gradle :core:compileJava --stacktrace
+      - name: Commit source changes
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          rm .github/workflows/one-shot-sync-bike-geometry.yml
+          git add core/src/main/java/com/nyerahworks/balancepoint/BalancePointGame.java .github/workflows/one-shot-sync-bike-geometry.yml
+          git commit -m 'Match physics wheel geometry to imported bike'
+          git push origin HEAD:main
