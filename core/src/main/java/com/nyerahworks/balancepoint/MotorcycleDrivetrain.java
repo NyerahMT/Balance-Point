@@ -48,8 +48,10 @@ final class MotorcycleDrivetrain {
         limiterCutTimer = 0f;
     }
 
-    float update(float speed, float throttle, float dt) {
-        float absSpeed = Math.abs(speed);
+    float update(float wheelLinearSpeed, float throttle, float dt) {
+        // Driven-wheel surface speed, not chassis speed. When the rear tire spins, engine RPM
+        // must flare with it rather than remaining artificially locked to vehicle velocity.
+        float absSpeed = Math.abs(wheelLinearSpeed);
         shiftTimer = Math.max(0f, shiftTimer - dt);
         shiftLockout = Math.max(0f, shiftLockout - dt);
         limiterCutTimer = Math.max(0f, limiterCutTimer - dt);
