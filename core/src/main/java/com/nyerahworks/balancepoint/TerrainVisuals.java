@@ -164,8 +164,9 @@ final class TerrainVisuals {
                 * (1f - rock) * 0.65f);
         float grass = MathUtils.clamp(1f - rock - dirt, 0f, 1f);
 
-        // Dry knobby-tire prototype values: asphalt 1.00, dirt 0.82, rock 0.72, grass 0.64.
-        return MathUtils.clamp(grass * 0.64f + dirt * 0.82f + rock * 0.72f, 0.60f, 0.86f);
+        // Dry MX-knobby peak grip. Loose surfaces still fall off through the slip curve.
+        // Asphalt 1.00 baseline; dirt 0.98, grass 0.94, rock 0.90.
+        return MathUtils.clamp(grass * 0.94f + dirt * 0.98f + rock * 0.90f, 0.88f, 0.985f);
     }
 
     private static float smootherStep(float edge0, float edge1, float x) {

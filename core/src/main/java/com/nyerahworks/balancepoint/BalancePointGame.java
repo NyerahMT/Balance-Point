@@ -271,6 +271,9 @@ public final class BalancePointGame extends ApplicationAdapter {
         // and the Environment ShadowMap. Keep this first pass deliberately local to the bike.
         shadowLight = new DirectionalShadowLight(1024, 1024, 28f, 28f, 0.5f, 70f);
         shadowLight.set(0.95f, 0.88f, 0.76f, -0.45f, -1f, -0.28f);
+        // Keep the existing 1024 map and libGDX PCF, but soften texel stair-stepping.
+        shadowLight.getDepthMap().minFilter = Texture.TextureFilter.Linear;
+        shadowLight.getDepthMap().magFilter = Texture.TextureFilter.Linear;
         environment.add(shadowLight);
         environment.shadowMap = shadowLight;
         shadowBatch = new ModelBatch(new DepthShaderProvider());
@@ -794,7 +797,11 @@ public final class BalancePointGame extends ApplicationAdapter {
         float penetrationCorrection = Math.max(rearPenetration, frontPenetration) - 0.012f;
         if (penetrationCorrection > 0f) {
             chassisY += Math.min(penetrationCorrection, 0.16f);
-            if (verticalVelocity < 0f) verticalVelocity *= 0.32f;
+            if (verticalVelocity < 0f) {
+                float correctionBlend = MathUtils.clamp(penetrationCorrection / 0.16f, 0f, 1f);
+                float velocityRetention = MathUtils.lerp(0.92f, 0.58f, correctionBlend);
+                verticalVelocity *= velocityRetention;
+            }
         }
 
         // Derived rear-axle height retained for camera/UI code. Physics itself lives at COM.
