@@ -55,7 +55,6 @@ final class GameScene {
 
     private final Array<Model> ownedModels = new Array<>();
     private final Matrix4 bikeRoot = new Matrix4();
-    private final Matrix4 importedSteeringRoot = new Matrix4();
     private final Vector3 tempA = new Vector3();
     private final Vector3 shadowFocus = new Vector3();
 
@@ -94,6 +93,7 @@ final class GameScene {
     private ModelInstance instrumentButtonRight;
 
     private DirtBikeMeshLoader.LoadedBike importedBike;
+    private DirtBikeVisualRig importedRig;
     private boolean importedBikeLoaded;
 
     GameScene(
@@ -197,14 +197,12 @@ final class GameScene {
         return new Material(ColorAttribute.createDiffuse(new Color(r, g, b, 1f)));
     }
 
-
     private Model box(ModelBuilder builder, float w, float h, float d, Material material) {
         Model model = builder.createBox(w, h, d, material,
                 VertexAttributes.Usage.Position | VertexAttributes.Usage.Normal);
         ownedModels.add(model);
         return model;
     }
-
 
     private Model cylinder(ModelBuilder builder, float w, float h, float d,
                            int divisions, Material material) {
@@ -214,7 +212,6 @@ final class GameScene {
         return model;
     }
 
-
     private Model sphere(ModelBuilder builder, float w, float h, float d,
                          int u, int v, Material material) {
         Model model = builder.createSphere(w, h, d, u, v, material,
@@ -222,7 +219,6 @@ final class GameScene {
         ownedModels.add(model);
         return model;
     }
-
 
     private void createWorldModels() {
         ModelBuilder b = new ModelBuilder();
@@ -247,7 +243,6 @@ final class GameScene {
         terrainVisuals = new TerrainVisuals(ownedModels);
     }
 
-
     private void createBikeModels() {
         ModelBuilder b = new ModelBuilder();
         Material tire = material(0.055f, 0.058f, 0.060f);
@@ -261,13 +256,10 @@ final class GameScene {
 
         TextureAttribute dashTextureAttribute =
                 TextureAttribute.createDiffuse(instrumentDisplay.texture());
-        // The world-space quad is upright now; only mirror U so the LCD reads left-to-right.
         dashTextureAttribute.offsetU = 1f;
         dashTextureAttribute.scaleU = -1f;
         Material dashScreenMat = new Material(dashTextureAttribute,
                 ColorAttribute.createDiffuse(Color.WHITE));
-        // The UV-corrected quad faces the opposite winding from the generated bike geometry.
-        // Keep the LCD double-sided so global back-face culling cannot make it disappear.
         dashScreenMat.set(IntAttribute.createCullFace(GL20.GL_NONE));
 
         Model wheel = cylinder(b, wheelRadius * 2f, 0.13f, wheelRadius * 2f, 14, tire);
@@ -282,12 +274,8 @@ final class GameScene {
         Model headM = sphere(b, 0.30f, 0.30f, 0.30f, 10, 8, rider);
         Model limbM = box(b, 0.10f, 0.62f, 0.10f, rider);
         Model plateM = box(b, 0.28f, 0.12f, 0.035f, visor);
-        // Compact trail-computer-sized housing instead of the oversized prototype box.
         Model dashM = box(b, 0.145f, 0.022f, 0.082f, dashMat);
         Model dashButtonM = box(b, 0.016f, 0.006f, 0.011f, dashButtonMat);
-        // UV orientation matters here: createRect maps its first edge to texture U.
-        // Run that edge across the handlebars (X), not fore/aft (Z), so the LCD
-        // texture is physically landscape on the dashboard instead of rotated 90 deg.
         Model dashScreenM = b.createRect(
                 -0.060f, 0f, -0.024f,
                  0.060f, 0f, -0.024f,
@@ -326,14 +314,15 @@ final class GameScene {
                     material(0.08f, 0.52f, 0.12f),
                     material(0.16f, 0.17f, 0.18f),
                     material(0.045f, 0.048f, 0.052f));
+            importedRig = new DirtBikeVisualRig(importedBike, wheelbase, wheelRadius);
             importedBikeLoaded = true;
         } catch (Exception e) {
             importedBike = null;
+            importedRig = null;
             importedBikeLoaded = false;
             Gdx.app.error("BalancePoint", "Could not load imported dirt bike; using fallback", e);
         }
     }
-
 
     private void updateWorldInstances(float centerZ) {
         float firstCenter = (float) Math.floor((centerZ - 80f) / SEGMENT_LENGTH) * SEGMENT_LENGTH
@@ -346,10 +335,10 @@ final class GameScene {
         }
         terrainVisuals.update(centerZ);
         float dashStart = (float) Math.floor((centerZ - 42f) / 6f) * 6f;
-        for (int i = 0; i < laneDashes.length; i++)
+        for (int i = 0; i < laneDashes.length; i++) {
             laneDashes[i].transform.setToTranslation(0f, 0.028f, dashStart + i * 6f);
+        }
     }
-
 
     float updateBike(BikeState state) {
         float pitchDeg = state.pitch * MathUtils.radiansToDegrees;
@@ -367,7 +356,6 @@ final class GameScene {
         float rootHeight = state.chassisY + rearVertical;
         float bikeY = rootHeight;
 
-        // Sidehill support attitude is already filtered at the fixed physics rate.
         float terrainRollDeg = state.terrainRoll * MathUtils.radiansToDegrees;
 
         if (state.crashed && state.crashSettled) {
@@ -388,7 +376,8 @@ final class GameScene {
         setWheel(frontHub, 0f, 0f, wheelbase, spinDeg);
 
         setPart(frame, 0f, 0.34f, 0.68f);
-        setPart(tank, 0f, 0.61f, 0.81f); tank.transform.rotate(Vector3.X, -7f);
+        setPart(tank, 0f, 0.61f, 0.81f);
+        tank.transform.rotate(Vector3.X, -7f);
         setPart(seat, 0f, 0.68f, 0.33f);
         setPart(frontFender, 0f, 0.32f, 1.34f);
         setPart(forkLeft, -0.17f, 0.37f, 1.18f);
@@ -398,8 +387,7 @@ final class GameScene {
         setPart(handlebar, 0f, 0.91f, 1.04f);
         setPart(frontNumberPlate, 0f, 0.72f, 1.19f);
         frontNumberPlate.transform.rotate(Vector3.X, 10f);
-        // The display is actual bike geometry. Everything below inherits the same local
-        // transform, so camera movement changes perspective instead of sliding a 2D overlay.
+
         setPart(instrumentPanel, 0f, 0.915f, 0.985f);
         instrumentPanel.transform.rotate(Vector3.X, -22f);
         instrumentScreen.transform.set(instrumentPanel.transform)
@@ -414,8 +402,8 @@ final class GameScene {
             riderTorso.transform.rotate(Vector3.X, -16f).scale(
                     IMPORTED_RIDER_SCALE, IMPORTED_RIDER_SCALE, IMPORTED_RIDER_SCALE);
             setPart(riderHead, 0f, 1.30f, 0.65f);
-            riderHead.transform.scale(IMPORTED_RIDER_SCALE, IMPORTED_RIDER_SCALE,
-                    IMPORTED_RIDER_SCALE);
+            riderHead.transform.scale(
+                    IMPORTED_RIDER_SCALE, IMPORTED_RIDER_SCALE, IMPORTED_RIDER_SCALE);
             setPart(riderLegLeft, -0.13f, 0.56f, 0.42f);
             setPart(riderLegRight, 0.13f, 0.56f, 0.42f);
             riderLegLeft.transform.rotate(Vector3.X, 36f).scale(
@@ -444,72 +432,68 @@ final class GameScene {
         }
 
         if (importedBikeLoaded) {
-            importedBike.body.transform.set(bikeRoot);
-            importedBike.engine.transform.set(bikeRoot);
-            float importedSpinDeg = -state.wheelSpin * (wheelRadius / importedBike.wheelRadius)
-                    * MathUtils.radiansToDegrees;
-            importedBike.rearWheel.transform.set(bikeRoot)
-                    .translate(importedBike.rearAxleOffset)
-                    .rotate(Vector3.X, importedSpinDeg);
-            float visualSteerBlend = MathUtils.clamp(state.speed / 30f, 0f, 1f);
-            visualSteerBlend = visualSteerBlend * visualSteerBlend * (3f - 2f * visualSteerBlend);
-            // Match the imported fork/wheel to the same left-negative/right-positive control
-            // convention used by the rectangular pad.
-            float visualMaxSteerDeg = MathUtils.lerp(28f, 5f, visualSteerBlend);
-            // Let the bars remain visibly useful while balancing on the rear wheel.
-            if (!state.frontGrounded && !state.terrainAirborne) visualMaxSteerDeg = Math.max(visualMaxSteerDeg, 11f);
-            float visualSteerDeg = state.steer * visualMaxSteerDeg;
-            importedSteeringRoot.set(bikeRoot)
-                    .translate(importedBike.steeringHead)
-                    .rotate(importedBike.steeringAxis, visualSteerDeg);
-            importedBike.steering.transform.set(importedSteeringRoot);
-            tempA.set(importedBike.frontAxleOffset).sub(importedBike.steeringHead);
-            importedBike.frontWheel.transform.set(importedSteeringRoot)
+            importedRig.update(bikeRoot, state, terrainVisuals);
+
+            tempA.set(0f, 0.915f, 0.985f).sub(importedBike.steeringHead);
+            instrumentPanel.transform.set(importedRig.steeringRoot())
                     .translate(tempA)
-                    .rotate(Vector3.X, importedSpinDeg);
+                    .rotate(Vector3.X, -22f);
+            instrumentScreen.transform.set(instrumentPanel.transform)
+                    .translate(0f, 0.0117f, 0.004f);
+            instrumentButtonLeft.transform.set(instrumentPanel.transform)
+                    .translate(-0.041f, 0.0143f, -0.032f);
+            instrumentButtonRight.transform.set(instrumentPanel.transform)
+                    .translate(0.041f, 0.0143f, -0.032f);
         }
         return bikeY;
     }
 
-
-    private void setPart(ModelInstance m, float x, float y, float z) {
-        m.transform.set(bikeRoot).translate(x, y, z);
+    private void setPart(ModelInstance model, float x, float y, float z) {
+        model.transform.set(bikeRoot).translate(x, y, z);
     }
 
-
-    private void setWheel(ModelInstance m, float x, float y, float z, float spinDeg) {
-        m.transform.set(bikeRoot).translate(x, y, z)
+    private void setWheel(ModelInstance model, float x, float y, float z, float spinDeg) {
+        model.transform.set(bikeRoot).translate(x, y, z)
                 .rotate(Vector3.Z, 90f).rotate(Vector3.Y, spinDeg);
     }
-
 
     private void renderBikeShadow() {
         if (importedBikeLoaded) {
             shadowBatch.render(importedBike.body);
             shadowBatch.render(importedBike.engine);
             shadowBatch.render(importedBike.steering);
+            importedRig.renderShadowExtras(shadowBatch);
             shadowBatch.render(importedBike.rearWheel);
             shadowBatch.render(importedBike.frontWheel);
             return;
         }
 
-        shadowBatch.render(rearWheel); shadowBatch.render(frontWheel);
-        shadowBatch.render(rearHub); shadowBatch.render(frontHub);
-        shadowBatch.render(frame); shadowBatch.render(tank);
-        shadowBatch.render(seat); shadowBatch.render(frontFender);
-        shadowBatch.render(forkLeft); shadowBatch.render(forkRight);
-        shadowBatch.render(handlebar); shadowBatch.render(frontNumberPlate);
-        shadowBatch.render(riderTorso); shadowBatch.render(riderHead);
-        shadowBatch.render(riderLegLeft); shadowBatch.render(riderLegRight);
-        shadowBatch.render(riderArmLeft); shadowBatch.render(riderArmRight);
+        shadowBatch.render(rearWheel);
+        shadowBatch.render(frontWheel);
+        shadowBatch.render(rearHub);
+        shadowBatch.render(frontHub);
+        shadowBatch.render(frame);
+        shadowBatch.render(tank);
+        shadowBatch.render(seat);
+        shadowBatch.render(frontFender);
+        shadowBatch.render(forkLeft);
+        shadowBatch.render(forkRight);
+        shadowBatch.render(handlebar);
+        shadowBatch.render(frontNumberPlate);
+        shadowBatch.render(riderTorso);
+        shadowBatch.render(riderHead);
+        shadowBatch.render(riderLegLeft);
+        shadowBatch.render(riderLegRight);
+        shadowBatch.render(riderArmLeft);
+        shadowBatch.render(riderArmRight);
     }
-
 
     private void renderBike() {
         if (importedBikeLoaded) {
             modelBatch.render(importedBike.body, environment);
             modelBatch.render(importedBike.engine, environment);
             modelBatch.render(importedBike.steering, environment);
+            importedRig.renderExtras(modelBatch, environment);
             modelBatch.render(importedBike.rearWheel, environment);
             modelBatch.render(importedBike.frontWheel, environment);
             modelBatch.render(instrumentPanel, environment);
@@ -519,20 +503,27 @@ final class GameScene {
             return;
         }
 
-        modelBatch.render(rearWheel, environment); modelBatch.render(frontWheel, environment);
-        modelBatch.render(rearHub, environment); modelBatch.render(frontHub, environment);
-        modelBatch.render(frame, environment); modelBatch.render(tank, environment);
-        modelBatch.render(seat, environment); modelBatch.render(frontFender, environment);
-        modelBatch.render(forkLeft, environment); modelBatch.render(forkRight, environment);
-        modelBatch.render(handlebar, environment); modelBatch.render(frontNumberPlate, environment);
+        modelBatch.render(rearWheel, environment);
+        modelBatch.render(frontWheel, environment);
+        modelBatch.render(rearHub, environment);
+        modelBatch.render(frontHub, environment);
+        modelBatch.render(frame, environment);
+        modelBatch.render(tank, environment);
+        modelBatch.render(seat, environment);
+        modelBatch.render(frontFender, environment);
+        modelBatch.render(forkLeft, environment);
+        modelBatch.render(forkRight, environment);
+        modelBatch.render(handlebar, environment);
+        modelBatch.render(frontNumberPlate, environment);
         modelBatch.render(instrumentPanel, environment);
         modelBatch.render(instrumentScreen, environment);
         modelBatch.render(instrumentButtonLeft, environment);
         modelBatch.render(instrumentButtonRight, environment);
-        modelBatch.render(riderTorso, environment); modelBatch.render(riderHead, environment);
-        modelBatch.render(riderLegLeft, environment); modelBatch.render(riderLegRight, environment);
-        modelBatch.render(riderArmLeft, environment); modelBatch.render(riderArmRight, environment);
+        modelBatch.render(riderTorso, environment);
+        modelBatch.render(riderHead, environment);
+        modelBatch.render(riderLegLeft, environment);
+        modelBatch.render(riderLegRight, environment);
+        modelBatch.render(riderArmLeft, environment);
+        modelBatch.render(riderArmRight, environment);
     }
-
-
 }
