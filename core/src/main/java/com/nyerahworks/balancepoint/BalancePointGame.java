@@ -262,8 +262,16 @@ public final class BalancePointGame extends ApplicationAdapter {
         resize(Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
 
         environment = new Environment();
-        environment.set(new ColorAttribute(ColorAttribute.AmbientLight, 0.62f, 0.65f, 0.63f, 1f));
-        environment.add(new DirectionalLight().set(0.95f, 0.88f, 0.76f, -0.45f, -1f, -0.28f));
+        // Daylight with real separation instead of CAD-viewport flat ambient. The cool fill
+        // keeps shadow-facing geometry readable while the warm key gives terrain/bike shape.
+        environment.set(new ColorAttribute(ColorAttribute.AmbientLight,
+                0.36f, 0.395f, 0.42f, 1f));
+        environment.set(new ColorAttribute(ColorAttribute.Fog,
+                0.67f, 0.755f, 0.79f, 1f));
+        environment.add(new DirectionalLight().set(
+                1.08f, 1.00f, 0.88f, -0.48f, -1f, -0.31f));
+        environment.add(new DirectionalLight().set(
+                0.18f, 0.225f, 0.30f, 0.58f, -0.34f, 0.70f));
 
         createWorldModels();
         createBikeModels();
@@ -304,11 +312,11 @@ public final class BalancePointGame extends ApplicationAdapter {
     private void createWorldModels() {
         ModelBuilder b = new ModelBuilder();
         Model road = box(b, ROAD_HALF_WIDTH * 2f, 0.08f, SEGMENT_LENGTH,
-                material(0.13f, 0.14f, 0.145f));
+                material(0.095f, 0.102f, 0.108f));
         Model edgeLine = box(b, 0.10f, 0.025f, SEGMENT_LENGTH,
-                material(0.82f, 0.80f, 0.72f));
+                material(0.91f, 0.90f, 0.84f));
         Model dash = box(b, 0.10f, 0.025f, 2.8f,
-                material(0.90f, 0.74f, 0.26f));
+                material(0.96f, 0.72f, 0.15f));
 
         int n = 30;
         roadSegments = new ModelInstance[n];
@@ -438,8 +446,9 @@ public final class BalancePointGame extends ApplicationAdapter {
         updateCamera(frameDt);
 
         Gdx.gl.glViewport(0, 0, Gdx.graphics.getBackBufferWidth(), Gdx.graphics.getBackBufferHeight());
-        Gdx.gl.glClearColor(0.58f, 0.72f, 0.80f, 1f);
+        Gdx.gl.glClearColor(0.66f, 0.76f, 0.80f, 1f);
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT | GL20.GL_DEPTH_BUFFER_BIT);
+        drawSkyBackground();
 
         modelBatch.begin(camera);
         terrainVisuals.render(modelBatch, environment);
@@ -1266,6 +1275,44 @@ public final class BalancePointGame extends ApplicationAdapter {
         modelBatch.render(riderTorso, environment); modelBatch.render(riderHead, environment);
         modelBatch.render(riderLegLeft, environment); modelBatch.render(riderLegRight, environment);
         modelBatch.render(riderArmLeft, environment); modelBatch.render(riderArmRight, environment);
+    }
+
+    /**
+     * Lightweight atmospheric sky. Screen-space bands are intentionally cheap on mobile, but
+     * the horizon tracks camera pitch so looking up/down does not leave the gradient glued to
+     * one arbitrary screen height. Terrain fog uses the same horizon family of colors.
+     */
+    private void drawSkyBackground() {
+        int w = Gdx.graphics.getWidth();
+        int h = Gdx.graphics.getHeight();
+        float horizon = MathUtils.clamp(0.43f - camera.direction.y * 0.34f, 0.20f, 0.70f);
+        int bands = 18;
+
+        Gdx.gl.glDisable(GL20.GL_DEPTH_TEST);
+        shapes.setProjectionMatrix(uiCamera.combined);
+        shapes.begin(ShapeRenderer.ShapeType.Filled);
+        for (int i = 0; i < bands; i++) {
+            float y0 = i / (float) bands;
+            float y1 = (i + 1f) / bands;
+            float sample = (y0 + y1) * 0.5f;
+            float above = MathUtils.clamp((sample - horizon) / Math.max(0.001f, 1f - horizon), 0f, 1f);
+            float below = MathUtils.clamp((horizon - sample) / Math.max(0.001f, horizon), 0f, 1f);
+
+            // Pale blue-gray at the horizon, richer blue overhead, muted earth haze below.
+            float r = sample >= horizon
+                    ? MathUtils.lerp(0.69f, 0.22f, above)
+                    : MathUtils.lerp(0.69f, 0.49f, below);
+            float g = sample >= horizon
+                    ? MathUtils.lerp(0.78f, 0.50f, above)
+                    : MathUtils.lerp(0.78f, 0.61f, below);
+            float b = sample >= horizon
+                    ? MathUtils.lerp(0.82f, 0.78f, above)
+                    : MathUtils.lerp(0.82f, 0.63f, below);
+            shapes.setColor(r, g, b, 1f);
+            shapes.rect(0f, y0 * h, w, (y1 - y0) * h + 1f);
+        }
+        shapes.end();
+        Gdx.gl.glEnable(GL20.GL_DEPTH_TEST);
     }
 
     private void drawHud() {
