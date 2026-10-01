@@ -34,6 +34,21 @@ jobs:
         with:
           gradle-version: '8.11.1'
 
+      - name: Stamp unique Android build number
+        run: |
+          python3 - <<'PY'
+          import os, re
+          from pathlib import Path
+          p = Path('app/build.gradle')
+          text = p.read_text()
+          text, n = re.subn(r'(?m)^\s*versionCode\s+\d+\s*$',
+                            f"        versionCode {os.environ['GITHUB_RUN_NUMBER']}", text, count=1)
+          if n != 1:
+              raise SystemExit('Could not stamp Android versionCode')
+          p.write_text(text)
+          PY
+          grep -n 'versionCode' app/build.gradle
+
       - name: Restore stable debug signing key
         run: base64 --decode .github/balancepoint-debug.keystore.b64 > .github/balancepoint-debug.keystore
 
@@ -43,7 +58,7 @@ jobs:
       - name: Upload Android artifact
         uses: actions/upload-artifact@v4
         with:
-          name: BalancePoint-Android
+          name: BalancePoint-Android-r${{ github.run_number }}-${{ github.sha }}
           path: app/build/outputs/apk/debug/app-debug.apk
 
       - name: Publish Android test APK
@@ -51,15 +66,19 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          SHORT_SHA="${GITHUB_SHA::7}"
+          UNIQUE="BalancePoint-Android-r${GITHUB_RUN_NUMBER}-${SHORT_SHA}.apk"
           cp app/build/outputs/apk/debug/app-debug.apk BalancePoint-latest.apk
+          cp app/build/outputs/apk/debug/app-debug.apk "$UNIQUE"
           if gh release view dev-build >/dev/null 2>&1; then
-            gh release upload dev-build BalancePoint-latest.apk --clobber
+            gh release upload dev-build BalancePoint-latest.apk "$UNIQUE" --clobber
           else
-            gh release create dev-build BalancePoint-latest.apk \
+            gh release create dev-build BalancePoint-latest.apk "$UNIQUE" \
               --title "Latest Test Builds" \
               --notes "Automatically updated Android and iOS development builds from main." \
               --prerelease
           fi
+          echo "Published Android build $UNIQUE with versionCode ${GITHUB_RUN_NUMBER}"
 
   ios:
     name: iOS Feather-compatible IPA
@@ -84,6 +103,21 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.11.1'
+
+      - name: Stamp unique iOS build number
+        run: |
+          python3 - <<'PY'
+          import os, re
+          from pathlib import Path
+          p = Path('ios/robovm.properties')
+          text = p.read_text()
+          text, n = re.subn(r'(?m)^app\.build=.*$',
+                            f"app.build={os.environ['GITHUB_RUN_NUMBER']}", text, count=1)
+          if n != 1:
+              raise SystemExit('Could not stamp iOS app.build')
+          p.write_text(text)
+          PY
+          grep '^app.build=' ios/robovm.properties
 
       - name: Build native iOS IPA
         run: gradle :ios:createIPA -Probovm.archs=arm64 --stacktrace
@@ -116,32 +150,26 @@ jobs:
           test -f "$APP_PATH/Info.plist"
           EXECUTABLE_NAME="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP_PATH/Info.plist")"
           BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Info.plist")"
+          BUNDLE_BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_PATH/Info.plist")"
           test -n "$EXECUTABLE_NAME"
           test -n "$BUNDLE_ID"
           test -f "$APP_PATH/$EXECUTABLE_NAME"
 
-          # Feather itself packages its unsigned distribution with an ad-hoc
-          # signature before users re-sign it. Do the same here so Feather's
-          # importer/signer sees a conventional iOS application bundle rather
-          # than RoboVM's raw unsigned archive.
           /usr/bin/codesign --force --deep --sign - --timestamp=none "$APP_PATH"
           /usr/bin/codesign --verify --deep --strict "$APP_PATH"
 
-          # RoboVM adds a top-level Symbols directory. It is useful for crash
-          # symbolication but is not part of the application payload and makes
-          # on-device import substantially larger. Package Payload only.
           rm -rf feather-package/Symbols
           ditto -c -k --sequesterRsrc --keepParent feather-package/Payload BalancePoint-latest-unsigned.ipa
 
           test -s BalancePoint-latest-unsigned.ipa
           unzip -t BalancePoint-latest-unsigned.ipa
-          echo "Feather-compatible IPA ready: $BUNDLE_ID / $EXECUTABLE_NAME"
+          echo "Feather-compatible IPA ready: $BUNDLE_ID / $EXECUTABLE_NAME / build $BUNDLE_BUILD"
           du -h BalancePoint-latest-unsigned.ipa
 
       - name: Upload iOS artifact
         uses: actions/upload-artifact@v4
         with:
-          name: BalancePoint-iOS-unsigned
+          name: BalancePoint-iOS-r${{ github.run_number }}-${{ github.sha }}
           path: BalancePoint-latest-unsigned.ipa
 
       - name: Publish unsigned iOS test IPA
@@ -149,11 +177,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          SHORT_SHA="${GITHUB_SHA::7}"
+          UNIQUE="BalancePoint-iOS-r${GITHUB_RUN_NUMBER}-${SHORT_SHA}-unsigned.ipa"
+          cp BalancePoint-latest-unsigned.ipa "$UNIQUE"
           if gh release view dev-build >/dev/null 2>&1; then
-            gh release upload dev-build BalancePoint-latest-unsigned.ipa --clobber
+            gh release upload dev-build BalancePoint-latest-unsigned.ipa "$UNIQUE" --clobber
           else
-            gh release create dev-build BalancePoint-latest-unsigned.ipa \
+            gh release create dev-build BalancePoint-latest-unsigned.ipa "$UNIQUE" \
               --title "Latest Test Builds" \
               --notes "Automatically updated Android and iOS development builds from main." \
               --prerelease
           fi
+          echo "Published iOS build $UNIQUE with CFBundleVersion ${GITHUB_RUN_NUMBER}"
