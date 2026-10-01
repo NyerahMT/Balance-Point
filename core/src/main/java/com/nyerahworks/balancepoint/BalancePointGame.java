@@ -540,7 +540,14 @@ public final class BalancePointGame extends ApplicationAdapter {
         frontNormalLoad = (MASS * GRAVITY * effectiveComForward
                 - MASS * longitudinalAcceleration * COM_HEIGHT) / WHEELBASE;
 
-        if (frontGrounded) {
+        if (terrainAirborne) {
+            // Once both tires are off the ground there is no rear contact patch to create
+            // the wheelie torque used below. Preserve angular momentum through the jump
+            // with only light aerodynamic/rider damping.
+            pitchVelocity *= Math.max(0f, 1f - 0.32f * dt);
+            pitchVelocity = MathUtils.clamp(pitchVelocity, -MAX_PITCH_RATE, MAX_PITCH_RATE);
+            pitch += pitchVelocity * dt;
+        } else if (frontGrounded) {
             pitch = 0f;
             pitchVelocity = 0f;
             if (frontNormalLoad <= 0f && speed > 2.5f) {
@@ -574,7 +581,7 @@ public final class BalancePointGame extends ApplicationAdapter {
             if (pitch <= 0f) {
                 pitch = 0f;
                 pitchVelocity = 0f;
-                if (!terrainAirborne) frontGrounded = true;
+                frontGrounded = true;
             }
         }
 
@@ -638,6 +645,11 @@ public final class BalancePointGame extends ApplicationAdapter {
                 terrainAirborne = false;
                 bikeY = rearSupport;
                 verticalVelocity = supportVelocity;
+                // Flight pitch is world-relative. Convert it back to terrain-relative pitch
+                // so wheelie/contact dynamics resume smoothly on the landing slope.
+                float landingSupportPitch = (float) Math.atan2(frontSupport - rearSupport,
+                        WHEELBASE);
+                pitch -= landingSupportPitch;
                 if (pitch < 6f * MathUtils.degreesToRadians) {
                     pitch = 0f;
                     pitchVelocity = 0f;
@@ -651,6 +663,11 @@ public final class BalancePointGame extends ApplicationAdapter {
             float separationVelocity = verticalVelocity - supportVelocity;
             boolean crestLaunch = speed > 3.5f && separationVelocity > 0.60f;
             if (crestLaunch) {
+                // Transfer the terrain chord angle into world-space flight attitude before
+                // terrain support disappears from the renderer.
+                float launchSupportPitch = (float) Math.atan2(frontSupport - rearSupport,
+                        WHEELBASE);
+                pitch += launchSupportPitch;
                 terrainAirborne = true;
                 frontGrounded = false;
                 bikeY += verticalVelocity * dt;
