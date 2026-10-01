@@ -1,1 +1,0 @@
-verify jump arc, rear-wheel pitch control, and horizon-pitch helmet camera
