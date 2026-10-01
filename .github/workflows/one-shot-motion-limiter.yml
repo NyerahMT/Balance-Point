@@ -15,6 +15,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Sync current main
+        run: git pull --ff-only origin main
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
