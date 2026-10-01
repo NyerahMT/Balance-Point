@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Repository quality gate
         run: python3 tools/quality_gate.py
@@ -27,18 +27,16 @@ jobs:
           python3 tools/validate_dirtbike_neutral_pose.py
 
       - name: Set up Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Gradle 8.11.1
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.11.1'
+      - name: Set up Gradle cache and validate wrapper
+        uses: gradle/actions/setup-gradle@v6
 
       - name: Run core unit tests
-        run: gradle :core:test --stacktrace
+        run: ./gradlew :core:test --stacktrace
 
   android:
     name: Android APK
@@ -46,18 +44,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Gradle 8.11.1
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.11.1'
+      - name: Set up Gradle cache and validate wrapper
+        uses: gradle/actions/setup-gradle@v6
 
       - name: Stamp unique Android build number
         run: |
@@ -78,13 +74,13 @@ jobs:
         run: base64 --decode .github/balancepoint-debug.keystore.b64 > .github/balancepoint-debug.keystore
 
       - name: Build Android debug APK
-        run: gradle :app:assembleDebug --stacktrace
+        run: ./gradlew :app:assembleDebug --stacktrace
 
       - name: Stage Android artifact
         run: cp app/build/outputs/apk/debug/app-debug.apk BalancePoint-latest.apk
 
       - name: Upload Android artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: BalancePoint-Android-r${{ github.run_number }}-${{ github.sha }}
           path: BalancePoint-latest.apk
@@ -96,18 +92,16 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Gradle 8.11.1
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.11.1'
+      - name: Set up Gradle cache and validate wrapper
+        uses: gradle/actions/setup-gradle@v6
 
       - name: Stamp unique iOS build number
         run: |
@@ -125,7 +119,7 @@ jobs:
           grep '^app.build=' ios/robovm.properties
 
       - name: Build native iOS IPA
-        run: gradle :ios:createIPA -Probovm.archs=arm64 --stacktrace
+        run: ./gradlew :ios:createIPA -Probovm.archs=arm64 --stacktrace
 
       - name: Repackage for Feather
         shell: bash
@@ -169,7 +163,7 @@ jobs:
           echo "Feather-compatible IPA ready: $BUNDLE_ID / $EXECUTABLE_NAME / build $BUNDLE_BUILD"
 
       - name: Upload iOS artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: BalancePoint-iOS-r${{ github.run_number }}-${{ github.sha }}
           path: BalancePoint-latest-unsigned.ipa
@@ -183,13 +177,13 @@ jobs:
       contents: write
     steps:
       - name: Download Android artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: BalancePoint-Android-r${{ github.run_number }}-${{ github.sha }}
           path: release/android
 
       - name: Download iOS artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: BalancePoint-iOS-r${{ github.run_number }}-${{ github.sha }}
           path: release/ios
