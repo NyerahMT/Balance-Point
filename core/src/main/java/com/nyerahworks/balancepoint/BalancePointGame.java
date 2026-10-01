@@ -1190,6 +1190,7 @@ public final class BalancePointGame extends ApplicationAdapter {
     @Override
     public void dispose() {
         if (engineAudio != null) engineAudio.dispose();
+        if (terrainVisuals != null) terrainVisuals.dispose();
         if (modelBatch != null) modelBatch.dispose();
         if (spriteBatch != null) spriteBatch.dispose();
         if (shapes != null) shapes.dispose();
