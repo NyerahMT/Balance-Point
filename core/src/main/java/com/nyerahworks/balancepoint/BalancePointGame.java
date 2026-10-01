@@ -35,9 +35,10 @@ public final class BalancePointGame extends ApplicationAdapter {
     private static final float SEGMENT_LENGTH = 20f;
     private static final float ROAD_HALF_WIDTH = 4.2f;
 
-    private static final float WHEELBASE = 1.45f;
-    private static final float WHEEL_RADIUS = 0.31f;
-    private static final float MASS = 212f;
+    private static final float WHEELBASE = 1.478f;
+    private static final float WHEEL_RADIUS = 0.337f;
+    // Approx. 247 lb wet 450 + 190 lb rider = 198 kg combined system mass.
+    private static final float MASS = 198f;
     private static final float GRAVITY = 9.81f;
     private static final float PITCH_INERTIA = 168f;
     private static final float COM_FORWARD = 0.60f;
