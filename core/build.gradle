@@ -8,6 +8,7 @@ java {
 }
 
 compileJava.options.encoding = 'UTF-8'
+compileTestJava.options.encoding = 'UTF-8'
 
 repositories {
     mavenCentral()
@@ -15,4 +16,13 @@ repositories {
 
 dependencies {
     api "com.badlogicgames.gdx:gdx:$gdxVersion"
+    testImplementation 'junit:junit:4.13.2'
+}
+
+test {
+    useJUnit()
+    testLogging {
+        events 'failed', 'skipped'
+        exceptionFormat 'full'
+    }
 }
