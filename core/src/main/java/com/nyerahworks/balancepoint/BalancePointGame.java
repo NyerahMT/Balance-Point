@@ -272,13 +272,13 @@ public final class BalancePointGame extends ApplicationAdapter {
         Model limbM = box(b, 0.10f, 0.62f, 0.10f, rider);
         Model plateM = box(b, 0.28f, 0.12f, 0.035f, visor);
         // Compact trail-computer-sized housing instead of the oversized prototype box.
-        Model dashM = box(b, 0.19f, 0.025f, 0.105f, dashMat);
-        Model dashButtonM = box(b, 0.020f, 0.007f, 0.014f, dashButtonMat);
+        Model dashM = box(b, 0.145f, 0.022f, 0.082f, dashMat);
+        Model dashButtonM = box(b, 0.016f, 0.006f, 0.011f, dashButtonMat);
         Model dashScreenM = b.createRect(
-                -0.078f, 0f, -0.030f,
-                -0.078f, 0f,  0.038f,
-                 0.078f, 0f,  0.038f,
-                 0.078f, 0f, -0.030f,
+                -0.060f, 0f, -0.024f,
+                -0.060f, 0f,  0.029f,
+                 0.060f, 0f,  0.029f,
+                 0.060f, 0f, -0.024f,
                  0f, 1f, 0f, dashScreenMat,
                 VertexAttributes.Usage.Position | VertexAttributes.Usage.Normal
                         | VertexAttributes.Usage.TextureCoordinates);
@@ -719,11 +719,11 @@ public final class BalancePointGame extends ApplicationAdapter {
         setPart(instrumentPanel, 0f, 0.915f, 0.985f);
         instrumentPanel.transform.rotate(Vector3.X, -22f);
         instrumentScreen.transform.set(instrumentPanel.transform)
-                .translate(0f, 0.0132f, 0.006f);
+                .translate(0f, 0.0117f, 0.004f);
         instrumentButtonLeft.transform.set(instrumentPanel.transform)
-                .translate(-0.055f, 0.0162f, -0.041f);
+                .translate(-0.041f, 0.0143f, -0.032f);
         instrumentButtonRight.transform.set(instrumentPanel.transform)
-                .translate(0.055f, 0.0162f, -0.041f);
+                .translate(0.041f, 0.0143f, -0.032f);
 
         if (importedBikeLoaded) {
             setPart(riderTorso, 0f, 0.94f, 0.49f);
