@@ -1,0 +1,1 @@
+verify calibrated COM, launch clutch, rollback, and wheel-contact preloads
