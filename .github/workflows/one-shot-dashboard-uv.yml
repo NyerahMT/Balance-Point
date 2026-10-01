@@ -1,0 +1,28 @@
+name: One-shot dashboard UV fix
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/scripts/fix-dashboard-uv.py'
+
+permissions:
+  contents: write
+
+jobs:
+  patch-dashboard-uv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Fix dashboard texture orientation
+        run: python3 .github/scripts/fix-dashboard-uv.py
+      - name: Commit UV fix and clean one-shot files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add core/src/main/java/com/nyerahworks/balancepoint/BalancePointGame.java
+          git rm .github/scripts/fix-dashboard-uv.py .github/workflows/one-shot-dashboard-uv.yml
+          git commit -m "Fix dashboard texture orientation"
+          git push origin main
