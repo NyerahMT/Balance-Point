@@ -254,9 +254,8 @@ public final class BalancePointGame extends ApplicationAdapter {
         instrumentTexture = new Texture(instrumentPixmap);
         instrumentTexture.setFilter(Texture.TextureFilter.Nearest, Texture.TextureFilter.Nearest);
         TextureAttribute dashTextureAttribute = TextureAttribute.createDiffuse(instrumentTexture);
-        // Framebuffer-style UV orientation is wrong for a bike-mounted plane unless V is flipped.
-        dashTextureAttribute.offsetV = 1f;
-        dashTextureAttribute.scaleV = -1f;
+        // The screen quad is already oriented correctly in world space. Keep the texture
+        // unflipped so the LCD reads upright from the rider/chase camera.
         Material dashScreenMat = new Material(dashTextureAttribute,
                 ColorAttribute.createDiffuse(Color.WHITE));
         // The UV-corrected quad faces the opposite winding from the generated bike geometry.
@@ -818,21 +817,34 @@ public final class BalancePointGame extends ApplicationAdapter {
             camera.up.set(Vector3.Y);
             camera.fieldOfView = 80f;
         } else {
-            float orbitPitch = MathUtils.clamp(lookPitch, -25f * MathUtils.degreesToRadians,
-                    30f * MathUtils.degreesToRadians);
-            float horizontalDistance = 5.7f * MathUtils.cos(orbitPitch);
-            float desiredHeight = 2.65f + 5.7f * MathUtils.sin(orbitPitch);
+            // Compact chase camera: keep a fixed physical distance from the bike and use
+            // FOV, not camera pull-back, to communicate speed. The old slow lerp created
+            // a velocity-dependent trailing error that made the camera drift farther away
+            // the faster the bike travelled.
+            float orbitPitch = MathUtils.clamp(lookPitch, -22f * MathUtils.degreesToRadians,
+                    24f * MathUtils.degreesToRadians);
+            float chaseDistance = 3.90f;
+            float horizontalDistance = chaseDistance * MathUtils.cos(orbitPitch);
+            float desiredHeight = 1.88f + chaseDistance * MathUtils.sin(orbitPitch);
             tempA.set(bikeX - sinView * horizontalDistance,
-                    Math.max(0.9f, desiredHeight),
+                    Math.max(0.82f, desiredHeight),
                     bikeZ - cosView * horizontalDistance);
-            float response = 1f - (float) Math.exp(-3.8f * dt);
-            camera.position.lerp(tempA, response);
-            tempB.set(bikeX + MathUtils.sin(yaw) * 2.2f,
-                    0.92f + MathUtils.sin(pitch) * 0.52f,
-                    bikeZ + MathUtils.cos(yaw) * 2.2f);
+
+            // At speed the camera nearly locks to the desired rig position so relative
+            // distance stays constant. At low speed a little smoothing keeps U-turns and
+            // orbit input from looking robotic.
+            float followResponse = Math.min(1f, dt * (11.5f + speed * 1.35f));
+            camera.position.lerp(tempA, followResponse);
+
+            float targetLead = 1.15f;
+            tempB.set(bikeX + MathUtils.sin(yaw) * targetLead,
+                    0.88f + MathUtils.sin(pitch) * 0.42f,
+                    bikeZ + MathUtils.cos(yaw) * targetLead);
             camera.up.set(Vector3.Y);
             camera.lookAt(tempB);
-            camera.fieldOfView = 67f;
+
+            float speedFov = MathUtils.clamp(speed / 38f, 0f, 1f);
+            camera.fieldOfView = MathUtils.lerp(68f, 76f, speedFov);
         }
         camera.update();
     }
