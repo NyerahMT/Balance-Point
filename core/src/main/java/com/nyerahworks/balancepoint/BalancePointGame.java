@@ -20,6 +20,8 @@ import com.badlogic.gdx.graphics.g3d.attributes.ColorAttribute;
 import com.badlogic.gdx.graphics.g3d.attributes.IntAttribute;
 import com.badlogic.gdx.graphics.g3d.attributes.TextureAttribute;
 import com.badlogic.gdx.graphics.g3d.environment.DirectionalLight;
+import com.badlogic.gdx.graphics.g3d.environment.DirectionalShadowLight;
+import com.badlogic.gdx.graphics.g3d.utils.DepthShaderProvider;
 import com.badlogic.gdx.graphics.g3d.utils.ModelBuilder;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
 import com.badlogic.gdx.math.MathUtils;
@@ -131,6 +133,8 @@ public final class BalancePointGame extends ApplicationAdapter {
     private Pixmap instrumentPixmap;
     private Texture instrumentTexture;
     private Environment environment;
+    private DirectionalShadowLight shadowLight;
+    private ModelBatch shadowBatch;
     private EngineAudio engineAudio;
 
     private TerrainVisuals terrainVisuals;
@@ -263,7 +267,13 @@ public final class BalancePointGame extends ApplicationAdapter {
 
         environment = new Environment();
         environment.set(new ColorAttribute(ColorAttribute.AmbientLight, 0.62f, 0.65f, 0.63f, 1f));
-        environment.add(new DirectionalLight().set(0.95f, 0.88f, 0.76f, -0.45f, -1f, -0.28f));
+        // Official libGDX shadow-map path: DirectionalShadowLight is both the key light
+        // and the Environment ShadowMap. Keep this first pass deliberately local to the bike.
+        shadowLight = new DirectionalShadowLight(1024, 1024, 28f, 28f, 0.5f, 70f);
+        shadowLight.set(0.95f, 0.88f, 0.76f, -0.45f, -1f, -0.28f);
+        environment.add(shadowLight);
+        environment.shadowMap = shadowLight;
+        shadowBatch = new ModelBatch(new DepthShaderProvider());
 
         createWorldModels();
         createBikeModels();
@@ -440,6 +450,16 @@ public final class BalancePointGame extends ApplicationAdapter {
         Gdx.gl.glViewport(0, 0, Gdx.graphics.getBackBufferWidth(), Gdx.graphics.getBackBufferHeight());
         Gdx.gl.glClearColor(0.58f, 0.72f, 0.80f, 1f);
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT | GL20.GL_DEPTH_BUFFER_BIT);
+
+        // Match libGDX's own ShadowMappingTest: render only shadow casters into the depth
+        // batch, then render the normal scene with environment.shadowMap receiving it.
+        shadowLight.begin(tempC.set(bikeX, bikeY + 0.65f, bikeZ), camera.direction);
+        shadowBatch.begin(shadowLight.getCamera());
+        renderBikeShadow();
+        shadowBatch.end();
+        shadowLight.end();
+        // Be explicit about restoring the drawable viewport after the FBO pass on mobile.
+        Gdx.gl.glViewport(0, 0, Gdx.graphics.getBackBufferWidth(), Gdx.graphics.getBackBufferHeight());
 
         modelBatch.begin(camera);
         terrainVisuals.render(modelBatch, environment);
@@ -1239,6 +1259,27 @@ public final class BalancePointGame extends ApplicationAdapter {
         camera.update();
     }
 
+    private void renderBikeShadow() {
+        if (importedBikeLoaded) {
+            shadowBatch.render(importedBike.body);
+            shadowBatch.render(importedBike.engine);
+            shadowBatch.render(importedBike.steering);
+            shadowBatch.render(importedBike.rearWheel);
+            shadowBatch.render(importedBike.frontWheel);
+            return;
+        }
+
+        shadowBatch.render(rearWheel); shadowBatch.render(frontWheel);
+        shadowBatch.render(rearHub); shadowBatch.render(frontHub);
+        shadowBatch.render(frame); shadowBatch.render(tank);
+        shadowBatch.render(seat); shadowBatch.render(frontFender);
+        shadowBatch.render(forkLeft); shadowBatch.render(forkRight);
+        shadowBatch.render(handlebar); shadowBatch.render(frontNumberPlate);
+        shadowBatch.render(riderTorso); shadowBatch.render(riderHead);
+        shadowBatch.render(riderLegLeft); shadowBatch.render(riderLegRight);
+        shadowBatch.render(riderArmLeft); shadowBatch.render(riderArmRight);
+    }
+
     private void renderBike() {
         if (importedBikeLoaded) {
             modelBatch.render(importedBike.body, environment);
@@ -1561,6 +1602,8 @@ public final class BalancePointGame extends ApplicationAdapter {
     public void dispose() {
         if (engineAudio != null) engineAudio.dispose();
         if (terrainVisuals != null) terrainVisuals.dispose();
+        if (shadowBatch != null) shadowBatch.dispose();
+        if (shadowLight != null) shadowLight.dispose();
         if (modelBatch != null) modelBatch.dispose();
         if (spriteBatch != null) spriteBatch.dispose();
         if (shapes != null) shapes.dispose();
