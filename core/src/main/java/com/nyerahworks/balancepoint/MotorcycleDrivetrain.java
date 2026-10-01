@@ -54,8 +54,10 @@ final class MotorcycleDrivetrain {
 
         // Below jogging speed an automatic clutch allows the motor to rev above wheel-coupled RPM.
         // As speed rises the clutch locks and engine speed becomes fully dictated by wheel speed.
-        float freeRevRpm = IDLE_RPM + throttle * 9_000f;
-        float clutchLock = MathUtils.clamp(absSpeed / 5.0f, 0f, 1f);
+        // Automatic launch clutch: let the 450 work in its broad midrange instead of
+        // free-revving near the limiter while barely coupling the rear wheel.
+        float freeRevRpm = IDLE_RPM + throttle * 5_100f;
+        float clutchLock = MathUtils.clamp(absSpeed / 6.5f, 0f, 1f);
         float targetRpm = MathUtils.lerp(Math.max(IDLE_RPM, freeRevRpm),
                 Math.max(IDLE_RPM, coupledRpm), clutchLock);
         targetRpm = Math.min(targetRpm, HARD_LIMIT_RPM + 250f);
@@ -64,7 +66,7 @@ final class MotorcycleDrivetrain {
         rpm += (targetRpm - rpm) * Math.min(1f, dt * rpmResponse);
 
         float torque = PEAK_TORQUE_NM * torqueCurve(rpm);
-        float clutchEngagement = MathUtils.clamp(0.56f + absSpeed / 5.0f, 0.56f, 1f);
+        float clutchEngagement = MathUtils.clamp(0.70f + absSpeed / 6.0f, 0.70f, 1f);
 
         // A shift briefly unloads the gearbox instead of teleporting from one ratio to the next at
         // full torque. The cut recovers progressively over ~115 ms.

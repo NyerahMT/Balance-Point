@@ -45,16 +45,22 @@ public final class BalancePointGame extends ApplicationAdapter {
     // penetration and point velocity; wheelies, jumps and landings are results, not modes.
     private static final float CONTACT_STIFFNESS = 52_000f;
     private static final float CONTACT_DAMPING = 4_500f;
-    private static final float CONTACT_PRELOAD_GAP = 0.018f;
     private static final float CONTACT_BUMP_START = 0.050f;
     private static final float CONTACT_BUMP_STIFFNESS = 180_000f;
     private static final float MAX_CONTACT_FORCE = MASS * GRAVITY * 10f;
     private static final float RIGID_PITCH_DAMPING = 0.45f;
-    private static final float COM_FORWARD = 0.60f;
+    // Neutral combined bike+rider COM. 0.36 m above the axles plus the 0.337 m tire
+    // radius puts the system COM about 0.70 m above level ground. 0.67 m forward of the
+    // rear axle yields a believable ~55/45 rear/front static load split.
+    private static final float COM_FORWARD = 0.67f;
     private static final float AIRBORNE_COM_FORWARD = 1.00f;
     private static final float AIRBORNE_COM_SHIFT_START = 25f * MathUtils.degreesToRadians;
     private static final float AIRBORNE_COM_SHIFT_END = 55f * MathUtils.degreesToRadians;
-    private static final float COM_HEIGHT = 0.70f;
+    private static final float COM_HEIGHT = 0.36f;
+    private static final float REAR_CONTACT_PRELOAD = MASS * GRAVITY
+            * (WHEELBASE - COM_FORWARD) / WHEELBASE / CONTACT_STIFFNESS;
+    private static final float FRONT_CONTACT_PRELOAD = MASS * GRAVITY
+            * COM_FORWARD / WHEELBASE / CONTACT_STIFFNESS;
     private static final float RIDER_SHIFT = 0.14f;
 
     private static final float TIRE_MU = 1.05f;
@@ -554,9 +560,11 @@ public final class BalancePointGame extends ApplicationAdapter {
         float frontVerticalVelocity = verticalVelocity + pitchVelocity * frontForward;
 
         solveWheelContact(rearContactState, rearX, rearY, rearZ,
-                rearForwardVelocity, rearVerticalVelocity, sinYaw, cosYaw);
+                rearForwardVelocity, rearVerticalVelocity, sinYaw, cosYaw,
+                REAR_CONTACT_PRELOAD);
         solveWheelContact(frontContactState, frontX, frontY, frontZ,
-                frontForwardVelocity, frontVerticalVelocity, sinYaw, cosYaw);
+                frontForwardVelocity, frontVerticalVelocity, sinYaw, cosYaw,
+                FRONT_CONTACT_PRELOAD);
 
         boolean rearTouching = rearContactState.touching();
         boolean frontTouching = frontContactState.touching();
@@ -579,7 +587,8 @@ public final class BalancePointGame extends ApplicationAdapter {
             brakeForce = Math.min(MAX_REAR_BRAKE_FORCE * rearBrake, rearTractionLimit * 0.98f);
             brakeForce = Math.min(brakeForce, absSpeed * MASS / Math.max(dt, 0.001f));
         }
-        float rearTireForce = driveForce - brakeForce;
+        float brakeDirection = absSpeed > 0.03f ? -Math.signum(speed) : 0f;
+        float rearTireForce = driveForce + brakeDirection * brakeForce;
 
         // Surface tangent is perpendicular to the solved terrain normal in the forward/up
         // plane. Engine and rear-brake force therefore naturally gain/lose vertical component
@@ -594,18 +603,23 @@ public final class BalancePointGame extends ApplicationAdapter {
         float frontNormalForward = frontContactState.normalForce * frontContactState.normalForward;
         float frontNormalUp = frontContactState.normalForce * frontContactState.normalUp;
 
-        float rolling = (rearContactState.normalForce + frontContactState.normalForce)
+        float rollingMagnitude = (rearContactState.normalForce + frontContactState.normalForce)
                 * ROLLING_RESISTANCE;
+        float rollingForce = absSpeed > 0.05f ? Math.signum(speed) * rollingMagnitude : 0f;
         float aero = AERO_DRAG * speed * absSpeed;
-        float surfaceDrag = (rearTouching || frontTouching) && offRoad ? 95f + absSpeed * 5f : 0f;
+        float surfaceDragForce = (rearTouching || frontTouching) && offRoad && absSpeed > 0.05f
+                ? Math.signum(speed) * (95f + absSpeed * 5f) : 0f;
 
         float totalForwardForce = rearNormalForward + frontNormalForward + rearTireForward
-                - rolling - aero - surfaceDrag;
+                - rollingForce - aero - surfaceDragForce;
         float totalVerticalForce = rearNormalUp + frontNormalUp + rearTireUp - MASS * GRAVITY;
 
         longitudinalAcceleration = totalForwardForce / MASS;
         speed += longitudinalAcceleration * dt;
-        speed = MathUtils.clamp(speed, 0f, 48f);
+        // A bike that cannot hold a grade should roll backward instead of being glued to a
+        // zero-speed clamp. Reverse speed is capped only to keep an accidental downhill roll
+        // recoverable in the prototype controls.
+        speed = MathUtils.clamp(speed, -10f, 48f);
         verticalVelocity += totalVerticalForce / MASS * dt;
 
         // Rear-wheel angular speed is coupled to road speed while the tire is loaded. In the
@@ -712,7 +726,7 @@ public final class BalancePointGame extends ApplicationAdapter {
 
     private void solveWheelContact(WheelContact out, float worldX, float wheelY, float worldZ,
                                    float pointForwardVelocity, float pointVerticalVelocity,
-                                   float sinYaw, float cosYaw) {
+                                   float sinYaw, float cosYaw, float preloadGap) {
         float ground = terrainVisuals != null ? terrainVisuals.groundHeight(worldX, worldZ) : 0f;
         float slopeX = terrainVisuals != null ? terrainVisuals.groundSlopeX(worldX, worldZ) : 0f;
         float slopeZ = terrainVisuals != null ? terrainVisuals.groundSlopeZ(worldX, worldZ) : 0f;
@@ -724,7 +738,7 @@ public final class BalancePointGame extends ApplicationAdapter {
         out.groundY = ground + WHEEL_RADIUS;
         out.gap = wheelY - out.groundY;
 
-        float virtualCompression = CONTACT_PRELOAD_GAP - out.gap;
+        float virtualCompression = preloadGap - out.gap;
         if (virtualCompression <= 0f) {
             out.normalForce = 0f;
             return;
