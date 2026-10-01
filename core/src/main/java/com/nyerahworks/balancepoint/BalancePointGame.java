@@ -254,8 +254,9 @@ public final class BalancePointGame extends ApplicationAdapter {
         instrumentTexture = new Texture(instrumentPixmap);
         instrumentTexture.setFilter(Texture.TextureFilter.Nearest, Texture.TextureFilter.Nearest);
         TextureAttribute dashTextureAttribute = TextureAttribute.createDiffuse(instrumentTexture);
-        // The screen quad is already oriented correctly in world space. Keep the texture
-        // unflipped so the LCD reads upright from the rider/chase camera.
+        // The world-space quad is upright now; only mirror U so the LCD reads left-to-right.
+        dashTextureAttribute.offsetU = 1f;
+        dashTextureAttribute.scaleU = -1f;
         Material dashScreenMat = new Material(dashTextureAttribute,
                 ColorAttribute.createDiffuse(Color.WHITE));
         // The UV-corrected quad faces the opposite winding from the generated bike geometry.
@@ -484,6 +485,14 @@ public final class BalancePointGame extends ApplicationAdapter {
 
         float absSpeed = Math.abs(speed);
         boolean offRoad = Math.abs(bikeX) > ROAD_HALF_WIDTH;
+        float terrainSlopeX = terrainVisuals != null ? terrainVisuals.groundSlopeX(bikeX, bikeZ) : 0f;
+        float terrainSlopeZ = terrainVisuals != null ? terrainVisuals.groundSlopeZ(bikeX, bikeZ) : 0f;
+        float terrainSlopeMagnitude = (float) Math.sqrt(terrainSlopeX * terrainSlopeX
+                + terrainSlopeZ * terrainSlopeZ);
+        float terrainNormalScale = 1f / (float) Math.sqrt(1f
+                + terrainSlopeMagnitude * terrainSlopeMagnitude);
+        float forwardGrade = terrainSlopeX * MathUtils.sin(yaw)
+                + terrainSlopeZ * MathUtils.cos(yaw);
         float effectiveComForward = MathUtils.clamp(COM_FORWARD + riderLean * RIDER_SHIFT, 0.48f, 0.82f);
 
         float rearNormalEstimate;
@@ -493,7 +502,7 @@ public final class BalancePointGame extends ApplicationAdapter {
         } else {
             rearNormalEstimate = MASS * GRAVITY;
         }
-        rearNormalEstimate = Math.max(0f, rearNormalEstimate);
+        rearNormalEstimate = Math.max(0f, rearNormalEstimate) * terrainNormalScale;
         float tractionLimit = TIRE_MU * rearNormalEstimate;
 
         float drivetrainForce = drivetrain.update(absSpeed, throttle, dt);
@@ -508,7 +517,10 @@ public final class BalancePointGame extends ApplicationAdapter {
         float rolling = absSpeed > 0.02f ? MASS * GRAVITY * ROLLING_RESISTANCE : 0f;
         float aero = AERO_DRAG * speed * absSpeed;
         float surfaceDrag = offRoad ? 95f + absSpeed * 5f : 0f;
-        longitudinalAcceleration = (driveForce - brakeForce - rolling - aero - surfaceDrag) / MASS;
+        float gradeAngle = (float) Math.atan(forwardGrade);
+        float gradeAcceleration = GRAVITY * MathUtils.sin(gradeAngle);
+        longitudinalAcceleration = (driveForce - brakeForce - rolling - aero - surfaceDrag) / MASS
+                - gradeAcceleration;
 
         speed += longitudinalAcceleration * dt;
         speed = MathUtils.clamp(speed, 0f, 48f);
@@ -703,11 +715,22 @@ public final class BalancePointGame extends ApplicationAdapter {
         float pitchDeg = pitch * MathUtils.radiansToDegrees;
         float rollDeg = roll * MathUtils.radiansToDegrees;
         float yawDeg = yaw * MathUtils.radiansToDegrees;
-        float rootHeight = crashed && crashSettled ? 0.22f : WHEEL_RADIUS;
+
+        float terrainHeight = terrainVisuals != null ? terrainVisuals.groundHeight(bikeX, bikeZ) : 0f;
+        float terrainSlopeX = terrainVisuals != null ? terrainVisuals.groundSlopeX(bikeX, bikeZ) : 0f;
+        float terrainSlopeZ = terrainVisuals != null ? terrainVisuals.groundSlopeZ(bikeX, bikeZ) : 0f;
+        float sinYaw = MathUtils.sin(yaw);
+        float cosYaw = MathUtils.cos(yaw);
+        float terrainForwardGrade = terrainSlopeX * sinYaw + terrainSlopeZ * cosYaw;
+        float terrainLateralGrade = terrainSlopeX * cosYaw - terrainSlopeZ * sinYaw;
+        float terrainPitchDeg = (float) Math.atan(terrainForwardGrade) * MathUtils.radiansToDegrees;
+        float terrainRollDeg = (float) Math.atan(terrainLateralGrade) * MathUtils.radiansToDegrees;
+
+        float rootHeight = terrainHeight + (crashed && crashSettled ? 0.22f : WHEEL_RADIUS);
         bikeRoot.idt().translate(bikeX, rootHeight, bikeZ)
                 .rotate(Vector3.Y, yawDeg)
-                .rotate(Vector3.Z, rollDeg)
-                .rotate(Vector3.X, -pitchDeg);
+                .rotate(Vector3.Z, rollDeg + terrainRollDeg)
+                .rotate(Vector3.X, -(pitchDeg + terrainPitchDeg));
 
         float spinDeg = -wheelSpin * MathUtils.radiansToDegrees;
         setWheel(rearWheel, 0f, 0f, 0f, spinDeg);
