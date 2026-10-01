@@ -1,0 +1,47 @@
+name: Promote validated camera refactor
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - .github/workflows/promote-camera-refactor.yml
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Apply already-validated camera transformation
+        run: python3 tools/refactor_camera_once.py
+
+      - name: Replace BalancePointGame on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import base64
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+
+          path = "core/src/main/java/com/nyerahworks/balancepoint/BalancePointGame.java"
+          current = json.loads(subprocess.check_output([
+              "gh", "api", f"repos/{os.environ['GITHUB_REPOSITORY']}/contents/{path}"
+          ]))
+          payload = {
+              "message": "Extract camera subsystem",
+              "content": base64.b64encode(Path(path).read_bytes()).decode("ascii"),
+              "sha": current["sha"],
+              "branch": "main",
+          }
+          Path("/tmp/update.json").write_text(json.dumps(payload))
+          PY
+          gh api --method PUT \
+            "repos/$GITHUB_REPOSITORY/contents/core/src/main/java/com/nyerahworks/balancepoint/BalancePointGame.java" \
+            --input /tmp/update.json
