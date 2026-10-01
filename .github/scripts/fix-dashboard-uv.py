@@ -1,5 +1,6 @@
 from pathlib import Path
 
+# One-shot patch trigger: fix the LCD quad UV basis so the display reads landscape.
 path = Path('core/src/main/java/com/nyerahworks/balancepoint/BalancePointGame.java')
 text = path.read_text()
 old = '''        Model dashScreenM = b.createRect(\n                -0.060f, 0f, -0.024f,\n                -0.060f, 0f,  0.029f,\n                 0.060f, 0f,  0.029f,\n                 0.060f, 0f, -0.024f,\n                 0f, 1f, 0f, dashScreenMat,\n                VertexAttributes.Usage.Position | VertexAttributes.Usage.Normal\n                        | VertexAttributes.Usage.TextureCoordinates);'''
