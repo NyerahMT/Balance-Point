@@ -84,12 +84,7 @@ public final class BalancePointGame extends ApplicationAdapter {
     // moving between the tank and rear of the seat.
     private static final float RIDER_SHIFT = 0.18f;
 
-    // Rear tire longitudinal slip model. Grip is a force ceiling, not a power reducer:
-    // surplus engine torque accelerates the wheel and produces visible/audible wheelspin.
-    private static final float TIRE_SLIP_SPEED_AT_PEAK = 0.65f;
-    private static final float TIRE_HIGH_SLIP_START = 3.0f;
-    private static final float TIRE_HIGH_SLIP_FULL = 10.0f;
-    private static final float TIRE_HIGH_SLIP_GRIP = 0.86f;
+    private static final float TIRE_MU = 1.05f;
     private static final float MAX_ENGINE_FORCE = 2500f;
     private static final float MAX_REAR_BRAKE_FORCE = 3800f;
     private static final float ROLLING_RESISTANCE = 0.017f;
@@ -633,38 +628,32 @@ public final class BalancePointGame extends ApplicationAdapter {
         frontNormalLoad = frontContactState.normalForce;
 
         float absSpeed = Math.abs(speed);
+        boolean offRoad = Math.abs(bikeX) > ROAD_HALF_WIDTH;
 
-        // Surface tangent is perpendicular to the solved terrain normal in the forward/up
-        // plane. The rear wheel is an independent rotating body now: ground speed and tire
-        // surface speed are allowed to diverge, and THAT slip creates longitudinal tire force.
-        float rearTangentForward = rearContactState.normalUp;
-        float rearTangentUp = -rearContactState.normalForward;
-        float tangentGroundSpeed = speed * rearTangentForward
-                + verticalVelocity * rearTangentUp;
-        float wheelLinearSpeed = rearWheelAngularSpeed * WHEEL_RADIUS;
-
-        // Engine output stays available even after the tire exceeds available grip. The
-        // drivetrain follows driven-wheel speed, so breaking traction makes RPM flare instead
-        // of silently deleting horsepower at a friction clamp.
-        float drivetrainForce = MathUtils.clamp(
-                drivetrain.update(wheelLinearSpeed, throttle, dt), 0f, MAX_ENGINE_FORCE);
+        // Tire force exists only through a real rear contact patch and is friction-limited by
+        // the normal force solved above. The drivetrain can rev in the air, but cannot push the
+        // chassis without a ground reaction.
+        float drivetrainForce = drivetrain.update(absSpeed, throttle, dt);
+        // Grip comes from the same terrain classification used to paint the baked albedo.
+        // Asphalt is the 1.00 reference; grass/dirt/rock progressively lose longitudinal grip.
         float rearSurfaceMu = terrainVisuals != null
                 ? terrainVisuals.tractionCoefficient(rearX, rearZ) : 1.0f;
         float rearTractionLimit = rearSurfaceMu * rearContactState.normalForce;
-        float slipSpeed = wheelLinearSpeed - tangentGroundSpeed;
-        float rearTireForce = 0f;
-        if (rearTouching && rearTractionLimit > 0f) {
-            float absSlip = Math.abs(slipSpeed);
-            float forceBuild = MathUtils.clamp(absSlip / TIRE_SLIP_SPEED_AT_PEAK, 0f, 1f);
-            // Once the tire is properly spinning, available longitudinal force falls a little
-            // below peak static grip instead of unrealistically staying glued at mu*N.
-            float highSlipBlend = MathUtils.clamp((absSlip - TIRE_HIGH_SLIP_START)
-                    / (TIRE_HIGH_SLIP_FULL - TIRE_HIGH_SLIP_START), 0f, 1f);
-            float highSlipFactor = MathUtils.lerp(1f, TIRE_HIGH_SLIP_GRIP, highSlipBlend);
-            rearTireForce = Math.signum(slipSpeed) * rearTractionLimit
-                    * forceBuild * highSlipFactor;
+        float driveForce = rearTouching
+                ? Math.min(Math.min(MAX_ENGINE_FORCE, drivetrainForce), rearTractionLimit) : 0f;
+        float brakeForce = 0f;
+        if (rearTouching && rearBrake > 0f && absSpeed > 0.03f) {
+            brakeForce = Math.min(MAX_REAR_BRAKE_FORCE * rearBrake, rearTractionLimit * 0.98f);
+            brakeForce = Math.min(brakeForce, absSpeed * MASS / Math.max(dt, 0.001f));
         }
+        float brakeDirection = absSpeed > 0.03f ? -Math.signum(speed) : 0f;
+        float rearTireForce = driveForce + brakeDirection * brakeForce;
 
+        // Surface tangent is perpendicular to the solved terrain normal in the forward/up
+        // plane. Engine and rear-brake force therefore naturally gain/lose vertical component
+        // on a slope instead of using a separate scripted grade-acceleration rule.
+        float rearTangentForward = rearContactState.normalUp;
+        float rearTangentUp = -rearContactState.normalForward;
         float rearTireForward = rearTireForce * rearTangentForward;
         float rearTireUp = rearTireForce * rearTangentUp;
 
@@ -677,50 +666,42 @@ public final class BalancePointGame extends ApplicationAdapter {
                 * ROLLING_RESISTANCE;
         float rollingForce = absSpeed > 0.05f ? Math.signum(speed) * rollingMagnitude : 0f;
         float aero = AERO_DRAG * speed * absSpeed;
+        float surfaceDragForce = (rearTouching || frontTouching) && offRoad && absSpeed > 0.05f
+                ? Math.signum(speed) * (95f + absSpeed * 5f) : 0f;
 
-        // Do not fake loose terrain with a generic speed-dependent power drain. Surface
-        // differences now come from actual tire slip/grip instead.
         float totalForwardForce = rearNormalForward + frontNormalForward + rearTireForward
-                - rollingForce - aero;
+                - rollingForce - aero - surfaceDragForce;
         float totalVerticalForce = rearNormalUp + frontNormalUp + rearTireUp - MASS * GRAVITY;
 
         longitudinalAcceleration = totalForwardForce / MASS;
         speed += longitudinalAcceleration * dt;
+        // A bike that cannot hold a grade should roll backward instead of being glued to a
+        // zero-speed clamp. Reverse speed is capped only to keep an accidental downhill roll
+        // recoverable in the prototype controls.
         speed = MathUtils.clamp(speed, -10f, 48f);
         verticalVelocity += totalVerticalForce / MASS * dt;
 
-        // Integrate the driven rear wheel from engine torque, tire reaction torque and rear
-        // brake torque. This is the core distinction between traction and a power restriction:
-        // torque that cannot reach the ground remains in the wheel as angular acceleration.
-        float previousWheelAngularSpeed = rearWheelAngularSpeed;
-        float engineWheelTorque = drivetrainForce * WHEEL_RADIUS;
-        float tireReactionTorque = rearTireForce * WHEEL_RADIUS;
-        float wheelTorqueBeforeBrake = engineWheelTorque - tireReactionTorque;
-        float maxBrakeTorque = MAX_REAR_BRAKE_FORCE * rearBrake * WHEEL_RADIUS;
-
-        if (rearBrake > 0f && Math.abs(rearWheelAngularSpeed) < 1.0f
-                && maxBrakeTorque >= Math.abs(wheelTorqueBeforeBrake)) {
-            // Brake can statically hold the wheel at zero instead of numerically reversing it.
-            rearWheelAngularSpeed = 0f;
+        // Rear-wheel angular speed is coupled to road speed while the tire is loaded. In the
+        // air it becomes an independent rotating mass; accelerating it with throttle rotates
+        // the chassis nose-up, and braking it rotates the chassis nose-down.
+        float wheelReactionTorque = 0f;
+        if (rearTouching) {
+            float tangentSpeed = Math.max(0f, speed * rearTangentForward
+                    + verticalVelocity * rearTangentUp);
+            float coupledWheelSpeed = tangentSpeed / WHEEL_RADIUS;
+            rearWheelAngularSpeed += (coupledWheelSpeed - rearWheelAngularSpeed)
+                    * Math.min(1f, dt * 34f);
         } else {
-            float brakeDirection = Math.abs(rearWheelAngularSpeed) > 0.25f
-                    ? Math.signum(rearWheelAngularSpeed)
-                    : Math.signum(wheelTorqueBeforeBrake);
-            float netWheelTorque = wheelTorqueBeforeBrake - brakeDirection * maxBrakeTorque;
-            float wheelAngularAcceleration = netWheelTorque / REAR_WHEEL_INERTIA
+            float previousWheelAngularSpeed = rearWheelAngularSpeed;
+            float wheelAngularAcceleration = throttle * AIR_WHEEL_DRIVE_ACCEL
+                    - rearBrake * AIR_WHEEL_BRAKE_ACCEL
                     - rearWheelAngularSpeed * AIR_WHEEL_DRAG;
-            rearWheelAngularSpeed += wheelAngularAcceleration * dt;
-            // A braking step may stop the wheel, but should not drive it backwards.
-            if (rearBrake > 0f && previousWheelAngularSpeed * rearWheelAngularSpeed < 0f) {
-                rearWheelAngularSpeed = 0f;
-            }
-            rearWheelAngularSpeed = MathUtils.clamp(rearWheelAngularSpeed, -50f, 260f);
+            rearWheelAngularSpeed = MathUtils.clamp(rearWheelAngularSpeed
+                    + wheelAngularAcceleration * dt, 0f, 225f);
+            float actualAngularAcceleration = (rearWheelAngularSpeed - previousWheelAngularSpeed)
+                    / Math.max(dt, 0.0001f);
+            wheelReactionTorque = actualAngularAcceleration * REAR_WHEEL_INERTIA;
         }
-
-        float actualAngularAcceleration = (rearWheelAngularSpeed - previousWheelAngularSpeed)
-                / Math.max(dt, 0.0001f);
-        float wheelReactionTorque = rearTouching ? 0f
-                : actualAngularAcceleration * REAR_WHEEL_INERTIA;
 
         // Apply contact forces at the actual tire contact patches and integrate the resulting
         // moment about the already-shifted COM. No second COM offset is applied here: axle
