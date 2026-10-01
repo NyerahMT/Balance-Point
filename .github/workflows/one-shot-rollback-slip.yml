@@ -1,0 +1,49 @@
+name: One-shot rollback rear slip
+
+on:
+  push:
+    paths:
+      - '.github/workflows/one-shot-rollback-slip.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Sync current main
+        run: git pull --ff-only origin main
+
+      - name: Restore last known-good drivetrain physics
+        run: |
+          git checkout 4a0abc8ef9e833238e3e187cf00279ec90e55431 -- \
+            core/src/main/java/com/nyerahworks/balancepoint/BalancePointGame.java \
+            core/src/main/java/com/nyerahworks/balancepoint/MotorcycleDrivetrain.java
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+
+      - name: Compile core
+        run: gradle :core:compileJava --stacktrace
+
+      - name: Commit rollback
+        run: |
+          rm -f .github/workflows/one-shot-rollback-slip.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add core/src/main/java/com/nyerahworks/balancepoint/BalancePointGame.java \
+                  core/src/main/java/com/nyerahworks/balancepoint/MotorcycleDrivetrain.java \
+                  .github/workflows/one-shot-rollback-slip.yml
+          git commit -m "Rollback unstable rear wheel slip model"
+          git push
