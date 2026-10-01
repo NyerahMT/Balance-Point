@@ -14,4 +14,4 @@ jobs:
       - name: Delete stale branch
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh api -X DELETE "repos/${{ github.repository }}/git/refs/heads/repo-cleanup-trigger" || true
+        run: gh api -X DELETE "repos/${{ github.repository }}/git/refs/heads/repo-cleanup-trigger-2" || true
