@@ -245,6 +245,11 @@ public final class BalancePointGame extends ApplicationAdapter {
 
     private final WheelContact rearContactState = new WheelContact();
     private final WheelContact frontContactState = new WheelContact();
+// Scratch contacts used by the post-step non-penetration check. Keeping the same
+// finite-radius terrain query in both the force solve and correction prevents the two
+// stages from disagreeing about where the tire actually touches the heightfield.
+private final WheelContact rearPostContact = new WheelContact();
+private final WheelContact frontPostContact = new WheelContact();
 
     @Override
     public void create() {
@@ -790,11 +795,13 @@ public final class BalancePointGame extends ApplicationAdapter {
         float rearPostZ = bikeZ + cosYaw * rearForwardPost;
         float frontPostX = bikeX + sinYaw * frontForwardPost;
         float frontPostZ = bikeZ + cosYaw * frontForwardPost;
-        float rearPenetration = terrainVisuals.groundHeight(rearPostX, rearPostZ) + WHEEL_RADIUS
-                - (chassisY + rearVerticalPost);
-        float frontPenetration = terrainVisuals.groundHeight(frontPostX, frontPostZ) + WHEEL_RADIUS
-                - (chassisY + frontVerticalPost);
-        float penetrationCorrection = Math.max(rearPenetration, frontPenetration) - 0.012f;
+sampleWheelSurface(rearPostContact, rearPostX, chassisY + rearVerticalPost, rearPostZ,
+        sinYaw, cosYaw);
+sampleWheelSurface(frontPostContact, frontPostX, chassisY + frontVerticalPost, frontPostZ,
+        sinYaw, cosYaw);
+float rearPenetration = Math.max(0f, -rearPostContact.gap);
+float frontPenetration = Math.max(0f, -frontPostContact.gap);
+float penetrationCorrection = Math.max(rearPenetration, frontPenetration) - 0.012f;
         if (penetrationCorrection > 0f) {
             chassisY += Math.min(penetrationCorrection, 0.16f);
             if (verticalVelocity < 0f) {
@@ -890,22 +897,69 @@ public final class BalancePointGame extends ApplicationAdapter {
         }
     }
 
-    private void solveWheelContact(WheelContact out, float worldX, float wheelY, float worldZ,
-                                   float pointForwardVelocity, float pointVerticalVelocity,
-                                   float sinYaw, float cosYaw, float preloadGap,
-                                   float effectiveMass, float dt) {
-        float ground = terrainVisuals != null ? terrainVisuals.groundHeight(worldX, worldZ) : 0f;
-        float slopeX = terrainVisuals != null ? terrainVisuals.groundSlopeX(worldX, worldZ) : 0f;
-        float slopeZ = terrainVisuals != null ? terrainVisuals.groundSlopeZ(worldX, worldZ) : 0f;
-        float forwardSlope = slopeX * sinYaw + slopeZ * cosYaw;
+/**
+ * Finds the closest terrain plane under the lower arc of a finite-radius motorcycle tire.
+ * The old solver sampled only the height directly below the axle and then added R, which is
+ * geometrically valid only on level ground. A circle tangent to a slope needs its center
+ * farther above the vertical height sample, and on a crest the contact point can sit ahead
+ * or behind the axle. Sampling seven tangent planes across the lower tire footprint fixes
+ * both cases while still colliding against the exact baked heightfield.
+ */
+private void sampleWheelSurface(WheelContact out, float worldX, float wheelY, float worldZ,
+                                float sinYaw, float cosYaw) {
+    final float[] offsets = {-0.90f, -0.60f, -0.30f, 0f, 0.30f, 0.60f, 0.90f};
+    final float slopeProbe = 0.075f;
+    float bestGap = Float.POSITIVE_INFINITY;
+    float bestNormalForward = 0f;
+    float bestNormalUp = 1f;
+    float bestGroundY = WHEEL_RADIUS;
+
+    for (float factor : offsets) {
+        float offset = factor * WHEEL_RADIUS;
+        float sampleX = worldX + sinYaw * offset;
+        float sampleZ = worldZ + cosYaw * offset;
+        float ground = terrainVisuals != null
+                ? terrainVisuals.groundHeight(sampleX, sampleZ) : 0f;
+
+        // Probe the exact height surface in the wheel's rolling direction rather than
+        // using the deliberately smoothed 6 m render/contact normal.
+        float ahead = terrainVisuals != null
+                ? terrainVisuals.groundHeight(sampleX + sinYaw * slopeProbe,
+                sampleZ + cosYaw * slopeProbe) : 0f;
+        float behind = terrainVisuals != null
+                ? terrainVisuals.groundHeight(sampleX - sinYaw * slopeProbe,
+                sampleZ - cosYaw * slopeProbe) : 0f;
+        float forwardSlope = (ahead - behind) / (2f * slopeProbe);
         float invLength = 1f / (float) Math.sqrt(1f + forwardSlope * forwardSlope);
+        float normalForward = -forwardSlope * invLength;
+        float normalUp = invLength;
 
-        out.normalForward = -forwardSlope * invLength;
-        out.normalUp = invLength;
-        out.groundY = ground + WHEEL_RADIUS;
-        out.gap = wheelY - out.groundY;
+        float centerFromProbe = -offset;
+        float signedDistance = normalForward * centerFromProbe
+                + normalUp * (wheelY - ground);
+        float gap = signedDistance - WHEEL_RADIUS;
+        if (gap < bestGap) {
+            bestGap = gap;
+            bestNormalForward = normalForward;
+            bestNormalUp = normalUp;
+            bestGroundY = ground
+                    + (WHEEL_RADIUS - normalForward * centerFromProbe) / normalUp;
+        }
+    }
 
-        float virtualCompression = preloadGap - out.gap;
+    out.normalForward = bestNormalForward;
+    out.normalUp = bestNormalUp;
+    out.groundY = bestGroundY;
+    out.gap = bestGap;
+}
+
+private void solveWheelContact(WheelContact out, float worldX, float wheelY, float worldZ,
+                               float pointForwardVelocity, float pointVerticalVelocity,
+                               float sinYaw, float cosYaw, float preloadGap,
+                               float effectiveMass, float dt) {
+    sampleWheelSurface(out, worldX, wheelY, worldZ, sinYaw, cosYaw);
+
+    float virtualCompression = preloadGap - out.gap;
         if (virtualCompression <= 0f) {
             out.normalForce = 0f;
             return;
