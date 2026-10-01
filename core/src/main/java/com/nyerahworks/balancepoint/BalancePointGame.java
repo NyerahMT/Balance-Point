@@ -6,6 +6,8 @@ import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.GL20;
 import com.badlogic.gdx.graphics.OrthographicCamera;
 import com.badlogic.gdx.graphics.PerspectiveCamera;
+import com.badlogic.gdx.graphics.Pixmap;
+import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.VertexAttributes;
 import com.badlogic.gdx.graphics.g2d.BitmapFont;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
@@ -15,6 +17,7 @@ import com.badlogic.gdx.graphics.g3d.Model;
 import com.badlogic.gdx.graphics.g3d.ModelBatch;
 import com.badlogic.gdx.graphics.g3d.ModelInstance;
 import com.badlogic.gdx.graphics.g3d.attributes.ColorAttribute;
+import com.badlogic.gdx.graphics.g3d.attributes.TextureAttribute;
 import com.badlogic.gdx.graphics.g3d.environment.DirectionalLight;
 import com.badlogic.gdx.graphics.g3d.utils.ModelBuilder;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
@@ -71,6 +74,8 @@ public final class BalancePointGame extends ApplicationAdapter {
     private SpriteBatch spriteBatch;
     private ShapeRenderer shapes;
     private BitmapFont font;
+    private Pixmap instrumentPixmap;
+    private Texture instrumentTexture;
     private Environment environment;
     private EngineAudio engineAudio;
 
@@ -99,6 +104,9 @@ public final class BalancePointGame extends ApplicationAdapter {
     private ModelInstance riderArmRight;
     private ModelInstance frontNumberPlate;
     private ModelInstance instrumentPanel;
+    private ModelInstance instrumentScreen;
+    private ModelInstance instrumentButtonLeft;
+    private ModelInstance instrumentButtonRight;
 
     private DirtBikeMeshLoader.LoadedBike importedBike;
     private boolean importedBikeLoaded;
@@ -236,7 +244,20 @@ public final class BalancePointGame extends ApplicationAdapter {
         Material orange = material(0.92f, 0.29f, 0.085f);
         Material rider = material(0.07f, 0.075f, 0.08f);
         Material visor = material(0.16f, 0.27f, 0.30f);
-        Material dashMat = material(0.025f, 0.030f, 0.032f);
+        Material dashMat = material(0.030f, 0.034f, 0.035f);
+        Material dashButtonMat = material(0.070f, 0.075f, 0.074f);
+
+        instrumentPixmap = new Pixmap(192, 96, Pixmap.Format.RGBA8888);
+        instrumentPixmap.setColor(0.008f, 0.014f, 0.013f, 1f);
+        instrumentPixmap.fill();
+        instrumentTexture = new Texture(instrumentPixmap);
+        instrumentTexture.setFilter(Texture.TextureFilter.Nearest, Texture.TextureFilter.Nearest);
+        TextureAttribute dashTextureAttribute = TextureAttribute.createDiffuse(instrumentTexture);
+        // Framebuffer-style UV orientation is wrong for a bike-mounted plane unless V is flipped.
+        dashTextureAttribute.offsetV = 1f;
+        dashTextureAttribute.scaleV = -1f;
+        Material dashScreenMat = new Material(dashTextureAttribute,
+                ColorAttribute.createDiffuse(Color.WHITE));
 
         Model wheel = cylinder(b, WHEEL_RADIUS * 2f, 0.13f, WHEEL_RADIUS * 2f, 14, tire);
         Model hub = cylinder(b, 0.19f, 0.145f, 0.19f, 12, metal);
@@ -250,7 +271,18 @@ public final class BalancePointGame extends ApplicationAdapter {
         Model headM = sphere(b, 0.30f, 0.30f, 0.30f, 10, 8, rider);
         Model limbM = box(b, 0.10f, 0.62f, 0.10f, rider);
         Model plateM = box(b, 0.28f, 0.12f, 0.035f, visor);
-        Model dashM = box(b, 0.30f, 0.035f, 0.16f, dashMat);
+        // Compact trail-computer-sized housing instead of the oversized prototype box.
+        Model dashM = box(b, 0.19f, 0.025f, 0.105f, dashMat);
+        Model dashButtonM = box(b, 0.020f, 0.007f, 0.014f, dashButtonMat);
+        Model dashScreenM = b.createRect(
+                -0.078f, 0f, -0.030f,
+                -0.078f, 0f,  0.038f,
+                 0.078f, 0f,  0.038f,
+                 0.078f, 0f, -0.030f,
+                 0f, 1f, 0f, dashScreenMat,
+                VertexAttributes.Usage.Position | VertexAttributes.Usage.Normal
+                        | VertexAttributes.Usage.TextureCoordinates);
+        ownedModels.add(dashScreenM);
 
         rearWheel = new ModelInstance(wheel);
         frontWheel = new ModelInstance(wheel);
@@ -271,6 +303,9 @@ public final class BalancePointGame extends ApplicationAdapter {
         riderArmRight = new ModelInstance(limbM);
         frontNumberPlate = new ModelInstance(plateM);
         instrumentPanel = new ModelInstance(dashM);
+        instrumentScreen = new ModelInstance(dashScreenM);
+        instrumentButtonLeft = new ModelInstance(dashButtonM);
+        instrumentButtonRight = new ModelInstance(dashButtonM);
 
         try {
             importedBike = DirtBikeMeshLoader.load(ownedModels,
@@ -305,6 +340,7 @@ public final class BalancePointGame extends ApplicationAdapter {
 
         updateWorldInstances();
         updateBikeInstances();
+        updateInstrumentTexture();
         updateCamera(frameDt);
 
         Gdx.gl.glViewport(0, 0, Gdx.graphics.getBackBufferWidth(), Gdx.graphics.getBackBufferHeight());
@@ -678,8 +714,16 @@ public final class BalancePointGame extends ApplicationAdapter {
         setPart(handlebar, 0f, 0.91f, 1.04f);
         setPart(frontNumberPlate, 0f, 0.72f, 1.19f);
         frontNumberPlate.transform.rotate(Vector3.X, 10f);
-        setPart(instrumentPanel, 0f, 0.90f, 0.98f);
-        instrumentPanel.transform.rotate(Vector3.X, -24f);
+        // The display is actual bike geometry. Everything below inherits the same local
+        // transform, so camera movement changes perspective instead of sliding a 2D overlay.
+        setPart(instrumentPanel, 0f, 0.915f, 0.985f);
+        instrumentPanel.transform.rotate(Vector3.X, -22f);
+        instrumentScreen.transform.set(instrumentPanel.transform)
+                .translate(0f, 0.0132f, 0.006f);
+        instrumentButtonLeft.transform.set(instrumentPanel.transform)
+                .translate(-0.055f, 0.0162f, -0.041f);
+        instrumentButtonRight.transform.set(instrumentPanel.transform)
+                .translate(0.055f, 0.0162f, -0.041f);
 
         if (importedBikeLoaded) {
             setPart(riderTorso, 0f, 0.94f, 0.49f);
@@ -787,6 +831,9 @@ public final class BalancePointGame extends ApplicationAdapter {
             modelBatch.render(importedBike.rearWheel, environment);
             modelBatch.render(importedBike.frontWheel, environment);
             modelBatch.render(instrumentPanel, environment);
+            modelBatch.render(instrumentScreen, environment);
+            modelBatch.render(instrumentButtonLeft, environment);
+            modelBatch.render(instrumentButtonRight, environment);
             return;
         }
 
@@ -797,6 +844,9 @@ public final class BalancePointGame extends ApplicationAdapter {
         modelBatch.render(forkLeft, environment); modelBatch.render(forkRight, environment);
         modelBatch.render(handlebar, environment); modelBatch.render(frontNumberPlate, environment);
         modelBatch.render(instrumentPanel, environment);
+        modelBatch.render(instrumentScreen, environment);
+        modelBatch.render(instrumentButtonLeft, environment);
+        modelBatch.render(instrumentButtonRight, environment);
         modelBatch.render(riderTorso, environment); modelBatch.render(riderHead, environment);
         modelBatch.render(riderLegLeft, environment); modelBatch.render(riderLegRight, environment);
         modelBatch.render(riderArmLeft, environment); modelBatch.render(riderArmRight, environment);
@@ -812,7 +862,6 @@ public final class BalancePointGame extends ApplicationAdapter {
         Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA);
 
         drawTouchControls(w, h, min);
-        drawBikeGauge(w, h);
 
         spriteBatch.setProjectionMatrix(uiCamera.combined);
         spriteBatch.begin();
@@ -907,46 +956,162 @@ public final class BalancePointGame extends ApplicationAdapter {
         spriteBatch.end();
     }
 
-    private void drawBikeGauge(int w, int h) {
-        if (crashed && crashSettled) return;
 
-        tempA.set(0f, 0.93f, 1.00f).mul(bikeRoot);
-        float distance = camera.position.dst(tempA);
-        camera.project(tempA);
-        if (tempA.z < 0f || tempA.z > 1f || tempA.x < -80f || tempA.x > w + 80f
-                || tempA.y < -60f || tempA.y > h + 60f) return;
 
-        float scale = MathUtils.clamp(4.2f / Math.max(distance, 0.45f), 0.62f, 1.20f);
-        float panelW = 116f * scale;
-        float panelH = 52f * scale;
-        float x = tempA.x - panelW * 0.5f;
-        float y = tempA.y - panelH * 0.48f;
-        float rpmNorm = MathUtils.clamp(drivetrain.getRpm() / drivetrain.getRedlineRpm(), 0f, 1f);
+    private void updateInstrumentTexture() {
+        if (instrumentPixmap == null || instrumentTexture == null) return;
 
-        shapes.setProjectionMatrix(uiCamera.combined);
-        shapes.begin(ShapeRenderer.ShapeType.Filled);
-        shapes.setColor(0.01f, 0.015f, 0.016f, 0.82f);
-        shapes.rect(x, y, panelW, panelH);
-        shapes.setColor(1f, 1f, 1f, 0.12f);
-        shapes.rect(x + 7f * scale, y + 7f * scale, panelW - 14f * scale, 4f * scale);
-        shapes.setColor(0.86f, 0.92f, 0.88f, 0.80f);
-        shapes.rect(x + 7f * scale, y + 7f * scale,
-                (panelW - 14f * scale) * rpmNorm, 4f * scale);
-        shapes.end();
+        final int width = instrumentPixmap.getWidth();
+        final int height = instrumentPixmap.getHeight();
+        final float rpmNorm = MathUtils.clamp(drivetrain.getRpm()
+                / drivetrain.getRedlineRpm(), 0f, 1f);
 
-        spriteBatch.setProjectionMatrix(uiCamera.combined);
-        spriteBatch.begin();
-        font.setColor(0.92f, 0.96f, 0.93f, 0.96f);
-        font.getData().setScale(Math.max(0.62f, scale * 0.78f));
-        String speedText = String.format(java.util.Locale.US, "%02.0f", speed * 2.23694f);
-        font.draw(spriteBatch, speedText, x + 9f * scale, y + 36f * scale);
-        font.getData().setScale(Math.max(0.72f, scale * 1.02f));
-        font.draw(spriteBatch, Integer.toString(drivetrain.getGear()),
-                x + panelW - 26f * scale, y + 37f * scale);
-        font.getData().setScale(Math.max(0.48f, scale * 0.55f));
-        font.setColor(1f, 1f, 1f, 0.52f);
-        font.draw(spriteBatch, "MPH", x + 9f * scale, y + 20f * scale);
-        spriteBatch.end();
+        // Deep green-black LCD glass with a subtle inner frame and top sheen.
+        instrumentPixmap.setColor(0.007f, 0.014f, 0.012f, 1f);
+        instrumentPixmap.fill();
+        instrumentPixmap.setColor(0.07f, 0.12f, 0.10f, 1f);
+        instrumentPixmap.drawRectangle(2, 2, width - 5, height - 5);
+        instrumentPixmap.setColor(0.035f, 0.070f, 0.060f, 1f);
+        instrumentPixmap.fillRectangle(4, 4, width - 8, 3);
+
+        // Segmented tach across the top. The last two segments become a warm shift zone.
+        final int rpmSegments = 14;
+        final int activeSegments = MathUtils.clamp(Math.round(rpmNorm * rpmSegments), 0,
+                rpmSegments);
+        final int barX = 9;
+        final int barY = 11;
+        final int barGap = 2;
+        final int barWidth = 10;
+        for (int i = 0; i < rpmSegments; i++) {
+            boolean active = i < activeSegments;
+            if (!active) {
+                instrumentPixmap.setColor(0.045f, 0.095f, 0.078f, 1f);
+            } else if (i >= rpmSegments - 2) {
+                instrumentPixmap.setColor(0.98f, 0.28f, 0.08f, 1f);
+            } else if (i >= rpmSegments - 4) {
+                instrumentPixmap.setColor(0.98f, 0.70f, 0.10f, 1f);
+            } else {
+                instrumentPixmap.setColor(0.30f, 0.98f, 0.68f, 1f);
+            }
+            instrumentPixmap.fillRectangle(barX + i * (barWidth + barGap), barY,
+                    barWidth, 6);
+        }
+
+        // A small divider makes the right-side gear readout feel like a dedicated instrument cell.
+        instrumentPixmap.setColor(0.055f, 0.115f, 0.095f, 1f);
+        instrumentPixmap.drawLine(142, 25, 142, 86);
+
+        int mph = MathUtils.clamp(Math.round(speed * 2.23694f), 0, 199);
+        drawSevenSegmentNumber(mph, 10, 29, 31, 45, 5, 3);
+        drawSevenSegmentDigit(MathUtils.clamp(drivetrain.getGear(), 0, 9),
+                153, 29, 28, 45, 5);
+
+        drawMiniText("MPH", 11, 80, 2);
+        drawMiniText("G", 162, 80, 2);
+
+        // Shift indicator dot. Unlike the tach bar, this only lights very near redline.
+        if (rpmNorm > 0.92f) {
+            instrumentPixmap.setColor(1f, 0.24f, 0.08f, 1f);
+            instrumentPixmap.fillCircle(181, 17, 4);
+        } else {
+            instrumentPixmap.setColor(0.09f, 0.035f, 0.025f, 1f);
+            instrumentPixmap.fillCircle(181, 17, 3);
+        }
+
+        instrumentTexture.draw(instrumentPixmap, 0, 0);
+    }
+
+    private void drawSevenSegmentNumber(int value, int x, int y, int digitWidth,
+                                        int digitHeight, int thickness, int gap) {
+        String text = Integer.toString(Math.max(0, value));
+        int slots = 3;
+        int startX = x + (slots - text.length()) * (digitWidth + gap);
+        for (int i = 0; i < text.length(); i++) {
+            int digit = text.charAt(i) - '0';
+            drawSevenSegmentDigit(digit, startX + i * (digitWidth + gap), y,
+                    digitWidth, digitHeight, thickness);
+        }
+    }
+
+    private void drawSevenSegmentDigit(int digit, int x, int y, int width, int height,
+                                       int thickness) {
+        int mask;
+        switch (digit) {
+            case 0: mask = 0x3F; break;
+            case 1: mask = 0x06; break;
+            case 2: mask = 0x5B; break;
+            case 3: mask = 0x4F; break;
+            case 4: mask = 0x66; break;
+            case 5: mask = 0x6D; break;
+            case 6: mask = 0x7D; break;
+            case 7: mask = 0x07; break;
+            case 8: mask = 0x7F; break;
+            case 9: mask = 0x6F; break;
+            default: mask = 0; break;
+        }
+
+        instrumentPixmap.setColor(0.032f, 0.078f, 0.064f, 1f);
+        drawSevenSegmentMask(0x7F, x, y, width, height, thickness);
+        instrumentPixmap.setColor(0.55f, 1.00f, 0.78f, 1f);
+        drawSevenSegmentMask(mask, x, y, width, height, thickness);
+    }
+
+    private void drawSevenSegmentMask(int mask, int x, int y, int width, int height,
+                                      int thickness) {
+        int half = height / 2;
+        if ((mask & 0x01) != 0)
+            instrumentPixmap.fillRectangle(x + thickness, y,
+                    width - thickness * 2, thickness); // A
+        if ((mask & 0x02) != 0)
+            instrumentPixmap.fillRectangle(x + width - thickness, y + thickness,
+                    thickness, half - thickness); // B
+        if ((mask & 0x04) != 0)
+            instrumentPixmap.fillRectangle(x + width - thickness, y + half,
+                    thickness, half - thickness); // C
+        if ((mask & 0x08) != 0)
+            instrumentPixmap.fillRectangle(x + thickness, y + height - thickness,
+                    width - thickness * 2, thickness); // D
+        if ((mask & 0x10) != 0)
+            instrumentPixmap.fillRectangle(x, y + half,
+                    thickness, half - thickness); // E
+        if ((mask & 0x20) != 0)
+            instrumentPixmap.fillRectangle(x, y + thickness,
+                    thickness, half - thickness); // F
+        if ((mask & 0x40) != 0)
+            instrumentPixmap.fillRectangle(x + thickness, y + half - thickness / 2,
+                    width - thickness * 2, thickness); // G
+    }
+
+    private void drawMiniText(String text, int x, int y, int scale) {
+        int cursor = x;
+        instrumentPixmap.setColor(0.32f, 0.58f, 0.48f, 1f);
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            int[] rows = miniGlyph(c);
+            if (rows == null) {
+                cursor += 4 * scale;
+                continue;
+            }
+            for (int row = 0; row < rows.length; row++) {
+                for (int col = 0; col < 5; col++) {
+                    if ((rows[row] & (1 << (4 - col))) != 0) {
+                        instrumentPixmap.fillRectangle(cursor + col * scale,
+                                y + row * scale, scale, scale);
+                    }
+                }
+            }
+            cursor += 6 * scale;
+        }
+    }
+
+    private static int[] miniGlyph(char c) {
+        switch (c) {
+            case 'M': return new int[] {0x11, 0x1B, 0x15, 0x15, 0x11, 0x11, 0x11};
+            case 'P': return new int[] {0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10};
+            case 'H': return new int[] {0x11, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11};
+            case 'G': return new int[] {0x0E, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0E};
+            default: return null;
+        }
     }
 
     @Override
@@ -980,6 +1145,8 @@ public final class BalancePointGame extends ApplicationAdapter {
         if (spriteBatch != null) spriteBatch.dispose();
         if (shapes != null) shapes.dispose();
         if (font != null) font.dispose();
+        if (instrumentTexture != null) instrumentTexture.dispose();
+        if (instrumentPixmap != null) instrumentPixmap.dispose();
         for (Model m : ownedModels) m.dispose();
         ownedModels.clear();
     }
