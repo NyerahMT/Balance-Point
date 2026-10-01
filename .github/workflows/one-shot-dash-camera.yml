@@ -1,0 +1,27 @@
+name: One-shot dash and camera fix
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/scripts/fix-dash-camera.py'
+      - '.github/workflows/one-shot-dash-camera.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Apply dash and camera fixes
+        run: python .github/scripts/fix-dash-camera.py
+      - name: Commit fixes and remove one-shot files
+        run: |
+          rm .github/scripts/fix-dash-camera.py
+          rm .github/workflows/one-shot-dash-camera.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "Fix dashboard orientation and chase camera"
+          git push
