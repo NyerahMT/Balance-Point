@@ -37,8 +37,8 @@ public final class BalancePointGame extends ApplicationAdapter {
     private static final float SEGMENT_LENGTH = 20f;
     private static final float ROAD_HALF_WIDTH = 4.2f;
 
-    private static final float WHEELBASE = 1.478f;
-    private static final float WHEEL_RADIUS = 0.337f;
+    private static final float WHEELBASE = 1.403232f;
+    private static final float WHEEL_RADIUS = 0.334978f;
     // Approx. 247 lb wet 450 + 190 lb rider = 198 kg combined system mass.
     private static final float MASS = 198f;
     private static final float GRAVITY = 9.81f;
@@ -72,7 +72,7 @@ public final class BalancePointGame extends ApplicationAdapter {
     // Neutral combined bike+rider COM. 0.36 m above the axles plus the 0.337 m tire
     // radius puts the system COM about 0.70 m above level ground. 0.67 m forward of the
     // rear axle yields a believable ~55/45 rear/front static load split.
-    private static final float COM_FORWARD = 0.67f;
+    private static final float COM_FORWARD = 0.636107f;
     private static final float AIRBORNE_COM_FORWARD = 1.00f;
     private static final float AIRBORNE_COM_SHIFT_START = 25f * MathUtils.degreesToRadians;
     private static final float AIRBORNE_COM_SHIFT_END = 55f * MathUtils.degreesToRadians;
