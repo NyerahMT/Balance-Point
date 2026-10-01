@@ -1,0 +1,49 @@
+name: One-shot restore known-good render
+
+on:
+  push:
+    paths:
+      - '.github/workflows/one-shot-restore-known-good-render.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Sync current main
+        run: git pull --ff-only origin main
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Restore pre-beauty renderer files
+        run: |
+          git checkout 475facb74cccce9ef769afd0a4fc3db82909f624 -- \
+            core/src/main/java/com/nyerahworks/balancepoint/BalancePointGame.java \
+            core/src/main/java/com/nyerahworks/balancepoint/TerrainVisuals.java
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+
+      - name: Compile core
+        run: gradle :core:compileJava --stacktrace
+
+      - name: Commit restore
+        run: |
+          rm -f .github/workflows/one-shot-restore-known-good-render.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add core/src/main/java/com/nyerahworks/balancepoint/BalancePointGame.java \
+                  core/src/main/java/com/nyerahworks/balancepoint/TerrainVisuals.java \
+                  .github/workflows/one-shot-restore-known-good-render.yml
+          git commit -m "Restore known-good pre-beauty render path"
+          git push
