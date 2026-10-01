@@ -1,0 +1,37 @@
+name: One-shot terrain surface and UI
+
+on:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Sync current main
+        run: |
+          git fetch origin main
+          git reset --hard origin/main
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Apply terrain and UI patch
+        run: python3 tools/patch_terrain_surface_and_pause_ui.py
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+      - name: Compile core
+        run: gradle :core:compileJava --stacktrace
+      - name: Commit source changes
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          rm .github/workflows/one-shot-terrain-ui.yml tools/patch_terrain_surface_and_pause_ui.py
+          git add core/src/main/java/com/nyerahworks/balancepoint/TerrainVisuals.java core/src/main/java/com/nyerahworks/balancepoint/BalancePointGame.java .github/workflows/one-shot-terrain-ui.yml tools/patch_terrain_surface_and_pause_ui.py
+          git commit -m 'Unify terrain collision surface and polish pause UI'
+          git push origin HEAD:main
