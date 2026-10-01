@@ -1,0 +1,40 @@
+name: One-shot steer lean camera correction
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/scripts/fix-steer-lean-camera.py'
+      - '.github/workflows/one-shot-steer-lean-camera.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+      - name: Apply correction patch
+        run: python3 .github/scripts/fix-steer-lean-camera.py
+      - name: Compile core before commit
+        run: gradle :core:compileJava --no-daemon
+      - name: Commit patch and clean one-shot files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm .github/scripts/fix-steer-lean-camera.py
+          rm .github/workflows/one-shot-steer-lean-camera.yml
+          git add core/src/main/java/com/nyerahworks/balancepoint/BalancePointGame.java
+          git add -u .github/scripts/fix-steer-lean-camera.py .github/workflows/one-shot-steer-lean-camera.yml
+          git commit -m "Fix steer direction, rider weight transfer, and helmet camera"
+          git push
