@@ -50,11 +50,11 @@ public final class BalancePointGame extends ApplicationAdapter {
     private static final float CONTACT_COMPRESSION_DAMPING = 3_600f;
     // High-speed damping is quadratic in compression velocity: ordinary bumps stay compliant,
     // but drop landings shed far more kinetic energy instead of storing it in the spring.
-    private static final float CONTACT_HIGH_SPEED_COMPRESSION = 650f;
-    private static final float CONTACT_REBOUND_DAMPING = 8_600f;
+    private static final float CONTACT_HIGH_SPEED_COMPRESSION = 300f;
+    private static final float CONTACT_REBOUND_DAMPING = 9_200f;
     private static final float CONTACT_BUMP_START = 0.075f;
-    private static final float CONTACT_BUMP_STIFFNESS = 68_000f;
-    private static final float MAX_CONTACT_FORCE = MASS * GRAVITY * 9f;
+    private static final float CONTACT_BUMP_STIFFNESS = 60_000f;
+    private static final float MAX_CONTACT_FORCE = MASS * GRAVITY * 5f;
     private static final float RIGID_PITCH_DAMPING = 1.35f;
     // Neutral combined bike+rider COM. 0.36 m above the axles plus the 0.337 m tire
     // radius puts the system COM about 0.70 m above level ground. 0.67 m forward of the
@@ -227,7 +227,7 @@ public final class BalancePointGame extends ApplicationAdapter {
 
         camera = new PerspectiveCamera(67f, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
         camera.near = 0.08f;
-        camera.far = 520f;
+        camera.far = 900f;
         camera.position.set(0f, 2.5f, -5.4f);
         camera.lookAt(0f, 0.8f, 4f);
         camera.update();
@@ -284,7 +284,7 @@ public final class BalancePointGame extends ApplicationAdapter {
         Model dash = box(b, 0.10f, 0.025f, 2.8f,
                 material(0.90f, 0.74f, 0.26f));
 
-        int n = 18;
+        int n = 30;
         roadSegments = new ModelInstance[n];
         shoulderLeft = new ModelInstance[n];
         shoulderRight = new ModelInstance[n];
@@ -293,7 +293,7 @@ public final class BalancePointGame extends ApplicationAdapter {
             shoulderLeft[i] = new ModelInstance(edgeLine);
             shoulderRight[i] = new ModelInstance(edgeLine);
         }
-        laneDashes = new ModelInstance[58];
+        laneDashes = new ModelInstance[92];
         for (int i = 0; i < laneDashes.length; i++) laneDashes[i] = new ModelInstance(dash);
         terrainVisuals = new TerrainVisuals(ownedModels);
     }
@@ -580,12 +580,14 @@ public final class BalancePointGame extends ApplicationAdapter {
         float frontForwardVelocity = speed - pitchVelocity * frontVertical;
         float frontVerticalVelocity = verticalVelocity + pitchVelocity * frontForward;
 
+        float rearEffectiveMass = MASS * (WHEELBASE - effectiveComForward) / WHEELBASE;
+        float frontEffectiveMass = MASS - rearEffectiveMass;
         solveWheelContact(rearContactState, rearX, rearY, rearZ,
                 rearForwardVelocity, rearVerticalVelocity, sinYaw, cosYaw,
-                REAR_CONTACT_PRELOAD);
+                REAR_CONTACT_PRELOAD, rearEffectiveMass, dt);
         solveWheelContact(frontContactState, frontX, frontY, frontZ,
                 frontForwardVelocity, frontVerticalVelocity, sinYaw, cosYaw,
-                FRONT_CONTACT_PRELOAD);
+                FRONT_CONTACT_PRELOAD, frontEffectiveMass, dt);
 
         boolean rearTouching = rearContactState.touching();
         boolean frontTouching = frontContactState.touching();
@@ -696,9 +698,29 @@ public final class BalancePointGame extends ApplicationAdapter {
         bikeZ += cosYaw * speed * dt;
         chassisY += verticalVelocity * dt;
 
-        // Derived rear-axle height retained for camera/UI code. Physics itself lives at COM.
+        // Position-level non-penetration constraint. This fixes tunnelling without adding
+        // upward momentum; the force solver still owns suspension response and pitch.
         sinPitch = MathUtils.sin(pitch);
         cosPitch = MathUtils.cos(pitch);
+        float rearForwardPost = -effectiveComForward * cosPitch + COM_HEIGHT * sinPitch;
+        float rearVerticalPost = -effectiveComForward * sinPitch - COM_HEIGHT * cosPitch;
+        float frontForwardPost = (WHEELBASE - effectiveComForward) * cosPitch + COM_HEIGHT * sinPitch;
+        float frontVerticalPost = (WHEELBASE - effectiveComForward) * sinPitch - COM_HEIGHT * cosPitch;
+        float rearPostX = bikeX + sinYaw * rearForwardPost;
+        float rearPostZ = bikeZ + cosYaw * rearForwardPost;
+        float frontPostX = bikeX + sinYaw * frontForwardPost;
+        float frontPostZ = bikeZ + cosYaw * frontForwardPost;
+        float rearPenetration = terrainVisuals.groundHeight(rearPostX, rearPostZ) + WHEEL_RADIUS
+                - (chassisY + rearVerticalPost);
+        float frontPenetration = terrainVisuals.groundHeight(frontPostX, frontPostZ) + WHEEL_RADIUS
+                - (chassisY + frontVerticalPost);
+        float penetrationCorrection = Math.max(rearPenetration, frontPenetration) - 0.012f;
+        if (penetrationCorrection > 0f) {
+            chassisY += Math.min(penetrationCorrection, 0.16f);
+            if (verticalVelocity < 0f) verticalVelocity *= 0.32f;
+        }
+
+        // Derived rear-axle height retained for camera/UI code. Physics itself lives at COM.
         rearVertical = -COM_FORWARD * sinPitch - COM_HEIGHT * cosPitch;
         bikeY = chassisY + rearVertical;
 
@@ -750,7 +772,8 @@ public final class BalancePointGame extends ApplicationAdapter {
 
     private void solveWheelContact(WheelContact out, float worldX, float wheelY, float worldZ,
                                    float pointForwardVelocity, float pointVerticalVelocity,
-                                   float sinYaw, float cosYaw, float preloadGap) {
+                                   float sinYaw, float cosYaw, float preloadGap,
+                                   float effectiveMass, float dt) {
         float ground = terrainVisuals != null ? terrainVisuals.groundHeight(worldX, worldZ) : 0f;
         float slopeX = terrainVisuals != null ? terrainVisuals.groundSlopeX(worldX, worldZ) : 0f;
         float slopeZ = terrainVisuals != null ? terrainVisuals.groundSlopeZ(worldX, worldZ) : 0f;
@@ -773,8 +796,13 @@ public final class BalancePointGame extends ApplicationAdapter {
         float force = CONTACT_STIFFNESS * virtualCompression;
         if (normalVelocity < 0f) {
             float compressionSpeed = -normalVelocity;
-            force += CONTACT_COMPRESSION_DAMPING * compressionSpeed
+            float dampingForce = CONTACT_COMPRESSION_DAMPING * compressionSpeed
                     + CONTACT_HIGH_SPEED_COMPRESSION * compressionSpeed * compressionSpeed;
+            // A fixed-step damping impulse may remove most of the incoming normal velocity,
+            // but cannot reverse it hard enough to turn a grade change into a launch ramp.
+            float maxDampingForce = effectiveMass * compressionSpeed
+                    / Math.max(dt, 0.0001f) * 0.82f;
+            force += Math.min(dampingForce, maxDampingForce);
         } else {
             force -= CONTACT_REBOUND_DAMPING * normalVelocity;
         }
