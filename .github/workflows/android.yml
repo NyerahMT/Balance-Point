@@ -18,6 +18,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: One-shot cleanup probe
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X DELETE "repos/${{ github.repository }}/git/refs/heads/repo-cleanup-temp" || true
+
       - name: Validate DirtBike mesh payload
         run: |
           python3 tools/validate_dirtbike.py
