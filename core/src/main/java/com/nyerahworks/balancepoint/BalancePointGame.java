@@ -55,7 +55,18 @@ public final class BalancePointGame extends ApplicationAdapter {
     private static final float CONTACT_BUMP_START = 0.075f;
     private static final float CONTACT_BUMP_STIFFNESS = 60_000f;
     private static final float MAX_CONTACT_FORCE = MASS * GRAVITY * 5f;
-    private static final float RIGID_PITCH_DAMPING = 1.35f;
+    // Angular damping is contact-dependent. With both tires loaded the chassis should
+    // absorb short terrain impulses instead of carrying the rotation; a rear-only wheelie
+    // stays freer, and true flight remains freer still so brake-tap/throttle control works.
+    private static final float PITCH_DAMPING_GROUNDED = 2.85f;
+    private static final float PITCH_DAMPING_WHEELIE = 1.20f;
+    private static final float PITCH_DAMPING_AIR = 0.38f;
+    private static final float YAW_RATE_RESPONSE_GROUND = 9.0f;
+    private static final float YAW_RATE_RESPONSE_AIR = 3.0f;
+    private static final float ROLL_NATURAL_FREQUENCY = 7.0f;
+    private static final float ROLL_DAMPING_RATIO = 1.10f;
+    private static final float TERRAIN_ROLL_NATURAL_FREQUENCY = 5.5f;
+    private static final float TERRAIN_ROLL_DAMPING_RATIO = 1.15f;
     // Neutral combined bike+rider COM. 0.36 m above the axles plus the 0.337 m tire
     // radius puts the system COM about 0.70 m above level ground. 0.67 m forward of the
     // rear axle yields a believable ~55/45 rear/front static load split.
@@ -161,7 +172,13 @@ public final class BalancePointGame extends ApplicationAdapter {
     private float pitch;
     private float pitchVelocity;
     private float roll;
+    private float rollVelocity;
     private float yaw;
+    private float yawVelocity;
+    // Sidehill bank is visual/support attitude, but it is rate-damped just like the chassis
+    // instead of snapping to each newly sampled terrain normal.
+    private float terrainRoll;
+    private float terrainRollVelocity;
     private float wheelSpin;
     private float rearWheelAngularSpeed;
     private float lastGroundSupportPitch;
@@ -687,8 +704,10 @@ public final class BalancePointGame extends ApplicationAdapter {
                 - frontContactVerticalArm * frontNormalForward
                 + wheelReactionTorque;
 
+        float pitchDamping = frontTouching ? PITCH_DAMPING_GROUNDED
+                : (rearTouching ? PITCH_DAMPING_WHEELIE : PITCH_DAMPING_AIR);
         float pitchAcceleration = pitchTorque / PITCH_INERTIA
-                - pitchVelocity * RIGID_PITCH_DAMPING;
+                - pitchVelocity * pitchDamping;
         pitchVelocity += pitchAcceleration * dt;
         pitchVelocity = MathUtils.clamp(pitchVelocity, -MAX_PITCH_RATE, MAX_PITCH_RATE);
         pitch += pitchVelocity * dt;
@@ -727,9 +746,10 @@ public final class BalancePointGame extends ApplicationAdapter {
         wheelSpin += rearWheelAngularSpeed * dt;
         if (wheelSpin > MathUtils.PI2) wheelSpin -= MathUtils.PI2;
 
-        // Steering authority comes continuously from front normal load rather than a binary
-        // grounded state. As the front unloads during a wheelie, steering fades naturally.
-        float speedBlend = MathUtils.clamp(speed / 30f, 0f, 1f);
+        // Front-tire steering still comes from front load, but a wheelie no longer loses all
+        // directional authority. Rear-only steering represents rider/handlebar/gyro steering
+        // while balancing on the rear tire, blended continuously as front load disappears.
+        float speedBlend = MathUtils.clamp(Math.abs(speed) / 30f, 0f, 1f);
         speedBlend = speedBlend * speedBlend * (3f - 2f * speedBlend);
         float maxSteerDeg = MathUtils.lerp(34f, 5.0f, speedBlend);
         // UI/control convention is X<0 left, X>0 right. The world yaw convention used by
@@ -737,21 +757,56 @@ public final class BalancePointGame extends ApplicationAdapter {
         float steerAngle = -steer * maxSteerDeg * MathUtils.degreesToRadians;
         float frontAuthority = MathUtils.clamp(frontContactState.normalForce
                 / (MASS * GRAVITY * 0.32f), 0f, 1f);
-        float yawRate = speed > 0.35f
+        float frontYawRateTarget = Math.abs(speed) > 0.35f
                 ? (speed / WHEELBASE) * (float) Math.tan(steerAngle) * frontAuthority
                 : 0f;
-        yaw += yawRate * dt;
+
+        float wheelieBlend = rearTouching && !frontTouching ? 1f - frontAuthority : 0f;
+        float wheelieSpeedBlend = MathUtils.clamp(Math.abs(speed) / 35f, 0f, 1f);
+        // Full input gives about 54 deg/s at low wheelie speed and ~24 deg/s at high speed.
+        // This is deliberately stronger than the old zero-authority wheelie behavior, but is
+        // rate limited so a bump cannot instantly yaw the whole bike sideways.
+        float wheelieYawRateTarget = -steer
+                * MathUtils.lerp(0.95f, 0.42f, wheelieSpeedBlend) * wheelieBlend;
+        float yawRateTarget = frontYawRateTarget + wheelieYawRateTarget;
+        float yawResponse = terrainAirborne ? YAW_RATE_RESPONSE_AIR : YAW_RATE_RESPONSE_GROUND;
+        yawVelocity += (yawRateTarget - yawVelocity) * Math.min(1f, dt * yawResponse);
+        yawVelocity = MathUtils.clamp(yawVelocity, -2.6f, 2.6f);
+        yaw += yawVelocity * dt;
         if (yaw > MathUtils.PI) yaw -= MathUtils.PI2;
         if (yaw < -MathUtils.PI) yaw += MathUtils.PI2;
 
-        // Lean remains a rider-stabilized degree of freedom for now, but its target is based on
-        // the same continuous lateral acceleration rather than contact modes.
-        float lateralAcceleration = speed * yawRate;
+        // Roll is a critically/over-damped angular state rather than an immediate lerp. Short
+        // lateral impulses from bumps change roll velocity, then the damper kills the motion.
+        float lateralAcceleration = speed * yawVelocity;
         float rollTarget = -(float) Math.atan2(lateralAcceleration, GRAVITY);
         rollTarget = MathUtils.clamp(rollTarget,
                 -60f * MathUtils.degreesToRadians, 60f * MathUtils.degreesToRadians);
-        float rollResponse = MathUtils.lerp(1.25f, 3.1f, frontAuthority);
-        roll += (rollTarget - roll) * Math.min(1f, dt * rollResponse);
+        float rollFrequency = terrainAirborne ? 3.2f : ROLL_NATURAL_FREQUENCY;
+        float rollDampingRatio = terrainAirborne ? 0.72f : ROLL_DAMPING_RATIO;
+        float rollAcceleration = (rollTarget - roll) * rollFrequency * rollFrequency
+                - 2f * rollDampingRatio * rollFrequency * rollVelocity;
+        rollVelocity += rollAcceleration * dt;
+        rollVelocity = MathUtils.clamp(rollVelocity, -4.0f, 4.0f);
+        roll += rollVelocity * dt;
+
+        // The old renderer snapped directly to the local side-slope normal, which made the bike
+        // visibly twitch sideways on every irregular triangle. Filter that support bank with a
+        // second-order damper at the fixed physics rate.
+        float terrainRollTarget = 0f;
+        if (!terrainAirborne && terrainVisuals != null) {
+            float slopeX = terrainVisuals.groundSlopeX(bikeX, bikeZ);
+            float slopeZ = terrainVisuals.groundSlopeZ(bikeX, bikeZ);
+            float lateralGrade = slopeX * MathUtils.cos(yaw) - slopeZ * MathUtils.sin(yaw);
+            terrainRollTarget = (float) Math.atan(lateralGrade);
+        }
+        float terrainRollAcceleration = (terrainRollTarget - terrainRoll)
+                * TERRAIN_ROLL_NATURAL_FREQUENCY * TERRAIN_ROLL_NATURAL_FREQUENCY
+                - 2f * TERRAIN_ROLL_DAMPING_RATIO * TERRAIN_ROLL_NATURAL_FREQUENCY
+                * terrainRollVelocity;
+        terrainRollVelocity += terrainRollAcceleration * dt;
+        terrainRollVelocity = MathUtils.clamp(terrainRollVelocity, -2.5f, 2.5f);
+        terrainRoll += terrainRollVelocity * dt;
 
         // A wheelie is now just rear contact with an unloaded front tire. No wheelie-specific
         // force model is entered.
@@ -822,6 +877,9 @@ public final class BalancePointGame extends ApplicationAdapter {
         crashed = true;
         crashSettled = false;
         crashTimer = 0f;
+        rollVelocity = 0f;
+        yawVelocity = 0f;
+        terrainRollVelocity = 0f;
         crashSide = roll < -0.05f ? -1f : (roll > 0.05f ? 1f : (steer < 0f ? -1f : 1f));
         crashPitchRate = MathUtils.clamp(pitchVelocity + 0.75f, -1.2f, 3.2f);
         crashRollRate = crashSide * (1.4f + MathUtils.clamp(speed * 0.045f, 0f, 1.5f));
@@ -886,7 +944,11 @@ public final class BalancePointGame extends ApplicationAdapter {
         pitch = 0f;
         pitchVelocity = 0f;
         roll = 0f;
+        rollVelocity = 0f;
         yaw = 0f;
+        yawVelocity = 0f;
+        terrainRoll = 0f;
+        terrainRollVelocity = 0f;
         wheelSpin = 0f;
         rearWheelAngularSpeed = 0f;
         lastGroundSupportPitch = 0f;
@@ -942,11 +1004,8 @@ public final class BalancePointGame extends ApplicationAdapter {
         float rootHeight = chassisY + rearVertical;
         bikeY = rootHeight;
 
-        float terrainSlopeX = terrainVisuals != null ? terrainVisuals.groundSlopeX(rootX, rootZ) : 0f;
-        float terrainSlopeZ = terrainVisuals != null ? terrainVisuals.groundSlopeZ(rootX, rootZ) : 0f;
-        float terrainLateralGrade = terrainSlopeX * cosYaw - terrainSlopeZ * sinYaw;
-        float terrainRollDeg = terrainAirborne ? 0f
-                : (float) Math.atan(terrainLateralGrade) * MathUtils.radiansToDegrees;
+        // Sidehill support attitude is already filtered at the fixed physics rate.
+        float terrainRollDeg = terrainRoll * MathUtils.radiansToDegrees;
 
         if (crashed && crashSettled) {
             float rearTerrainHeight = terrainVisuals != null
@@ -1033,7 +1092,10 @@ public final class BalancePointGame extends ApplicationAdapter {
             visualSteerBlend = visualSteerBlend * visualSteerBlend * (3f - 2f * visualSteerBlend);
             // Match the imported fork/wheel to the same left-negative/right-positive control
             // convention used by the rectangular pad.
-            float visualSteerDeg = steer * MathUtils.lerp(28f, 5f, visualSteerBlend);
+            float visualMaxSteerDeg = MathUtils.lerp(28f, 5f, visualSteerBlend);
+            // Let the bars remain visibly useful while balancing on the rear wheel.
+            if (!frontGrounded && !terrainAirborne) visualMaxSteerDeg = Math.max(visualMaxSteerDeg, 11f);
+            float visualSteerDeg = steer * visualMaxSteerDeg;
             importedSteeringRoot.set(bikeRoot)
                     .translate(importedBike.steeringHead)
                     .rotate(importedBike.steeringAxis, visualSteerDeg);

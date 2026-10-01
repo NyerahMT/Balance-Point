@@ -182,7 +182,7 @@ final class EngineAudio {
             }
             previousShiftTarget = shiftTarget;
 
-            float rpmNorm = MathUtils.clamp((smoothRpm - 1_800f) / 11_400f, 0f, 1f);
+            float rpmNorm = MathUtils.clamp((smoothRpm - 1_800f) / 10_100f, 0f, 1f);
             float load = 0.23f + smoothThrottle * 0.77f;
             double degreesPerSample = smoothRpm * 6.0 / SAMPLE_RATE;
 
@@ -232,8 +232,11 @@ final class EngineAudio {
 
                 if (crossedAngle(previousDeg, cycleDeg, IGNITION_DEG)) {
                     combustionCount++;
-                    boolean limiterCut = smoothRpm > 13_050f && smoothThrottle > 0.70f
-                            && (combustionCount & 3) == 3;
+                    // Match the current 11.9k hard limiter. At the limiter skip every other
+                    // combustion event, giving the 450 a clear braap-braap cut instead of the
+                    // old unreachable 13,050 rpm condition.
+                    boolean limiterCut = smoothRpm > 11_450f && smoothThrottle > 0.65f
+                            && (combustionCount & 1) == 1;
                     if (limiterCut) {
                         cycleStrength = 0.035;
                     } else {

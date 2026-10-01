@@ -25,6 +25,8 @@ final class MotorcycleDrivetrain {
 
     private static final float SHIFT_DURATION = 0.115f;
     private static final float MIN_SHIFT_INTERVAL = 0.16f;
+    private static final float LIMITER_CUT_SECONDS = 0.055f;
+    private static final float LIMITER_RESET_RPM = 10_900f;
 
     private final float wheelRadius;
 
@@ -32,6 +34,7 @@ final class MotorcycleDrivetrain {
     private float rpm = IDLE_RPM;
     private float shiftTimer;
     private float shiftLockout;
+    private float limiterCutTimer;
 
     MotorcycleDrivetrain(float wheelRadius) {
         this.wheelRadius = wheelRadius;
@@ -42,12 +45,14 @@ final class MotorcycleDrivetrain {
         rpm = IDLE_RPM;
         shiftTimer = 0f;
         shiftLockout = 0f;
+        limiterCutTimer = 0f;
     }
 
     float update(float speed, float throttle, float dt) {
         float absSpeed = Math.abs(speed);
         shiftTimer = Math.max(0f, shiftTimer - dt);
         shiftLockout = Math.max(0f, shiftLockout - dt);
+        limiterCutTimer = Math.max(0f, limiterCutTimer - dt);
 
         float wheelRpm = absSpeed / (MathUtils.PI2 * wheelRadius) * 60f;
         float coupledRpm = wheelRpm * overallRatio(gear);
@@ -62,8 +67,21 @@ final class MotorcycleDrivetrain {
                 Math.max(IDLE_RPM, coupledRpm), clutchLock);
         targetRpm = Math.min(targetRpm, HARD_LIMIT_RPM + 250f);
 
-        float rpmResponse = targetRpm < rpm ? 24f : 18f;
+        // A real hard limiter repeatedly cuts combustion, lets rpm fall, then re-fires.
+        // The previous all-soft limiter could reduce wheel torque to zero before the engine
+        // ever reached an audible cut. Trigger near the hard limit and pull the target down
+        // for ~55 ms so RPM and sound both visibly/audibly bounce.
+        if (limiterCutTimer <= 0f && throttle > 0.45f
+                && rpm >= HARD_LIMIT_RPM - 90f && targetRpm >= REDLINE_RPM) {
+            limiterCutTimer = LIMITER_CUT_SECONDS;
+        }
+        if (limiterCutTimer > 0f) {
+            targetRpm = Math.min(targetRpm, LIMITER_RESET_RPM);
+        }
+
+        float rpmResponse = targetRpm < rpm ? 26f : 18f;
         rpm += (targetRpm - rpm) * Math.min(1f, dt * rpmResponse);
+        rpm = Math.min(rpm, HARD_LIMIT_RPM + 40f);
 
         float torque = PEAK_TORQUE_NM * torqueCurve(rpm);
         float clutchEngagement = MathUtils.clamp(0.70f + absSpeed / 6.0f, 0.70f, 1f);
@@ -76,9 +94,12 @@ final class MotorcycleDrivetrain {
             shiftAuthority = MathUtils.lerp(0.08f, 1f, MathUtils.clamp(progress, 0f, 1f));
         }
 
-        // Soft limiter starts just below redline and reaches zero at the hard limit.
-        float limiter = 1f - MathUtils.clamp((rpm - (REDLINE_RPM - 250f))
-                / (HARD_LIMIT_RPM - (REDLINE_RPM - 250f)), 0f, 1f);
+        // Keep a mild pre-limit torque rolloff, but do not fade all the way to zero before
+        // the hard cut can occur. During the cut, ignition torque is fully removed.
+        float limiterApproach = MathUtils.clamp((rpm - (REDLINE_RPM - 150f))
+                / (HARD_LIMIT_RPM - (REDLINE_RPM - 150f)), 0f, 1f);
+        float limiter = 1f - 0.25f * limiterApproach;
+        if (limiterCutTimer > 0f) limiter = 0f;
 
         float wheelTorque = torque * overallRatio(gear) * DRIVETRAIN_EFFICIENCY;
         return throttle * wheelTorque / wheelRadius
@@ -157,5 +178,9 @@ final class MotorcycleDrivetrain {
 
     boolean isShifting() {
         return shiftTimer > 0f;
+    }
+
+    boolean isLimiterCut() {
+        return limiterCutTimer > 0f;
     }
 }
