@@ -1,0 +1,1 @@
+verify atmosphere lighting sky terrain tint and vegetation
