@@ -4,13 +4,9 @@ import com.badlogic.gdx.ApplicationAdapter;
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.GL20;
-import com.badlogic.gdx.graphics.OrthographicCamera;
 import com.badlogic.gdx.graphics.PerspectiveCamera;
-import com.badlogic.gdx.graphics.Pixmap;
 import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.VertexAttributes;
-import com.badlogic.gdx.graphics.g2d.BitmapFont;
-import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.graphics.g3d.Environment;
 import com.badlogic.gdx.graphics.g3d.Material;
 import com.badlogic.gdx.graphics.g3d.Model;
@@ -23,7 +19,6 @@ import com.badlogic.gdx.graphics.g3d.environment.DirectionalLight;
 import com.badlogic.gdx.graphics.g3d.environment.DirectionalShadowLight;
 import com.badlogic.gdx.graphics.g3d.utils.DepthShaderProvider;
 import com.badlogic.gdx.graphics.g3d.utils.ModelBuilder;
-import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
 import com.badlogic.gdx.math.MathUtils;
 import com.badlogic.gdx.math.Matrix4;
 import com.badlogic.gdx.math.Vector3;
@@ -33,8 +28,6 @@ import com.badlogic.gdx.utils.Array;
  * Balance Point - lightweight 3D motorcycle prototype.
  */
 public final class BalancePointGame extends ApplicationAdapter {
-    private enum GameState { MAIN_MENU, PLAYING, PAUSED }
-
     private static final float PHYSICS_DT = 1f / 120f;
     private static final float SEGMENT_LENGTH = 20f;
     private static final float ROAD_HALF_WIDTH = 4.2f;
@@ -127,13 +120,9 @@ public final class BalancePointGame extends ApplicationAdapter {
     private final MotorcycleDrivetrain drivetrain = new MotorcycleDrivetrain(WHEEL_RADIUS);
 
     private PerspectiveCamera camera;
-    private OrthographicCamera uiCamera;
     private ModelBatch modelBatch;
-    private SpriteBatch spriteBatch;
-    private ShapeRenderer shapes;
-    private BitmapFont font;
-    private Pixmap instrumentPixmap;
-    private Texture instrumentTexture;
+    private GameHud hud;
+    private InstrumentDisplay instrumentDisplay;
     private Environment environment;
     private DirectionalShadowLight shadowLight;
     private ModelBatch shadowBatch;
@@ -254,19 +243,18 @@ public final class BalancePointGame extends ApplicationAdapter {
 
     private final WheelContact rearContactState = new WheelContact();
     private final WheelContact frontContactState = new WheelContact();
-// Scratch contacts used by the post-step non-penetration check. Keeping the same
-// finite-radius terrain query in both the force solve and correction prevents the two
-// stages from disagreeing about where the tire actually touches the heightfield.
-private final WheelContact rearPostContact = new WheelContact();
-private final WheelContact frontPostContact = new WheelContact();
+    // Scratch contacts used by the post-step non-penetration check. Keeping the same
+    // finite-radius terrain query in both the force solve and correction prevents the two
+    // stages from disagreeing about where the tire actually touches the heightfield.
+    private final WheelContact rearPostContact = new WheelContact();
+    private final WheelContact frontPostContact = new WheelContact();
 
     @Override
     public void create() {
         Gdx.graphics.setForegroundFPS(30);
         modelBatch = new ModelBatch();
-        spriteBatch = new SpriteBatch();
-        shapes = new ShapeRenderer();
-        font = new BitmapFont();
+        hud = new GameHud();
+        instrumentDisplay = new InstrumentDisplay();
         engineAudio = new EngineAudio();
         highQuality = Gdx.app.getPreferences("balance-point")
                 .getBoolean("qualityHigh", true);
@@ -278,7 +266,6 @@ private final WheelContact frontPostContact = new WheelContact();
         camera.lookAt(0f, 0.8f, 4f);
         camera.update();
 
-        uiCamera = new OrthographicCamera();
         resize(Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
 
         environment = new Environment();
@@ -368,12 +355,8 @@ private final WheelContact frontPostContact = new WheelContact();
         Material dashMat = material(0.030f, 0.034f, 0.035f);
         Material dashButtonMat = material(0.070f, 0.075f, 0.074f);
 
-        instrumentPixmap = new Pixmap(192, 96, Pixmap.Format.RGBA8888);
-        instrumentPixmap.setColor(0.008f, 0.014f, 0.013f, 1f);
-        instrumentPixmap.fill();
-        instrumentTexture = new Texture(instrumentPixmap);
-        instrumentTexture.setFilter(Texture.TextureFilter.Nearest, Texture.TextureFilter.Nearest);
-        TextureAttribute dashTextureAttribute = TextureAttribute.createDiffuse(instrumentTexture);
+        TextureAttribute dashTextureAttribute =
+                TextureAttribute.createDiffuse(instrumentDisplay.texture());
         // The world-space quad is upright now; only mirror U so the LCD reads left-to-right.
         dashTextureAttribute.offsetU = 1f;
         dashTextureAttribute.scaleU = -1f;
@@ -472,7 +455,7 @@ private final WheelContact frontPostContact = new WheelContact();
 
         if (gameState != GameState.MAIN_MENU) {
             updateBikeInstances();
-            updateInstrumentTexture();
+            instrumentDisplay.update(speed, drivetrain);
         }
         updateCamera(frameDt);
 
@@ -959,13 +942,23 @@ private final WheelContact frontPostContact = new WheelContact();
         float rearPostZ = bikeZ + cosYaw * rearForwardPost;
         float frontPostX = bikeX + sinYaw * frontForwardPost;
         float frontPostZ = bikeZ + cosYaw * frontForwardPost;
-sampleWheelSurface(rearPostContact, rearPostX, chassisY + rearVerticalPost, rearPostZ,
-        sinYaw, cosYaw);
-sampleWheelSurface(frontPostContact, frontPostX, chassisY + frontVerticalPost, frontPostZ,
-        sinYaw, cosYaw);
-float rearPenetration = Math.max(0f, -rearPostContact.gap);
-float frontPenetration = Math.max(0f, -frontPostContact.gap);
-float penetrationCorrection = Math.max(rearPenetration, frontPenetration) - 0.012f;
+        sampleWheelSurface(
+                rearPostContact,
+                rearPostX,
+                chassisY + rearVerticalPost,
+                rearPostZ,
+                sinYaw,
+                cosYaw);
+        sampleWheelSurface(
+                frontPostContact,
+                frontPostX,
+                chassisY + frontVerticalPost,
+                frontPostZ,
+                sinYaw,
+                cosYaw);
+        float rearPenetration = Math.max(0f, -rearPostContact.gap);
+        float frontPenetration = Math.max(0f, -frontPostContact.gap);
+        float penetrationCorrection = Math.max(rearPenetration, frontPenetration) - 0.012f;
         if (penetrationCorrection > 0f) {
             chassisY += Math.min(penetrationCorrection, 0.16f);
             if (verticalVelocity < 0f) {
@@ -1540,409 +1533,27 @@ private void solveWheelContact(WheelContact out, float worldX, float wheelY, flo
     }
 
     private void drawHud() {
-        int w = Gdx.graphics.getWidth();
-        int h = Gdx.graphics.getHeight();
-        float min = Math.min(w, h);
-
-        Gdx.gl.glDisable(GL20.GL_DEPTH_TEST);
-        Gdx.gl.glEnable(GL20.GL_BLEND);
-        Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA);
-
-        if (gameState == GameState.MAIN_MENU) {
-            drawMainMenu(w, h, min);
-        } else if (gameState == GameState.PAUSED) {
-            drawPauseMenu(w, h, min);
-        } else {
-            drawTouchControls(w, h, min);
-
-            spriteBatch.setProjectionMatrix(uiCamera.combined);
-            spriteBatch.begin();
-            font.setColor(1f, 1f, 1f, 0.92f);
-
-            if (!crashed && !frontGrounded && pitch > 8f * MathUtils.degreesToRadians) {
-                font.getData().setScale(Math.max(0.9f, h / 720f * 1.08f));
-                String wheelie = String.format(java.util.Locale.US, "%.1fs   %02.0f deg",
-                        wheelieTime, pitch * MathUtils.radiansToDegrees);
-                font.draw(spriteBatch, wheelie, w * 0.43f, h - 30f);
-            }
-
-            if (crashed) {
-                font.getData().setScale(Math.max(1.1f, h / 720f * 1.45f));
-                font.setColor(1f, 1f, 1f,
-                        MathUtils.clamp(1f - Math.max(0f, crashTimer - 1.35f), 0f, 1f));
-                font.draw(spriteBatch, crashSettled ? "DOWN" : "CRASH", w * 0.47f, h * 0.78f);
-            }
-            spriteBatch.end();
-        }
-
-        Gdx.gl.glDisable(GL20.GL_BLEND);
-        Gdx.gl.glEnable(GL20.GL_DEPTH_TEST);
-    }
-
-    private void drawMainMenu(int w, int h, float min) {
-        float panelX = w * 0.045f;
-        float panelY = h * 0.14f;
-        float panelW = w * 0.39f;
-        float panelH = h * 0.72f;
-        float bx = w * 0.075f;
-        float bw = w * 0.30f;
-        float bh = h * 0.085f;
-
-        shapes.setProjectionMatrix(uiCamera.combined);
-        shapes.begin(ShapeRenderer.ShapeType.Filled);
-        shapes.setColor(0.02f, 0.025f, 0.028f, 0.62f);
-        shapes.rect(panelX, panelY, panelW, panelH);
-        shapes.setColor(0.95f, 0.42f, 0.10f, 0.92f);
-        shapes.rect(panelX, panelY, Math.max(4f, min * 0.007f), panelH);
-
-        if (hasActiveRide) {
-            drawUiButtonShape(bx, h * 0.36f, bw, bh, true);
-            drawUiButtonShape(bx, h * 0.245f, bw, bh, false);
-        } else {
-            drawUiButtonShape(bx, h * 0.285f, bw, bh, true);
-        }
-        drawUiButtonShape(bx, h * 0.155f, bw, bh, false);
-        shapes.end();
-
-        spriteBatch.setProjectionMatrix(uiCamera.combined);
-        spriteBatch.begin();
-        font.setColor(1f, 1f, 1f, 0.98f);
-        font.getData().setScale(Math.max(1.55f, h / 720f * 2.15f));
-        font.draw(spriteBatch, "BALANCE POINT", w * 0.075f, h * 0.76f);
-        font.getData().setScale(Math.max(0.72f, h / 720f * 0.92f));
-        font.setColor(1f, 1f, 1f, 0.62f);
-        font.draw(spriteBatch, "RIDE. BALANCE. SEND IT.", w * 0.077f, h * 0.70f);
-
-        font.getData().setScale(Math.max(0.90f, h / 720f * 1.08f));
-        font.setColor(1f, 1f, 1f, 0.94f);
-        if (hasActiveRide) {
-            font.draw(spriteBatch, "RESUME", bx + bw * 0.10f, h * 0.36f + bh * 0.61f);
-            font.draw(spriteBatch, "NEW RIDE", bx + bw * 0.10f, h * 0.245f + bh * 0.61f);
-        } else {
-            font.draw(spriteBatch, "RIDE", bx + bw * 0.10f, h * 0.285f + bh * 0.61f);
-        }
-        font.setColor(1f, 1f, 1f, 0.82f);
-        font.draw(spriteBatch, highQuality ? "GRAPHICS   HIGH" : "GRAPHICS   LOW",
-                bx + bw * 0.10f, h * 0.155f + bh * 0.61f);
-        spriteBatch.end();
-    }
-
-    private void drawPauseMenu(int w, int h, float min) {
-        float panelX = w * 0.29f;
-        float panelY = h * 0.17f;
-        float panelW = w * 0.42f;
-        float panelH = h * 0.64f;
-        float bx = w * 0.34f;
-        float bw = w * 0.32f;
-        float bh = h * 0.075f;
-
-        shapes.setProjectionMatrix(uiCamera.combined);
-        shapes.begin(ShapeRenderer.ShapeType.Filled);
-        shapes.setColor(0f, 0f, 0f, 0.50f);
-        shapes.rect(0f, 0f, w, h);
-        shapes.setColor(0.025f, 0.030f, 0.034f, 0.94f);
-        shapes.rect(panelX, panelY, panelW, panelH);
-        shapes.setColor(0.95f, 0.42f, 0.10f, 0.95f);
-        shapes.rect(panelX, panelY + panelH - Math.max(4f, min * 0.007f),
-                panelW, Math.max(4f, min * 0.007f));
-        drawUiButtonShape(bx, h * 0.56f, bw, bh, true);
-        drawUiButtonShape(bx, h * 0.45f, bw, bh, false);
-        drawUiButtonShape(bx, h * 0.34f, bw, bh, false);
-        drawUiButtonShape(bx, h * 0.23f, bw, bh, false);
-        shapes.end();
-
-        spriteBatch.setProjectionMatrix(uiCamera.combined);
-        spriteBatch.begin();
-        font.setColor(1f, 1f, 1f, 0.96f);
-        font.getData().setScale(Math.max(1.25f, h / 720f * 1.65f));
-        font.draw(spriteBatch, "PAUSED", w * 0.405f, h * 0.735f);
-        font.getData().setScale(Math.max(0.82f, h / 720f * 1.02f));
-        font.draw(spriteBatch, "RESUME", bx + bw * 0.10f, h * 0.56f + bh * 0.61f);
-        font.draw(spriteBatch, "RESTART", bx + bw * 0.10f, h * 0.45f + bh * 0.61f);
-        font.draw(spriteBatch, highQuality ? "GRAPHICS   HIGH" : "GRAPHICS   LOW",
-                bx + bw * 0.10f, h * 0.34f + bh * 0.61f);
-        font.draw(spriteBatch, "MAIN MENU", bx + bw * 0.10f, h * 0.23f + bh * 0.61f);
-
-        font.getData().setScale(Math.max(0.60f, h / 720f * 0.72f));
-        font.setColor(1f, 1f, 1f, 0.52f);
-        String rideStats = String.format(java.util.Locale.US, "BEST WHEELIE  %.1fs", bestWheelieTime);
-        font.draw(spriteBatch, rideStats, bx + bw * 0.10f, h * 0.195f);
-        spriteBatch.end();
-    }
-
-    private void drawUiButtonShape(float x, float y, float w, float h, boolean primary) {
-        shapes.setColor(primary ? 0.95f : 1f,
-                primary ? 0.32f : 1f,
-                primary ? 0.08f : 1f,
-                primary ? 0.88f : 0.12f);
-        shapes.rect(x, y, w, h);
-        if (!primary) {
-            float border = Math.max(2f, h * 0.035f);
-            shapes.setColor(1f, 1f, 1f, 0.20f);
-            shapes.rect(x, y, w, border);
-            shapes.rect(x, y + h - border, w, border);
-            shapes.rect(x, y, border, h);
-            shapes.rect(x + w - border, y, border, h);
-        }
-    }
-
-    private void drawTouchControls(int w, int h, float min) {
-        float sliderX = w * 0.91f;
-        float sliderBottom = h * 0.12f;
-        float sliderTop = h * 0.52f;
-        float brakeX = w * 0.755f;
-        float brakeY = h * 0.17f;
-        float controlLeft = w * 0.035f;
-        float controlBottom = h * 0.06f;
-        float controlWidth = w * 0.260f;
-        float controlHeight = h * 0.300f;
-        float controlCenterX = controlLeft + controlWidth * 0.5f;
-        float controlCenterY = controlBottom + controlHeight * 0.5f;
-        float shiftDownX = w * 0.39f;
-        float shiftUpX = w * 0.51f;
-        float shiftY = h * 0.17f;
-        float shiftR = min * 0.047f;
-
-        shapes.setProjectionMatrix(uiCamera.combined);
-        shapes.begin(ShapeRenderer.ShapeType.Filled);
-
-        // Compact telemetry strip: readable at a glance without covering the riding view.
-        shapes.setColor(0.015f, 0.018f, 0.020f, 0.48f);
-        shapes.rect(w * 0.37f, h * 0.91f, w * 0.29f, h * 0.065f);
-        shapes.setColor(0.95f, 0.42f, 0.10f, 0.88f);
-        shapes.rect(w * 0.37f, h * 0.91f, Math.max(3f, min * 0.005f), h * 0.065f);
-
-        // Pause and camera buttons live symmetrically in the top corners.
-        shapes.setColor(0.01f, 0.012f, 0.014f, 0.52f);
-        shapes.circle(w * 0.07f, h * 0.93f, min * 0.044f, 24);
-        shapes.circle(w * 0.93f, h * 0.93f, min * 0.044f, 24);
-
-        // Steer/lean pad gets an actual panel and border while retaining its touch geometry.
-        shapes.setColor(0.01f, 0.012f, 0.014f, 0.34f);
-        shapes.rect(controlLeft, controlBottom, controlWidth, controlHeight);
-        float border = Math.max(2f, min * 0.003f);
-        shapes.setColor(1f, 1f, 1f, 0.12f);
-        shapes.rect(controlLeft, controlBottom, controlWidth, border);
-        shapes.rect(controlLeft, controlBottom + controlHeight - border, controlWidth, border);
-        shapes.rect(controlLeft, controlBottom, border, controlHeight);
-        shapes.rect(controlLeft + controlWidth - border, controlBottom, border, controlHeight);
-        shapes.setColor(1f, 1f, 1f, 0.10f);
-        shapes.rect(controlCenterX - 1f, controlBottom, 2f, controlHeight);
-        shapes.rect(controlLeft, controlCenterY - 1f, controlWidth, 2f);
-
-        float controlKnobX = controlCenterX + steerTarget * controlWidth * 0.5f;
-        float controlKnobY = controlCenterY + riderLeanTarget * controlHeight * 0.5f;
-        float knobHalf = min * 0.020f;
-        shapes.setColor(0.95f, 0.42f, 0.10f, 0.76f);
-        shapes.rect(controlKnobX - knobHalf, controlKnobY - knobHalf,
-                knobHalf * 2f, knobHalf * 2f);
-
-        // Throttle gets a larger visual housing without changing the touch strip.
-        shapes.setColor(0.01f, 0.012f, 0.014f, 0.34f);
-        shapes.rect(sliderX - min * 0.035f, sliderBottom - min * 0.025f,
-                min * 0.070f, sliderTop - sliderBottom + min * 0.050f);
-        shapes.setColor(1f, 1f, 1f, 0.10f);
-        shapes.rect(sliderX - 4f, sliderBottom, 8f, sliderTop - sliderBottom);
-        shapes.setColor(0.95f, 0.42f, 0.10f, 0.70f);
-        shapes.rect(sliderX - 4f, sliderBottom, 8f,
-                (sliderTop - sliderBottom) * throttleTarget);
-        float knobY = sliderBottom + throttleTarget * (sliderTop - sliderBottom);
-        shapes.setColor(1f, 1f, 1f, 0.52f);
-        shapes.circle(sliderX, knobY, min * 0.029f, 22);
-
-        // Brake and shift controls share the same visual language.
-        shapes.setColor(0.01f, 0.012f, 0.014f, 0.46f);
-        shapes.circle(brakeX, brakeY, min * 0.061f, 26);
-        shapes.setColor(0.95f, 0.28f, 0.10f, rearBrakeTarget > 0f ? 0.78f : 0.20f);
-        shapes.circle(brakeX, brakeY, min * 0.046f, 24);
-
-        shapes.setColor(0.01f, 0.012f, 0.014f, 0.46f);
-        shapes.circle(shiftDownX, shiftY, shiftR, 24);
-        shapes.circle(shiftUpX, shiftY, shiftR, 24);
-        shapes.setColor(1f, 1f, 1f, shiftDownHeld ? 0.44f : 0.13f);
-        shapes.circle(shiftDownX, shiftY, shiftR * 0.76f, 22);
-        shapes.setColor(1f, 1f, 1f, shiftUpHeld ? 0.44f : 0.13f);
-        shapes.circle(shiftUpX, shiftY, shiftR * 0.76f, 22);
-        shapes.end();
-
-        spriteBatch.setProjectionMatrix(uiCamera.combined);
-        spriteBatch.begin();
-        font.getData().setScale(Math.max(0.64f, h / 720f * 0.78f));
-        font.setColor(1f, 1f, 1f, 0.68f);
-        int mph = MathUtils.clamp(Math.round(speed * 2.23694f), 0, 199);
-        String telemetry = String.format(java.util.Locale.US, "%03d MPH    G %d    %4.0f RPM",
-                mph, drivetrain.getGear(), drivetrain.getRpm());
-        font.draw(spriteBatch, telemetry, w * 0.39f, h * 0.953f);
-
-        font.getData().setScale(Math.max(0.60f, h / 720f * 0.72f));
-        font.setColor(1f, 1f, 1f, 0.62f);
-        font.draw(spriteBatch, "II", w * 0.07f - 5f, h * 0.93f + 5f);
-        font.draw(spriteBatch, "CAM", w * 0.93f - 12f, h * 0.93f + 4f);
-        font.draw(spriteBatch, "STEER / LEAN", controlLeft + min * 0.010f,
-                controlBottom + controlHeight - min * 0.012f);
-        font.draw(spriteBatch, "-", shiftDownX - 3f, shiftY + 4f);
-        font.draw(spriteBatch, "+", shiftUpX - 4f, shiftY + 4f);
-        font.draw(spriteBatch, "BRK", brakeX - 11f, brakeY + 4f);
-        font.draw(spriteBatch, "THR", sliderX - 11f, sliderTop + min * 0.038f);
-        spriteBatch.end();
-    }
-
-
-
-    private void updateInstrumentTexture() {
-        if (instrumentPixmap == null || instrumentTexture == null) return;
-
-        final int width = instrumentPixmap.getWidth();
-        final int height = instrumentPixmap.getHeight();
-        final float rpmNorm = MathUtils.clamp(drivetrain.getRpm()
-                / drivetrain.getRedlineRpm(), 0f, 1f);
-
-        // Deep green-black LCD glass with a subtle inner frame and top sheen.
-        instrumentPixmap.setColor(0.007f, 0.014f, 0.012f, 1f);
-        instrumentPixmap.fill();
-        instrumentPixmap.setColor(0.07f, 0.12f, 0.10f, 1f);
-        instrumentPixmap.drawRectangle(2, 2, width - 5, height - 5);
-        instrumentPixmap.setColor(0.035f, 0.070f, 0.060f, 1f);
-        instrumentPixmap.fillRectangle(4, 4, width - 8, 3);
-
-        // Segmented tach across the top. The last two segments become a warm shift zone.
-        final int rpmSegments = 14;
-        final int activeSegments = MathUtils.clamp(Math.round(rpmNorm * rpmSegments), 0,
-                rpmSegments);
-        final int barX = 9;
-        final int barY = 11;
-        final int barGap = 2;
-        final int barWidth = 10;
-        for (int i = 0; i < rpmSegments; i++) {
-            boolean active = i < activeSegments;
-            if (!active) {
-                instrumentPixmap.setColor(0.045f, 0.095f, 0.078f, 1f);
-            } else if (i >= rpmSegments - 2) {
-                instrumentPixmap.setColor(0.98f, 0.28f, 0.08f, 1f);
-            } else if (i >= rpmSegments - 4) {
-                instrumentPixmap.setColor(0.98f, 0.70f, 0.10f, 1f);
-            } else {
-                instrumentPixmap.setColor(0.30f, 0.98f, 0.68f, 1f);
-            }
-            instrumentPixmap.fillRectangle(barX + i * (barWidth + barGap), barY,
-                    barWidth, 6);
-        }
-
-        // A small divider makes the right-side gear readout feel like a dedicated instrument cell.
-        instrumentPixmap.setColor(0.055f, 0.115f, 0.095f, 1f);
-        instrumentPixmap.drawLine(142, 25, 142, 86);
-
-        int mph = MathUtils.clamp(Math.round(speed * 2.23694f), 0, 199);
-        drawSevenSegmentNumber(mph, 10, 29, 31, 45, 5, 3);
-        drawSevenSegmentDigit(MathUtils.clamp(drivetrain.getGear(), 0, 9),
-                153, 29, 28, 45, 5);
-
-        drawMiniText("MPH", 11, 80, 2);
-        drawMiniText("G", 162, 80, 2);
-
-        // Shift indicator dot. Unlike the tach bar, this only lights very near redline.
-        if (rpmNorm > 0.92f) {
-            instrumentPixmap.setColor(1f, 0.24f, 0.08f, 1f);
-            instrumentPixmap.fillCircle(181, 17, 4);
-        } else {
-            instrumentPixmap.setColor(0.09f, 0.035f, 0.025f, 1f);
-            instrumentPixmap.fillCircle(181, 17, 3);
-        }
-
-        instrumentTexture.draw(instrumentPixmap, 0, 0);
-    }
-
-    private void drawSevenSegmentNumber(int value, int x, int y, int digitWidth,
-                                        int digitHeight, int thickness, int gap) {
-        String text = Integer.toString(Math.max(0, value));
-        int slots = 3;
-        int startX = x + (slots - text.length()) * (digitWidth + gap);
-        for (int i = 0; i < text.length(); i++) {
-            int digit = text.charAt(i) - '0';
-            drawSevenSegmentDigit(digit, startX + i * (digitWidth + gap), y,
-                    digitWidth, digitHeight, thickness);
-        }
-    }
-
-    private void drawSevenSegmentDigit(int digit, int x, int y, int width, int height,
-                                       int thickness) {
-        int mask;
-        switch (digit) {
-            case 0: mask = 0x3F; break;
-            case 1: mask = 0x06; break;
-            case 2: mask = 0x5B; break;
-            case 3: mask = 0x4F; break;
-            case 4: mask = 0x66; break;
-            case 5: mask = 0x6D; break;
-            case 6: mask = 0x7D; break;
-            case 7: mask = 0x07; break;
-            case 8: mask = 0x7F; break;
-            case 9: mask = 0x6F; break;
-            default: mask = 0; break;
-        }
-
-        instrumentPixmap.setColor(0.032f, 0.078f, 0.064f, 1f);
-        drawSevenSegmentMask(0x7F, x, y, width, height, thickness);
-        instrumentPixmap.setColor(0.55f, 1.00f, 0.78f, 1f);
-        drawSevenSegmentMask(mask, x, y, width, height, thickness);
-    }
-
-    private void drawSevenSegmentMask(int mask, int x, int y, int width, int height,
-                                      int thickness) {
-        int half = height / 2;
-        if ((mask & 0x01) != 0)
-            instrumentPixmap.fillRectangle(x + thickness, y,
-                    width - thickness * 2, thickness); // A
-        if ((mask & 0x02) != 0)
-            instrumentPixmap.fillRectangle(x + width - thickness, y + thickness,
-                    thickness, half - thickness); // B
-        if ((mask & 0x04) != 0)
-            instrumentPixmap.fillRectangle(x + width - thickness, y + half,
-                    thickness, half - thickness); // C
-        if ((mask & 0x08) != 0)
-            instrumentPixmap.fillRectangle(x + thickness, y + height - thickness,
-                    width - thickness * 2, thickness); // D
-        if ((mask & 0x10) != 0)
-            instrumentPixmap.fillRectangle(x, y + half,
-                    thickness, half - thickness); // E
-        if ((mask & 0x20) != 0)
-            instrumentPixmap.fillRectangle(x, y + thickness,
-                    thickness, half - thickness); // F
-        if ((mask & 0x40) != 0)
-            instrumentPixmap.fillRectangle(x + thickness, y + half - thickness / 2,
-                    width - thickness * 2, thickness); // G
-    }
-
-    private void drawMiniText(String text, int x, int y, int scale) {
-        int cursor = x;
-        instrumentPixmap.setColor(0.32f, 0.58f, 0.48f, 1f);
-        for (int i = 0; i < text.length(); i++) {
-            char c = text.charAt(i);
-            int[] rows = miniGlyph(c);
-            if (rows == null) {
-                cursor += 4 * scale;
-                continue;
-            }
-            for (int row = 0; row < rows.length; row++) {
-                for (int col = 0; col < 5; col++) {
-                    if ((rows[row] & (1 << (4 - col))) != 0) {
-                        instrumentPixmap.fillRectangle(cursor + col * scale,
-                                y + row * scale, scale, scale);
-                    }
-                }
-            }
-            cursor += 6 * scale;
-        }
-    }
-
-    private static int[] miniGlyph(char c) {
-        switch (c) {
-            case 'M': return new int[] {0x11, 0x1B, 0x15, 0x15, 0x11, 0x11, 0x11};
-            case 'P': return new int[] {0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10};
-            case 'H': return new int[] {0x11, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11};
-            case 'G': return new int[] {0x0E, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0E};
-            default: return null;
-        }
+        GameHud.State state = hud.state();
+        state.gameState = gameState;
+        state.hasActiveRide = hasActiveRide;
+        state.highQuality = highQuality;
+        state.crashed = crashed;
+        state.crashSettled = crashSettled;
+        state.frontGrounded = frontGrounded;
+        state.shiftDownHeld = shiftDownHeld;
+        state.shiftUpHeld = shiftUpHeld;
+        state.pitch = pitch;
+        state.wheelieTime = wheelieTime;
+        state.bestWheelieTime = bestWheelieTime;
+        state.crashTimer = crashTimer;
+        state.speed = speed;
+        state.steerTarget = steerTarget;
+        state.riderLeanTarget = riderLeanTarget;
+        state.throttleTarget = throttleTarget;
+        state.rearBrakeTarget = rearBrakeTarget;
+        state.gear = drivetrain.getGear();
+        state.rpm = drivetrain.getRpm();
+        hud.draw();
     }
 
     @Override
@@ -1952,10 +1563,7 @@ private void solveWheelContact(WheelContact out, float worldX, float wheelY, flo
             camera.viewportHeight = Math.max(1, height);
             camera.update();
         }
-        if (uiCamera != null) {
-            uiCamera.setToOrtho(false, Math.max(1, width), Math.max(1, height));
-            uiCamera.update();
-        }
+        if (hud != null) hud.resize(width, height);
     }
 
     @Override
@@ -1976,12 +1584,9 @@ private void solveWheelContact(WheelContact out, float worldX, float wheelY, flo
         if (shadowBatch != null) shadowBatch.dispose();
         if (shadowLight != null) shadowLight.dispose();
         if (modelBatch != null) modelBatch.dispose();
-        if (spriteBatch != null) spriteBatch.dispose();
-        if (shapes != null) shapes.dispose();
-        if (font != null) font.dispose();
-        if (instrumentTexture != null) instrumentTexture.dispose();
-        if (instrumentPixmap != null) instrumentPixmap.dispose();
+        if (hud != null) hud.dispose();
         for (Model m : ownedModels) m.dispose();
         ownedModels.clear();
+        if (instrumentDisplay != null) instrumentDisplay.dispose();
     }
 }
