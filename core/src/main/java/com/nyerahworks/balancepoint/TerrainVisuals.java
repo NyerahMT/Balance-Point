@@ -64,6 +64,9 @@ final class TerrainVisuals {
 
     private final Texture terrainTexture;
     private final Material terrainMaterial;
+    // Same deterministic surface field used by TerrainBaker.writeAlbedo(). This keeps
+    // physical grip aligned with what the player actually sees on the baked terrain.
+    private final FastNoiseLite surfaceNoise = createSurfaceNoise();
 
     TerrainVisuals(Array<Model> ownedModels) {
         loadHeightfield();
@@ -127,6 +130,47 @@ final class TerrainVisuals {
 
     private static Material material(float r, float g, float b) {
         return new Material(ColorAttribute.createDiffuse(new Color(r, g, b, 1f)));
+    }
+
+    private static FastNoiseLite createSurfaceNoise() {
+        FastNoiseLite n = new FastNoiseLite(4502026 + 131);
+        n.SetNoiseType(FastNoiseLite.NoiseType.Perlin);
+        n.SetFractalType(FastNoiseLite.FractalType.FBm);
+        n.SetFrequency(0.035f);
+        n.SetFractalOctaves(4);
+        n.SetFractalGain(0.48f);
+        n.SetFractalLacunarity(2.0f);
+        return n;
+    }
+
+    /**
+     * Longitudinal tire friction coefficient at a world point. Road is the 1.00 baseline.
+     * Off-road values blend continuously using the same grass/dirt/rock weights as the
+     * albedo baker so there are no invisible traction boundaries.
+     */
+    float tractionCoefficient(float x, float z) {
+        if (Math.abs(x) <= ROAD_EDGE) return 1.00f;
+
+        float h = groundHeight(x, z);
+        float sx = groundSlopeX(x, z);
+        float sz = groundSlopeZ(x, z);
+        float slope = (float) Math.sqrt(sx * sx + sz * sz);
+        float patch = MathUtils.clamp(surfaceNoise.GetNoise(x, z) * 0.5f + 0.5f, 0f, 1f);
+
+        float rock = smootherStep(0.62f, 1.25f, slope);
+        rock = Math.max(rock, smootherStep(58f, 92f, h) * 0.70f);
+        float dirt = smootherStep(0.24f, 0.68f, slope) * (1f - rock);
+        dirt = Math.max(dirt, smootherStep(0.73f, 0.91f, patch)
+                * (1f - rock) * 0.65f);
+        float grass = MathUtils.clamp(1f - rock - dirt, 0f, 1f);
+
+        // Dry knobby-tire prototype values: asphalt 1.00, dirt 0.82, rock 0.72, grass 0.64.
+        return MathUtils.clamp(grass * 0.64f + dirt * 0.82f + rock * 0.72f, 0.60f, 0.86f);
+    }
+
+    private static float smootherStep(float edge0, float edge1, float x) {
+        float t = MathUtils.clamp((x - edge0) / (edge1 - edge0), 0f, 1f);
+        return t * t * t * (t * (t * 6f - 15f) + 10f);
     }
 
     /**

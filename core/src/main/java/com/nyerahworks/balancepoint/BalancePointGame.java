@@ -199,6 +199,10 @@ public final class BalancePointGame extends ApplicationAdapter {
 
     private float lookYaw;
     private float lookPitch;
+    // Helmet pitch follows the bike's forward path, not chassis attitude or a fixed horizon.
+    // A damped angular state prevents suspension/terrain chatter from shaking the rider view.
+    private float helmetTrajectoryPitch;
+    private float helmetTrajectoryPitchVelocity;
     private boolean looking;
     private boolean cockpitCamera;
     private boolean cameraTouchHeld;
@@ -573,11 +577,22 @@ public final class BalancePointGame extends ApplicationAdapter {
         float cosPitch = MathUtils.cos(pitch);
 
         // Axle locations relative to the CURRENT combined COM. Positive rider lean moves
-        // the mass forward; negative lean moves it rearward. Contact geometry, velocities
-        // and force moments all use the same shifted COM instead of applying a late torque
-        // correction after wheel contact has already been solved.
-        float effectiveComForward = MathUtils.clamp(COM_FORWARD + riderLean * RIDER_SHIFT,
-                0.48f, 0.88f);
+        // the mass forward; negative lean moves it rearward. On an uphill, a real rider does
+        // not remain rigidly rotated with the chassis: they naturally keep their torso forward
+        // over the bike. Approximate that posture with a grade-dependent COM shift instead of
+        // letting steep terrain rotate the whole combined mass rearward and create a fake loop.
+        float climbPostureShift = 0f;
+        if (terrainVisuals != null && !terrainAirborne) {
+            float centerSlopeX = terrainVisuals.groundSlopeX(bikeX, bikeZ);
+            float centerSlopeZ = terrainVisuals.groundSlopeZ(bikeX, bikeZ);
+            float forwardGrade = centerSlopeX * sinYaw + centerSlopeZ * cosYaw;
+            float uphillAngle = (float) Math.atan(Math.max(0f, forwardGrade));
+            float climbBlend = MathUtils.clamp(uphillAngle
+                    / (40f * MathUtils.degreesToRadians), 0f, 1f);
+            climbPostureShift = climbBlend * 0.14f;
+        }
+        float effectiveComForward = MathUtils.clamp(
+                COM_FORWARD + riderLean * RIDER_SHIFT + climbPostureShift, 0.48f, 0.96f);
         float rearForward = -effectiveComForward * cosPitch + COM_HEIGHT * sinPitch;
         float rearVertical = -effectiveComForward * sinPitch - COM_HEIGHT * cosPitch;
         float frontForward = (WHEELBASE - effectiveComForward) * cosPitch + COM_HEIGHT * sinPitch;
@@ -619,7 +634,11 @@ public final class BalancePointGame extends ApplicationAdapter {
         // the normal force solved above. The drivetrain can rev in the air, but cannot push the
         // chassis without a ground reaction.
         float drivetrainForce = drivetrain.update(absSpeed, throttle, dt);
-        float rearTractionLimit = TIRE_MU * rearContactState.normalForce;
+        // Grip comes from the same terrain classification used to paint the baked albedo.
+        // Asphalt is the 1.00 reference; grass/dirt/rock progressively lose longitudinal grip.
+        float rearSurfaceMu = terrainVisuals != null
+                ? terrainVisuals.tractionCoefficient(rearX, rearZ) : 1.0f;
+        float rearTractionLimit = rearSurfaceMu * rearContactState.normalForce;
         float driveForce = rearTouching
                 ? Math.min(Math.min(MAX_ENGINE_FORCE, drivetrainForce), rearTractionLimit) : 0f;
         float brakeForce = 0f;
@@ -961,6 +980,7 @@ public final class BalancePointGame extends ApplicationAdapter {
         steer = steerTarget = 0f;
         riderLean = riderLeanTarget = 0f;
         lookYaw = lookPitch = 0f;
+        helmetTrajectoryPitch = helmetTrajectoryPitchVelocity = 0f;
         shiftDownHeld = shiftUpHeld = false;
         drivetrain.reset();
         frontGrounded = true;
@@ -1128,12 +1148,36 @@ public final class BalancePointGame extends ApplicationAdapter {
             tempA.set(0f, helmetY, helmetZ).mul(bikeRoot);
             camera.position.set(tempA);
 
-            // Helmet position follows bike height, but eye pitch remains horizon-referenced.
-            // Bank/sidehill roll still comes through, matching how a rider keeps their gaze
-            // level up/down while their body and helmet roll with the motorcycle.
-            float cp = MathUtils.cos(lookPitch);
+            // Look along the bike's FORWARD TRAJECTORY rather than locking pitch to either
+            // the horizon or chassis. Grounded trajectory follows the locally averaged grade;
+            // in flight it follows the ballistic velocity vector. A critically damped angular
+            // state keeps suspension motion from turning into helmet-camera shake.
+            float trajectoryPitchTarget;
+            if (terrainAirborne) {
+                trajectoryPitchTarget = (float) Math.atan2(verticalVelocity,
+                        Math.max(1.5f, Math.abs(speed)));
+            } else if (terrainVisuals != null) {
+                float pathSlopeX = terrainVisuals.groundSlopeX(bikeX, bikeZ);
+                float pathSlopeZ = terrainVisuals.groundSlopeZ(bikeX, bikeZ);
+                float pathGrade = pathSlopeX * MathUtils.sin(yaw)
+                        + pathSlopeZ * MathUtils.cos(yaw);
+                trajectoryPitchTarget = (float) Math.atan(pathGrade);
+            } else {
+                trajectoryPitchTarget = 0f;
+            }
+            float cameraPitchFrequency = 6.2f;
+            float cameraPitchDamping = 1.08f;
+            float cameraPitchAccel = (trajectoryPitchTarget - helmetTrajectoryPitch)
+                    * cameraPitchFrequency * cameraPitchFrequency
+                    - 2f * cameraPitchDamping * cameraPitchFrequency
+                    * helmetTrajectoryPitchVelocity;
+            helmetTrajectoryPitchVelocity += cameraPitchAccel * dt;
+            helmetTrajectoryPitch += helmetTrajectoryPitchVelocity * dt;
+            float viewPitch = MathUtils.clamp(helmetTrajectoryPitch + lookPitch,
+                    -60f * MathUtils.degreesToRadians, 60f * MathUtils.degreesToRadians);
+            float cp = MathUtils.cos(viewPitch);
             camera.direction.set(MathUtils.sin(viewYaw) * cp,
-                    MathUtils.sin(lookPitch), MathUtils.cos(viewYaw) * cp).nor();
+                    MathUtils.sin(viewPitch), MathUtils.cos(viewYaw) * cp).nor();
 
             // Do not resample raw terrain under the camera. The chassis already carries
             // critically damped roll plus filtered sidehill support bank; re-reading a single
