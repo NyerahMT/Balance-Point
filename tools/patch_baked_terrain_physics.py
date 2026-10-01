@@ -1,0 +1,116 @@
+from pathlib import Path
+
+p = Path('core/src/main/java/com/nyerahworks/balancepoint/BalancePointGame.java')
+s = p.read_text()
+
+s = s.replace('private static final float CONTACT_HIGH_SPEED_COMPRESSION = 650f;',
+              'private static final float CONTACT_HIGH_SPEED_COMPRESSION = 300f;')
+s = s.replace('private static final float CONTACT_REBOUND_DAMPING = 8_600f;',
+              'private static final float CONTACT_REBOUND_DAMPING = 9_200f;')
+s = s.replace('private static final float CONTACT_BUMP_STIFFNESS = 68_000f;',
+              'private static final float CONTACT_BUMP_STIFFNESS = 60_000f;')
+s = s.replace('private static final float MAX_CONTACT_FORCE = MASS * GRAVITY * 9f;',
+              'private static final float MAX_CONTACT_FORCE = MASS * GRAVITY * 5f;')
+s = s.replace('camera.far = 520f;', 'camera.far = 900f;')
+s = s.replace('        int n = 18;\n        roadSegments = new ModelInstance[n];',
+              '        int n = 30;\n        roadSegments = new ModelInstance[n];')
+s = s.replace('        laneDashes = new ModelInstance[58];',
+              '        laneDashes = new ModelInstance[92];')
+
+old = '''        solveWheelContact(rearContactState, rearX, rearY, rearZ,
+                rearForwardVelocity, rearVerticalVelocity, sinYaw, cosYaw,
+                REAR_CONTACT_PRELOAD);
+        solveWheelContact(frontContactState, frontX, frontY, frontZ,
+                frontForwardVelocity, frontVerticalVelocity, sinYaw, cosYaw,
+                FRONT_CONTACT_PRELOAD);'''
+new = '''        float rearEffectiveMass = MASS * (WHEELBASE - effectiveComForward) / WHEELBASE;
+        float frontEffectiveMass = MASS - rearEffectiveMass;
+        solveWheelContact(rearContactState, rearX, rearY, rearZ,
+                rearForwardVelocity, rearVerticalVelocity, sinYaw, cosYaw,
+                REAR_CONTACT_PRELOAD, rearEffectiveMass, dt);
+        solveWheelContact(frontContactState, frontX, frontY, frontZ,
+                frontForwardVelocity, frontVerticalVelocity, sinYaw, cosYaw,
+                FRONT_CONTACT_PRELOAD, frontEffectiveMass, dt);'''
+if old not in s:
+    raise SystemExit('wheel contact call block not found')
+s = s.replace(old, new)
+
+old_sig = '''    private void solveWheelContact(WheelContact out, float worldX, float wheelY, float worldZ,
+                                   float pointForwardVelocity, float pointVerticalVelocity,
+                                   float sinYaw, float cosYaw, float preloadGap) {'''
+new_sig = '''    private void solveWheelContact(WheelContact out, float worldX, float wheelY, float worldZ,
+                                   float pointForwardVelocity, float pointVerticalVelocity,
+                                   float sinYaw, float cosYaw, float preloadGap,
+                                   float effectiveMass, float dt) {'''
+if old_sig not in s:
+    raise SystemExit('wheel contact signature not found')
+s = s.replace(old_sig, new_sig)
+
+old_force = '''        float force = CONTACT_STIFFNESS * virtualCompression;
+        if (normalVelocity < 0f) {
+            float compressionSpeed = -normalVelocity;
+            force += CONTACT_COMPRESSION_DAMPING * compressionSpeed
+                    + CONTACT_HIGH_SPEED_COMPRESSION * compressionSpeed * compressionSpeed;
+        } else {
+            force -= CONTACT_REBOUND_DAMPING * normalVelocity;
+        }'''
+new_force = '''        float force = CONTACT_STIFFNESS * virtualCompression;
+        if (normalVelocity < 0f) {
+            float compressionSpeed = -normalVelocity;
+            float dampingForce = CONTACT_COMPRESSION_DAMPING * compressionSpeed
+                    + CONTACT_HIGH_SPEED_COMPRESSION * compressionSpeed * compressionSpeed;
+            // A fixed-step damping impulse may remove most of the incoming normal velocity,
+            // but cannot reverse it hard enough to turn a grade change into a launch ramp.
+            float maxDampingForce = effectiveMass * compressionSpeed
+                    / Math.max(dt, 0.0001f) * 0.82f;
+            force += Math.min(dampingForce, maxDampingForce);
+        } else {
+            force -= CONTACT_REBOUND_DAMPING * normalVelocity;
+        }'''
+if old_force not in s:
+    raise SystemExit('wheel contact force block not found')
+s = s.replace(old_force, new_force)
+
+old_integrate = '''        bikeX += sinYaw * speed * dt;
+        bikeZ += cosYaw * speed * dt;
+        chassisY += verticalVelocity * dt;
+
+        // Derived rear-axle height retained for camera/UI code. Physics itself lives at COM.
+        sinPitch = MathUtils.sin(pitch);
+        cosPitch = MathUtils.cos(pitch);
+        rearVertical = -COM_FORWARD * sinPitch - COM_HEIGHT * cosPitch;
+        bikeY = chassisY + rearVertical;'''
+new_integrate = '''        bikeX += sinYaw * speed * dt;
+        bikeZ += cosYaw * speed * dt;
+        chassisY += verticalVelocity * dt;
+
+        // Position-level non-penetration constraint. This fixes tunnelling without adding
+        // upward momentum; the force solver still owns suspension response and pitch.
+        sinPitch = MathUtils.sin(pitch);
+        cosPitch = MathUtils.cos(pitch);
+        float rearForwardPost = -effectiveComForward * cosPitch + COM_HEIGHT * sinPitch;
+        float rearVerticalPost = -effectiveComForward * sinPitch - COM_HEIGHT * cosPitch;
+        float frontForwardPost = (WHEELBASE - effectiveComForward) * cosPitch + COM_HEIGHT * sinPitch;
+        float frontVerticalPost = (WHEELBASE - effectiveComForward) * sinPitch - COM_HEIGHT * cosPitch;
+        float rearPostX = bikeX + sinYaw * rearForwardPost;
+        float rearPostZ = bikeZ + cosYaw * rearForwardPost;
+        float frontPostX = bikeX + sinYaw * frontForwardPost;
+        float frontPostZ = bikeZ + cosYaw * frontForwardPost;
+        float rearPenetration = terrainVisuals.groundHeight(rearPostX, rearPostZ) + WHEEL_RADIUS
+                - (chassisY + rearVerticalPost);
+        float frontPenetration = terrainVisuals.groundHeight(frontPostX, frontPostZ) + WHEEL_RADIUS
+                - (chassisY + frontVerticalPost);
+        float penetrationCorrection = Math.max(rearPenetration, frontPenetration) - 0.012f;
+        if (penetrationCorrection > 0f) {
+            chassisY += Math.min(penetrationCorrection, 0.16f);
+            if (verticalVelocity < 0f) verticalVelocity *= 0.32f;
+        }
+
+        // Derived rear-axle height retained for camera/UI code. Physics itself lives at COM.
+        rearVertical = -COM_FORWARD * sinPitch - COM_HEIGHT * cosPitch;
+        bikeY = chassisY + rearVertical;'''
+if old_integrate not in s:
+    raise SystemExit('integration block not found')
+s = s.replace(old_integrate, new_integrate)
+
+p.write_text(s)
