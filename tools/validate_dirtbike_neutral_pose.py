@@ -195,6 +195,9 @@ facade = Path(
 scene = Path(
     "core/src/main/java/com/nyerahworks/balancepoint/GameScene.java"
 ).read_text(encoding="utf-8")
+visual_rig = Path(
+    "core/src/main/java/com/nyerahworks/balancepoint/DirtBikeVisualRig.java"
+).read_text(encoding="utf-8")
 model_dir = Path("app/src/main/assets/models")
 
 required = (
@@ -204,10 +207,14 @@ required = (
     "splitConnectedComponents(",
     "ForkAxisAccumulator",
     "return ViewerFaithfulDirtBikeLoader.load(ownedModels);",
-    ".rotate(importedBike.steeringAxis, visualSteerDeg)",
-    "tempA.set(importedBike.frontAxleOffset).sub(importedBike.steeringHead)",
+    "new DirtBikeVisualRig(importedBike, wheelbase, wheelRadius)",
+    "importedRig.update(bikeRoot, state, terrainVisuals);",
+    ".rotate(bike.steeringAxis, visualSteerDeg)",
+    "tempB.set(bike.frontAxleOffset).sub(bike.steeringHead)",
+    "findSwingarmParts(",
+    "findFrontSliderParts(",
 )
-combined = loader + "\n" + facade + "\n" + scene
+combined = loader + "\n" + facade + "\n" + scene + "\n" + visual_rig
 for snippet in required:
     if snippet not in combined:
         raise SystemExit(f"Missing source-derived rig invariant: {snippet}")
@@ -232,7 +239,7 @@ for obsolete in ("DirtBike.layout.json", "DirtBike.payload.00", "DirtBike.glb"):
         raise SystemExit(f"Obsolete dirt-bike asset still present: {obsolete}")
 
 print(
-    "Topology steering rig OK: "
+    "Topology steering/suspension rig OK: "
     f"{cube_component_count} Cube components, {len(steering_components)} steerable, "
     f"axis=({axis[0]:.6f}, {axis[1]:.6f}, {axis[2]:.6f}), "
     f"front-axle miss={front_axle_miss:.6f} m; neutral pose remains exact"
