@@ -274,11 +274,14 @@ public final class BalancePointGame extends ApplicationAdapter {
         // Compact trail-computer-sized housing instead of the oversized prototype box.
         Model dashM = box(b, 0.145f, 0.022f, 0.082f, dashMat);
         Model dashButtonM = box(b, 0.016f, 0.006f, 0.011f, dashButtonMat);
+        // UV orientation matters here: createRect maps its first edge to texture U.
+        // Run that edge across the handlebars (X), not fore/aft (Z), so the LCD
+        // texture is physically landscape on the dashboard instead of rotated 90 deg.
         Model dashScreenM = b.createRect(
                 -0.060f, 0f, -0.024f,
-                -0.060f, 0f,  0.029f,
-                 0.060f, 0f,  0.029f,
                  0.060f, 0f, -0.024f,
+                 0.060f, 0f,  0.029f,
+                -0.060f, 0f,  0.029f,
                  0f, 1f, 0f, dashScreenMat,
                 VertexAttributes.Usage.Position | VertexAttributes.Usage.Normal
                         | VertexAttributes.Usage.TextureCoordinates);
