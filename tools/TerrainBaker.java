@@ -72,11 +72,13 @@ public final class TerrainBaker {
         System.out.println("Carving road valley...");
         baker.carveRoadCorridor();
         baker.thermalRelax(1);
+        System.out.println("Local Gaussian terrain smoothing...");
+        baker.gaussianSmooth(2);
 
         File heightFile = new File(outDir, "world.bpheight");
         File albedoFile = new File(outDir, "world_albedo.png");
         baker.writeHeightfield(heightFile);
-        baker.writeAlbedo(albedoFile, 1024, 4096);
+        baker.writeAlbedo(albedoFile, 512, 4096);
         System.out.println("Wrote " + heightFile + " (" + heightFile.length() + " bytes)");
         System.out.println("Wrote " + albedoFile + " (" + albedoFile.length() + " bytes)");
     }
@@ -243,6 +245,42 @@ public final class TerrainBaker {
         }
     }
 
+    /**
+     * Local low-pass pass over the baked heightfield. A separable 1-4-6-4-1 kernel
+     * removes one/two-cell needles left by ridged noise + erosion without flattening
+     * the broad mountain mass. Two passes give an effective smoothing radius of only
+     * a few metres on the 1.5 m source grid.
+     */
+    private void gaussianSmooth(int passes) {
+        final int[] kernel = {1, 4, 6, 4, 1};
+        final int kernelSum = 16;
+        float[] scratch = new float[heights.length];
+
+        for (int pass = 0; pass < passes; pass++) {
+            for (int z = 0; z < HEIGHT; z++) {
+                for (int x = 0; x < WIDTH; x++) {
+                    float sum = 0f;
+                    for (int k = -2; k <= 2; k++) {
+                        int sx = Math.max(0, Math.min(WIDTH - 1, x + k));
+                        sum += heights[index(sx, z)] * kernel[k + 2];
+                    }
+                    scratch[index(x, z)] = sum / kernelSum;
+                }
+            }
+
+            for (int z = 0; z < HEIGHT; z++) {
+                for (int x = 0; x < WIDTH; x++) {
+                    float sum = 0f;
+                    for (int k = -2; k <= 2; k++) {
+                        int sz = Math.max(0, Math.min(HEIGHT - 1, z + k));
+                        sum += scratch[index(x, sz)] * kernel[k + 2];
+                    }
+                    heights[index(x, z)] = sum / kernelSum;
+                }
+            }
+        }
+    }
+
     private void writeHeightfield(File file) throws Exception {
         try (DataOutputStream out = new DataOutputStream(
                 new BufferedOutputStream(new FileOutputStream(file), 1 << 20))) {
@@ -295,8 +333,9 @@ public final class TerrainBaker {
                 float b = (grassC[2] * grass + dirtC[2] * dirt + rockC[2] * rock) * brightness;
 
                 int rgb = new Color(clamp01(r), clamp01(g), clamp01(b)).getRGB() & 0x00ffffff;
-                // Flip rows here so runtime UV v=0 corresponds to ORIGIN_Z.
-                image.setRGB(px, texH - 1 - py, rgb);
+                // Raw mesh UV v=0 samples the first PNG row, so keep image rows in
+                // increasing world-Z order. The old extra flip mirrored the albedo along Z.
+                image.setRGB(px, py, rgb);
             }
         }
         ImageIO.write(image, "png", file);

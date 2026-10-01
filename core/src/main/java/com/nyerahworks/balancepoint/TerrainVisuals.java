@@ -146,18 +146,17 @@ final class TerrainVisuals {
 
     float groundSlopeX(float x, float z) {
         if (Math.abs(x) <= ROAD_EDGE) return 0f;
-        CellSample c = cell(x, z);
-        return c.fx + c.fz <= 1f
-                ? (c.h10 - c.h00) / sampleSpacing
-                : (c.h11 - c.h01) / sampleSpacing;
+        // Average grade over a 6 m window instead of inheriting the slope of one 1.5 m
+        // triangle. Geometry still uses the same heightfield, but normals/contact response
+        // no longer jump at every cell diagonal.
+        float r = sampleSpacing * 2f;
+        return (groundHeight(x + r, z) - groundHeight(x - r, z)) / (2f * r);
     }
 
     float groundSlopeZ(float x, float z) {
         if (Math.abs(x) <= ROAD_EDGE) return 0f;
-        CellSample c = cell(x, z);
-        return c.fx + c.fz <= 1f
-                ? (c.h01 - c.h00) / sampleSpacing
-                : (c.h11 - c.h10) / sampleSpacing;
+        float r = sampleSpacing * 2f;
+        return (groundHeight(x, z + r) - groundHeight(x, z - r)) / (2f * r);
     }
 
     private CellSample cell(float x, float z) {

@@ -1135,14 +1135,10 @@ public final class BalancePointGame extends ApplicationAdapter {
             camera.direction.set(MathUtils.sin(viewYaw) * cp,
                     MathUtils.sin(lookPitch), MathUtils.cos(viewYaw) * cp).nor();
 
-            float cameraTerrainSlopeX = terrainVisuals != null
-                    ? terrainVisuals.groundSlopeX(bikeX, bikeZ) : 0f;
-            float cameraTerrainSlopeZ = terrainVisuals != null
-                    ? terrainVisuals.groundSlopeZ(bikeX, bikeZ) : 0f;
-            float cameraLateralGrade = cameraTerrainSlopeX * MathUtils.cos(yaw)
-                    - cameraTerrainSlopeZ * MathUtils.sin(yaw);
-            float cameraBank = roll + (terrainAirborne ? 0f
-                    : (float) Math.atan(cameraLateralGrade));
+            // Do not resample raw terrain under the camera. The chassis already carries
+            // critically damped roll plus filtered sidehill support bank; re-reading a single
+            // terrain cell here was the last source of the old sideways helmet-camera twitch.
+            float cameraBank = roll + terrainRoll;
             tempB.set(camera.direction).crs(Vector3.Y).nor();
             camera.up.set(tempB).crs(camera.direction).nor()
                     .rotate(camera.direction, cameraBank * MathUtils.radiansToDegrees).nor();
