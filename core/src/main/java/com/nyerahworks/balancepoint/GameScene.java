@@ -398,23 +398,29 @@ final class GameScene {
                 .translate(0.041f, 0.0143f, -0.032f);
 
         if (motorcycle != null) {
-            setPart(riderTorso, 0f, 0.94f, 0.49f);
-            riderTorso.transform.rotate(Vector3.X, -16f).scale(
+            float riderShift = state.riderLean;
+            float riderAbsShift = Math.abs(riderShift);
+            setPart(riderTorso, 0f, 0.94f - riderAbsShift * 0.025f,
+                    0.49f + riderShift * 0.15f);
+            riderTorso.transform.rotate(Vector3.X, -16f - riderShift * 10f).scale(
                     IMPORTED_RIDER_SCALE, IMPORTED_RIDER_SCALE, IMPORTED_RIDER_SCALE);
-            setPart(riderHead, 0f, 1.30f, 0.65f);
+            setPart(riderHead, 0f, 1.30f - riderAbsShift * 0.025f,
+                    0.65f + riderShift * 0.17f);
             riderHead.transform.scale(
                     IMPORTED_RIDER_SCALE, IMPORTED_RIDER_SCALE, IMPORTED_RIDER_SCALE);
-            setPart(riderLegLeft, -0.13f, 0.56f, 0.42f);
-            setPart(riderLegRight, 0.13f, 0.56f, 0.42f);
-            riderLegLeft.transform.rotate(Vector3.X, 36f).scale(
+            setPart(riderLegLeft, -0.13f, 0.56f, 0.42f + riderShift * 0.035f);
+            setPart(riderLegRight, 0.13f, 0.56f, 0.42f + riderShift * 0.035f);
+            riderLegLeft.transform.rotate(Vector3.X, 36f - riderShift * 3f).scale(
                     IMPORTED_RIDER_SCALE, IMPORTED_RIDER_SCALE, IMPORTED_RIDER_SCALE);
-            riderLegRight.transform.rotate(Vector3.X, 36f).scale(
+            riderLegRight.transform.rotate(Vector3.X, 36f - riderShift * 3f).scale(
                     IMPORTED_RIDER_SCALE, IMPORTED_RIDER_SCALE, IMPORTED_RIDER_SCALE);
-            setPart(riderArmLeft, -0.17f, 0.91f, 0.82f);
-            setPart(riderArmRight, 0.17f, 0.91f, 0.82f);
-            riderArmLeft.transform.rotate(Vector3.X, 67f).scale(
+            setPart(riderArmLeft, -0.17f, 0.91f - riderAbsShift * 0.01f,
+                    0.82f + riderShift * 0.055f);
+            setPart(riderArmRight, 0.17f, 0.91f - riderAbsShift * 0.01f,
+                    0.82f + riderShift * 0.055f);
+            riderArmLeft.transform.rotate(Vector3.X, 67f + riderShift * 5f).scale(
                     IMPORTED_RIDER_SCALE, IMPORTED_RIDER_SCALE, IMPORTED_RIDER_SCALE);
-            riderArmRight.transform.rotate(Vector3.X, 67f).scale(
+            riderArmRight.transform.rotate(Vector3.X, 67f + riderShift * 5f).scale(
                     IMPORTED_RIDER_SCALE, IMPORTED_RIDER_SCALE, IMPORTED_RIDER_SCALE);
         } else {
             float riderZ = 0.43f + state.riderLean * 0.10f;
@@ -457,9 +463,28 @@ final class GameScene {
                 .rotate(Vector3.Z, 90f).rotate(Vector3.Y, spinDeg);
     }
 
+    private void renderRiderShadow() {
+        shadowBatch.render(riderTorso);
+        shadowBatch.render(riderHead);
+        shadowBatch.render(riderLegLeft);
+        shadowBatch.render(riderLegRight);
+        shadowBatch.render(riderArmLeft);
+        shadowBatch.render(riderArmRight);
+    }
+
+    private void renderRider() {
+        modelBatch.render(riderTorso, environment);
+        modelBatch.render(riderHead, environment);
+        modelBatch.render(riderLegLeft, environment);
+        modelBatch.render(riderLegRight, environment);
+        modelBatch.render(riderArmLeft, environment);
+        modelBatch.render(riderArmRight, environment);
+    }
+
     private void renderBikeShadow() {
         if (motorcycle != null) {
             motorcycle.renderShadow(shadowBatch);
+            renderRiderShadow();
             return;
         }
 
@@ -475,12 +500,7 @@ final class GameScene {
         shadowBatch.render(forkRight);
         shadowBatch.render(handlebar);
         shadowBatch.render(frontNumberPlate);
-        shadowBatch.render(riderTorso);
-        shadowBatch.render(riderHead);
-        shadowBatch.render(riderLegLeft);
-        shadowBatch.render(riderLegRight);
-        shadowBatch.render(riderArmLeft);
-        shadowBatch.render(riderArmRight);
+        renderRiderShadow();
     }
 
     private void renderBike() {
@@ -490,6 +510,7 @@ final class GameScene {
             modelBatch.render(instrumentScreen, environment);
             modelBatch.render(instrumentButtonLeft, environment);
             modelBatch.render(instrumentButtonRight, environment);
+            renderRider();
             return;
         }
 
@@ -509,11 +530,6 @@ final class GameScene {
         modelBatch.render(instrumentScreen, environment);
         modelBatch.render(instrumentButtonLeft, environment);
         modelBatch.render(instrumentButtonRight, environment);
-        modelBatch.render(riderTorso, environment);
-        modelBatch.render(riderHead, environment);
-        modelBatch.render(riderLegLeft, environment);
-        modelBatch.render(riderLegRight, environment);
-        modelBatch.render(riderArmLeft, environment);
-        modelBatch.render(riderArmRight, environment);
+        renderRider();
     }
 }
