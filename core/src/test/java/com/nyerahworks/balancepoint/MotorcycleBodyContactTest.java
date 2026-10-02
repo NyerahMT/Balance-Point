@@ -29,4 +29,12 @@ public final class MotorcycleBodyContactTest {
         assertTrue(contact.hitsGround(
                 0f, 0.335f, 0f, 0f, -80f * MathUtils.degreesToRadians, 0f, flat));
     }
+
+    @Test
+    public void sidewaysHandlebarStrikeCrashes() {
+        assertFalse(contact.hitsGround(
+                0f, 0.335f, 0f, 0f, 0f, 58f * MathUtils.degreesToRadians, flat));
+        assertTrue(contact.hitsGround(
+                0f, 0.335f, 0f, 0f, 0f, 90f * MathUtils.degreesToRadians, flat));
+    }
 }
