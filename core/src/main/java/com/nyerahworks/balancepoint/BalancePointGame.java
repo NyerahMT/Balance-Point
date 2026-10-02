@@ -129,6 +129,9 @@ public final class BalancePointGame extends ApplicationAdapter {
     private boolean shiftDownHeld;
     private boolean shiftUpHeld;
     private boolean frontGrounded = true;
+    // The pointer that initially grabs the rider pad owns it until finger-up. This lets the
+    // player drag outside the visual rectangle without losing steering/lean mid-maneuver.
+    private int riderControlPointer = -1;
 
     private boolean crashed;
     private boolean crashSettled;
@@ -232,12 +235,18 @@ public final class BalancePointGame extends ApplicationAdapter {
         int h = Math.max(1, Gdx.graphics.getHeight());
 
         if (gameState == GameState.MAIN_MENU) {
+            riderControlPointer = -1;
             readMainMenuInput(w, h);
             return;
         }
         if (gameState == GameState.PAUSED) {
+            riderControlPointer = -1;
             readPauseMenuInput(w, h);
             return;
+        }
+
+        if (riderControlPointer >= 0 && !Gdx.input.isTouched(riderControlPointer)) {
+            riderControlPointer = -1;
         }
 
         boolean pauseTouch = false;
@@ -260,6 +269,13 @@ public final class BalancePointGame extends ApplicationAdapter {
             float x = px / w;
             float y = py / h;
 
+            if (pointer == riderControlPointer) {
+                controlBoxTouch = true;
+                requestedSteer = RiderControlPad.steer(x);
+                requestedLean = RiderControlPad.lean(y);
+                continue;
+            }
+
             if (x < 0.14f && y < 0.16f) {
                 pauseTouch = true;
                 continue;
@@ -280,14 +296,13 @@ public final class BalancePointGame extends ApplicationAdapter {
                 requestedBrake = Math.max(requestedBrake, brake);
                 continue;
             }
-            // Rectangular two-axis rider control. Axes are independent rather than radial, so
-            // full steering and full fore/aft body movement can be commanded simultaneously.
-            // Input Y is top-origin: touching above center therefore maps to positive (forward) lean.
-            if (x >= 0.035f && x <= 0.295f && y >= 0.64f && y <= 0.94f) {
+            // A finger acquires the rider pad only when it begins inside the visual area.
+            // After acquisition the branch above keeps ownership even outside the rectangle.
+            if (riderControlPointer < 0 && RiderControlPad.contains(x, y)) {
+                riderControlPointer = pointer;
                 controlBoxTouch = true;
-                requestedSteer = shapeSteerInput(applyAxisDeadzone(
-                        MathUtils.clamp((x - 0.165f) / 0.130f, -1f, 1f), 0.055f));
-                requestedLean = applyAxisDeadzone(MathUtils.clamp((0.790f - y) / 0.150f, -1f, 1f), 0.055f);
+                requestedSteer = RiderControlPad.steer(x);
+                requestedLean = RiderControlPad.lean(y);
                 continue;
             }
             if (x >= 0.34f && x < 0.44f && y > 0.70f && y < 0.92f) {
@@ -439,6 +454,7 @@ public final class BalancePointGame extends ApplicationAdapter {
     private void enterPause() {
         if (gameState != GameState.PLAYING) return;
         gameState = GameState.PAUSED;
+        riderControlPointer = -1;
         throttleTarget = 0f;
         rearBrakeTarget = 0f;
         steerTarget = 0f;
@@ -449,6 +465,7 @@ public final class BalancePointGame extends ApplicationAdapter {
 
     private void enterMainMenu() {
         gameState = GameState.MAIN_MENU;
+        riderControlPointer = -1;
         physicsAccumulator = 0.0;
         pauseTouchHeld = false;
         cameraTouchHeld = false;
@@ -459,19 +476,6 @@ public final class BalancePointGame extends ApplicationAdapter {
     private static float approach(float value, float target, float amount) {
         if (value < target) return Math.min(value + amount, target);
         return Math.max(value - amount, target);
-    }
-
-    private static float applyAxisDeadzone(float value, float deadzone) {
-        float magnitude = Math.abs(value);
-        if (magnitude <= deadzone) return 0f;
-        float rescaled = (magnitude - deadzone) / (1f - deadzone);
-        return Math.signum(value) * MathUtils.clamp(rescaled, 0f, 1f);
-    }
-
-    private static float shapeSteerInput(float value) {
-        float magnitude = Math.abs(value);
-        float shaped = magnitude * (0.62f + 0.38f * magnitude * magnitude);
-        return Math.signum(value) * shaped;
     }
 
     private void simulate(float dt) {
@@ -939,6 +943,7 @@ public final class BalancePointGame extends ApplicationAdapter {
         rearBrake = rearBrakeTarget = 0f;
         steer = steerTarget = 0f;
         riderLean = riderLeanTarget = 0f;
+        riderControlPointer = -1;
         lookYaw = lookPitch = 0f;
         if (gameCamera != null) gameCamera.resetRide();
         shiftDownHeld = shiftUpHeld = false;
