@@ -251,10 +251,11 @@ final class GameHud {
         float sliderTop = height * 0.52f;
         float brakeX = width * 0.755f;
         float brakeY = height * 0.17f;
-        float controlLeft = width * 0.035f;
-        float controlBottom = height * 0.06f;
-        float controlWidth = width * 0.260f;
-        float controlHeight = height * 0.300f;
+        // RiderControlPad uses top-origin input Y; HUD coordinates are bottom-origin.
+        float controlLeft = width * RiderControlPad.LEFT;
+        float controlBottom = height * (1f - RiderControlPad.BOTTOM);
+        float controlWidth = width * (RiderControlPad.RIGHT - RiderControlPad.LEFT);
+        float controlHeight = height * (RiderControlPad.BOTTOM - RiderControlPad.TOP);
         float controlCenterX = controlLeft + controlWidth * 0.5f;
         float controlCenterY = controlBottom + controlHeight * 0.5f;
         float shiftDownX = width * 0.39f;
