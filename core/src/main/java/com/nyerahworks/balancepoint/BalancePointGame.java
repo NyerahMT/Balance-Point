@@ -22,10 +22,6 @@ public final class BalancePointGame extends ApplicationAdapter {
     private static final float PITCH_DAMPING_GROUNDED = 2.85f;
     private static final float PITCH_DAMPING_WHEELIE = 1.20f;
     private static final float PITCH_DAMPING_AIR = 0.38f;
-    private static final float YAW_RATE_RESPONSE_GROUND = 9.0f;
-    private static final float YAW_RATE_RESPONSE_AIR = 3.0f;
-    private static final float ROLL_NATURAL_FREQUENCY = 7.0f;
-    private static final float ROLL_DAMPING_RATIO = 1.10f;
     private static final float TERRAIN_ROLL_NATURAL_FREQUENCY = 5.5f;
     private static final float TERRAIN_ROLL_DAMPING_RATIO = 1.15f;
     // Neutral combined bike+rider COM. 0.36 m above the axles plus the 0.337 m tire
@@ -77,6 +73,8 @@ public final class BalancePointGame extends ApplicationAdapter {
     private final MotorcycleDrivetrain drivetrain = new MotorcycleDrivetrain(WHEEL_RADIUS);
     private final MotorcycleSuspension suspension = new MotorcycleSuspension(
             REAR_STATIC_LOAD, FRONT_STATIC_LOAD, MAX_CONTACT_FORCE);
+    private final MotorcycleLateralDynamics lateralDynamics = new MotorcycleLateralDynamics(
+            MASS, WHEELBASE, COM_FORWARD, GRAVITY);
 
     private GameCamera gameCamera;
     private GameScene scene;
@@ -87,6 +85,7 @@ public final class BalancePointGame extends ApplicationAdapter {
     private TerrainVisuals terrainVisuals;
 
     private float speed;
+    private float lateralSpeed;
     private float bikeZ;
     private float bikeX;
     // Rear axle world height. Unlike the old root-height snap, this carries vertical
@@ -287,7 +286,8 @@ public final class BalancePointGame extends ApplicationAdapter {
             // Input Y is top-origin: touching above center therefore maps to positive (forward) lean.
             if (x >= 0.035f && x <= 0.295f && y >= 0.64f && y <= 0.94f) {
                 controlBoxTouch = true;
-                requestedSteer = applyAxisDeadzone(MathUtils.clamp((x - 0.165f) / 0.130f, -1f, 1f), 0.055f);
+                requestedSteer = shapeSteerInput(applyAxisDeadzone(
+                        MathUtils.clamp((x - 0.165f) / 0.130f, -1f, 1f), 0.055f));
                 requestedLean = applyAxisDeadzone(MathUtils.clamp((0.790f - y) / 0.150f, -1f, 1f), 0.055f);
                 continue;
             }
@@ -344,7 +344,7 @@ public final class BalancePointGame extends ApplicationAdapter {
         rearBrake = approach(rearBrake, rearBrakeTarget,
                 (rearBrakeTarget > rearBrake ? 24f : 22f) * dt);
 
-        float steerResponse = 2.8f + Math.min(Math.abs(speed) * 0.020f, 0.65f);
+        float steerResponse = 5.8f + Math.min(Math.abs(speed) * 0.035f, 1.4f);
         steer += (steerTarget - steer) * Math.min(1f, dt * steerResponse);
         // Body movement is deliberately slower than handlebar input, but still responsive
         // enough to preload the bike before a crest or move forward under acceleration.
@@ -472,6 +472,12 @@ public final class BalancePointGame extends ApplicationAdapter {
         return Math.signum(value) * MathUtils.clamp(rescaled, 0f, 1f);
     }
 
+    private static float shapeSteerInput(float value) {
+        float magnitude = Math.abs(value);
+        float shaped = magnitude * (0.62f + 0.38f * magnitude * magnitude);
+        return Math.signum(value) * shaped;
+    }
+
     private void simulate(float dt) {
         if (crashed) {
             simulateCrash(dt);
@@ -552,6 +558,8 @@ public final class BalancePointGame extends ApplicationAdapter {
                 drivetrain.update(wheelLinearSpeed, throttle, dt), 0f, MAX_ENGINE_FORCE);
         float rearSurfaceMu = terrainVisuals != null
                 ? terrainVisuals.tractionCoefficient(rearX, rearZ) : 1.0f;
+        float frontSurfaceMu = terrainVisuals != null
+                ? terrainVisuals.tractionCoefficient(frontX, frontZ) : 1.0f;
         float rearTractionLimit = rearSurfaceMu * rearContactState.normalForce;
         float slipSpeed = wheelLinearSpeed - tangentGroundSpeed;
         float rearTireForce = 0f;
@@ -654,9 +662,10 @@ public final class BalancePointGame extends ApplicationAdapter {
         pitchVelocity = MathUtils.clamp(pitchVelocity, -MAX_PITCH_RATE, MAX_PITCH_RATE);
         pitch += pitchVelocity * dt;
 
-        // Semi-implicit translation after force/torque integration.
-        bikeX += sinYaw * speed * dt;
-        bikeZ += cosYaw * speed * dt;
+        // Semi-implicit translation after force/torque integration. Lateral tire slip now
+        // creates actual sideways velocity instead of the bike being welded to its heading.
+        bikeX += (sinYaw * speed + cosYaw * lateralSpeed) * dt;
+        bikeZ += (cosYaw * speed - sinYaw * lateralSpeed) * dt;
         chassisY += verticalVelocity * dt;
 
         // Position-level bottom-out constraint. Negative geometric gap is now valid suspension
@@ -710,49 +719,24 @@ public final class BalancePointGame extends ApplicationAdapter {
         wheelSpin += rearWheelAngularSpeed * dt;
         if (wheelSpin > MathUtils.PI2) wheelSpin -= MathUtils.PI2;
 
-        // Front-tire steering still comes from front load, but a wheelie no longer loses all
-        // directional authority. Rear-only steering represents rider/handlebar/gyro steering
-        // while balancing on the rear tire, blended continuously as front load disappears.
-        float speedBlend = MathUtils.clamp(Math.abs(speed) / 30f, 0f, 1f);
-        speedBlend = speedBlend * speedBlend * (3f - 2f * speedBlend);
-        float maxSteerDeg = MathUtils.lerp(34f, 5.0f, speedBlend);
-        // UI/control convention is X<0 left, X>0 right. The world yaw convention used by
-        // this prototype is opposite, so convert once here rather than reversing the pad axis.
-        float steerAngle = -steer * maxSteerDeg * MathUtils.degreesToRadians;
-        float frontAuthority = MathUtils.clamp(frontContactState.normalForce
-                / (MASS * GRAVITY * 0.32f), 0f, 1f);
-        float frontYawRateTarget = Math.abs(speed) > 0.35f
-                ? (speed / WHEELBASE) * (float) Math.tan(steerAngle) * frontAuthority
-                : 0f;
-
-        float wheelieBlend = rearTouching && !frontTouching ? 1f - frontAuthority : 0f;
-        float wheelieSpeedBlend = MathUtils.clamp(Math.abs(speed) / 35f, 0f, 1f);
-        // Full input gives about 54 deg/s at low wheelie speed and ~24 deg/s at high speed.
-        // This is deliberately stronger than the old zero-authority wheelie behavior, but is
-        // rate limited so a bump cannot instantly yaw the whole bike sideways.
-        float wheelieYawRateTarget = -steer
-                * MathUtils.lerp(0.95f, 0.42f, wheelieSpeedBlend) * wheelieBlend;
-        float yawRateTarget = frontYawRateTarget + wheelieYawRateTarget;
-        float yawResponse = terrainAirborne ? YAW_RATE_RESPONSE_AIR : YAW_RATE_RESPONSE_GROUND;
-        yawVelocity += (yawRateTarget - yawVelocity) * Math.min(1f, dt * yawResponse);
-        yawVelocity = MathUtils.clamp(yawVelocity, -2.6f, 2.6f);
+        lateralDynamics.step(
+                speed,
+                steer,
+                rearTireForce,
+                rearContactState.normalForce,
+                frontContactState.normalForce,
+                rearSurfaceMu,
+                frontSurfaceMu,
+                rearTouching,
+                frontTouching,
+                dt);
+        lateralSpeed = lateralDynamics.lateralSpeed();
+        yawVelocity = lateralDynamics.yawRate();
+        roll = lateralDynamics.roll();
+        rollVelocity = lateralDynamics.rollRate();
         yaw += yawVelocity * dt;
         if (yaw > MathUtils.PI) yaw -= MathUtils.PI2;
         if (yaw < -MathUtils.PI) yaw += MathUtils.PI2;
-
-        // Roll is a critically/over-damped angular state rather than an immediate lerp. Short
-        // lateral impulses from bumps change roll velocity, then the damper kills the motion.
-        float lateralAcceleration = speed * yawVelocity;
-        float rollTarget = -(float) Math.atan2(lateralAcceleration, GRAVITY);
-        rollTarget = MathUtils.clamp(rollTarget,
-                -60f * MathUtils.degreesToRadians, 60f * MathUtils.degreesToRadians);
-        float rollFrequency = terrainAirborne ? 3.2f : ROLL_NATURAL_FREQUENCY;
-        float rollDampingRatio = terrainAirborne ? 0.72f : ROLL_DAMPING_RATIO;
-        float rollAcceleration = (rollTarget - roll) * rollFrequency * rollFrequency
-                - 2f * rollDampingRatio * rollFrequency * rollVelocity;
-        rollVelocity += rollAcceleration * dt;
-        rollVelocity = MathUtils.clamp(rollVelocity, -4.0f, 4.0f);
-        roll += rollVelocity * dt;
 
         // The old renderer snapped directly to the local side-slope normal, which made the bike
         // visibly twitch sideways on every irregular triangle. Filter that support bank with a
@@ -782,9 +766,9 @@ public final class BalancePointGame extends ApplicationAdapter {
         }
 
         if (pitch > LOOP_ANGLE
-                || Float.isNaN(pitch) || Float.isNaN(speed) || Float.isNaN(yaw)
-                || Float.isNaN(roll) || Float.isNaN(bikeX) || Float.isNaN(bikeZ)
-                || Float.isNaN(chassisY)) {
+                || Float.isNaN(pitch) || Float.isNaN(speed) || Float.isNaN(lateralSpeed)
+                || Float.isNaN(yaw) || Float.isNaN(roll) || Float.isNaN(bikeX)
+                || Float.isNaN(bikeZ) || Float.isNaN(chassisY)) {
             beginCrash();
         }
     }
@@ -868,6 +852,7 @@ public final class BalancePointGame extends ApplicationAdapter {
         crashed = true;
         crashSettled = false;
         crashTimer = 0f;
+        lateralSpeed = 0f;
         rollVelocity = 0f;
         yawVelocity = 0f;
         terrainRollVelocity = 0f;
@@ -928,6 +913,7 @@ public final class BalancePointGame extends ApplicationAdapter {
 
     private void resetBike() {
         speed = 0f;
+        lateralSpeed = 0f;
         bikeX = 0f;
         chassisY = WHEEL_RADIUS + COM_HEIGHT;
         bikeY = WHEEL_RADIUS;
@@ -957,6 +943,7 @@ public final class BalancePointGame extends ApplicationAdapter {
         shiftDownHeld = shiftUpHeld = false;
         drivetrain.reset();
         suspension.reset();
+        lateralDynamics.reset();
         frontGrounded = true;
         crashed = false;
         crashSettled = false;
