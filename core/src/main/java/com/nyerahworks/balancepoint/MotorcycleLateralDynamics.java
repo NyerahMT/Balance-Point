@@ -16,7 +16,8 @@ final class MotorcycleLateralDynamics {
     private static final float YAW_DAMPING = 1.02f;
     private static final float MAX_YAW_RATE = 1.75f;
     private static final float MAX_LATERAL_SPEED = 3.0f;
-    private static final float MAX_ROLL = 58f * MathUtils.degreesToRadians;
+    private static final float MAX_RIDE_ROLL = 58f * MathUtils.degreesToRadians;
+    private static final float MAX_PHYSICAL_ROLL = 175f * MathUtils.degreesToRadians;
 
     private static final float REAR_LONGITUDINAL_GRIP_COST = 0.32f;
     private static final float REAR_MIN_LATERAL_GRIP_FRACTION = 0.72f;
@@ -138,8 +139,8 @@ final class MotorcycleLateralDynamics {
             float intentWeight = frontTouching ? 0.30f : 0.20f;
             float rollTarget = MathUtils.clamp(
                     forceRoll * (1f - intentWeight) + intentRoll * intentWeight,
-                    -MAX_ROLL,
-                    MAX_ROLL);
+                    -MAX_RIDE_ROLL,
+                    MAX_RIDE_ROLL);
 
             float rollFrequency = frontTouching ? 5.3f : 4.2f;
             float rollDamping = frontTouching ? 0.86f : 0.80f;
@@ -155,7 +156,10 @@ final class MotorcycleLateralDynamics {
 
         rollRate = MathUtils.clamp(rollRate, -4.3f, 4.3f);
         roll += rollRate * dt;
-        roll = MathUtils.clamp(roll, -MAX_ROLL, MAX_ROLL);
+        // The 58-degree value above is a target limit, not a collision surrogate. A bad takeoff
+        // or landing must be allowed to rotate the actual chassis until a bar/seat hard-point
+        // physically meets the ground.
+        roll = MathUtils.clamp(roll, -MAX_PHYSICAL_ROLL, MAX_PHYSICAL_ROLL);
     }
 
     /** Synchronizes body-frame sideslip with the ballistic world-space velocity while airborne. */
