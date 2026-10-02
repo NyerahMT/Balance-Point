@@ -36,6 +36,10 @@ final class GameScene {
         float speed;
         float steer;
         float riderLean;
+        // Signed axle travel from the normal loaded ride position. Positive is compression;
+        // negative is extension. Physics owns these values and the visual rig only consumes them.
+        float rearSuspensionTravel;
+        float frontSuspensionTravel;
         boolean frontGrounded = true;
         boolean terrainAirborne;
         boolean crashed;
