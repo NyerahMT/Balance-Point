@@ -1,0 +1,13 @@
+Kenney Graveyard Kit — character-skeleton.obj
+
+Creator: Kenney (https://kenney.nl/)
+Official asset page: https://kenney.nl/assets/graveyard-kit
+License: Creative Commons CC0 1.0 Universal / public domain dedication
+License information: https://creativecommons.org/publicdomain/zero/1.0/
+
+Balance Point uses the Graveyard Kit skeleton character as its rider presentation model.
+The packaged OBJ is fetched from a pinned mirror revision during CI and verified against
+Git blob SHA 2e2c2d3825c9481c67dbd4bd3e238ddbd8879b74 before packaging.
+
+Kenney states that assets on its asset pages may be used in commercial projects and that
+attribution is not required. This file is retained for provenance and license clarity.
