@@ -102,8 +102,10 @@ jobs:
 
       - name: Stage app icons
         run: |
-          python3 -m pip install --disable-pip-version-check Pillow
-          python3 tools/stage_app_icons.py
+          python3 -m venv .icon-venv
+          . .icon-venv/bin/activate
+          python -m pip install --disable-pip-version-check Pillow
+          python tools/stage_app_icons.py
           test -f ios/data/Media.xcassets/AppIcon.appiconset/icon-1024.png
 
       - name: Set up Java 17
