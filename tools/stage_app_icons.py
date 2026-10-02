@@ -8,7 +8,7 @@ from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "tools" / "branding" / "balancepoint-icon.jpg"
-EXPECTED_SHA256 = "d9b6ed54c71c08c36ee438c03d84ba3b7efb8e18203f427c418c5cb06d73aeae"
+EXPECTED_SHA256 = "ac1a0645bb2155675d2a0f127e31d867d71f04bcb96e04f8e1bc331ad3c94934"
 IOS_CATALOG = ROOT / "ios" / "data" / "Media.xcassets"
 IOS_APPICON = IOS_CATALOG / "AppIcon.appiconset"
 
@@ -30,7 +30,6 @@ IOS_IMAGES = [
     ("icon-1024.png", 1024, "ios-marketing", "1024x1024", "1x"),
 ]
 
-# Shared files can satisfy both idioms at the same pixel size.
 IOS_EXTRA_ENTRIES = [
     ("icon-20@2x.png", "ipad", "20x20", "2x"),
     ("icon-29@2x.png", "ipad", "29x29", "2x"),
