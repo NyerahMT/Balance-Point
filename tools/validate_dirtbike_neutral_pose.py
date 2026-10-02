@@ -195,6 +195,9 @@ facade = Path(
 scene = Path(
     "core/src/main/java/com/nyerahworks/balancepoint/GameScene.java"
 ).read_text(encoding="utf-8")
+motorcycle = Path(
+    "core/src/main/java/com/nyerahworks/balancepoint/Motorcycle.java"
+).read_text(encoding="utf-8")
 visual_rig = Path(
     "core/src/main/java/com/nyerahworks/balancepoint/DirtBikeVisualRig.java"
 ).read_text(encoding="utf-8")
@@ -207,14 +210,15 @@ required = (
     "splitConnectedComponents(",
     "ForkAxisAccumulator",
     "return ViewerFaithfulDirtBikeLoader.load(ownedModels);",
-    "new DirtBikeVisualRig(importedBike, wheelbase, wheelRadius)",
-    "importedRig.update(bikeRoot, state, terrainVisuals);",
+    "new Motorcycle(loadedBike, wheelbase, wheelRadius)",
+    "new DirtBikeVisualRig(art, wheelbase, physicsWheelRadius)",
+    "rig.update(bikeRoot, state, terrain);",
     ".rotate(bike.steeringAxis, visualSteerDeg)",
     "tempB.set(bike.frontAxleOffset).sub(bike.steeringHead)",
     "findSwingarmParts(",
     "findFrontSliderParts(",
 )
-combined = loader + "\n" + facade + "\n" + scene + "\n" + visual_rig
+combined = loader + "\n" + facade + "\n" + scene + "\n" + motorcycle + "\n" + visual_rig
 for snippet in required:
     if snippet not in combined:
         raise SystemExit(f"Missing source-derived rig invariant: {snippet}")
