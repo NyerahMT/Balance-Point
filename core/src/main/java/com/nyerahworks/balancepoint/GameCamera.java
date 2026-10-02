@@ -1,5 +1,6 @@
 package com.nyerahworks.balancepoint;
 
+import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.graphics.PerspectiveCamera;
 import com.badlogic.gdx.math.MathUtils;
 import com.badlogic.gdx.math.Matrix4;
@@ -39,6 +40,8 @@ final class GameCamera {
     private float helmetTrajectoryPitchVelocity;
     private float menuCameraZ;
     private float menuCameraBobPhase;
+    private float chaseOrbitYaw;
+    private float chaseOrbitPitch;
     private boolean rideCameraInitialized;
     private boolean previousCockpitCamera;
 
@@ -77,6 +80,8 @@ final class GameCamera {
     void resetRide() {
         helmetTrajectoryPitch = 0f;
         helmetTrajectoryPitchVelocity = 0f;
+        chaseOrbitYaw = 0f;
+        chaseOrbitPitch = 0f;
         rideCameraInitialized = false;
         previousCockpitCamera = state.cockpitCamera;
     }
@@ -94,74 +99,87 @@ final class GameCamera {
             previousCockpitCamera = state.cockpitCamera;
         }
 
-        float viewYaw = state.yaw + state.lookYaw;
         if (state.cockpitCamera) {
+            float viewYaw = state.yaw + state.lookYaw;
             updateHelmetCamera(dt, terrain, viewYaw);
         } else {
-            updateChaseCamera(dt, terrain, viewYaw);
+            updateChaseOrbitInput();
+            updateChaseCamera(dt, terrain, state.yaw + chaseOrbitYaw);
         }
         camera.update();
+    }
+
+    /**
+     * External-camera orbit is deliberately owned here rather than by the temporary look input
+     * used by the helmet camera. Once the rider drags the chase camera somewhere, it stays there
+     * until they drag it again instead of easing back behind the motorcycle.
+     */
+    private void updateChaseOrbitInput() {
+        int width = Math.max(1, Gdx.graphics.getWidth());
+        int height = Math.max(1, Gdx.graphics.getHeight());
+        for (int pointer = 0; pointer < 8; pointer++) {
+            if (!Gdx.input.isTouched(pointer)) continue;
+            float x = Gdx.input.getX(pointer) / (float) width;
+            float y = Gdx.input.getY(pointer) / (float) height;
+            if (x <= 0.30f || x >= 0.70f || y <= 0.10f || y >= 0.66f) continue;
+
+            chaseOrbitYaw -= Gdx.input.getDeltaX(pointer) * 0.0048f;
+            chaseOrbitPitch -= Gdx.input.getDeltaY(pointer) * 0.0043f;
+            chaseOrbitYaw = wrapRadians(chaseOrbitYaw);
+            chaseOrbitPitch = MathUtils.clamp(
+                    chaseOrbitPitch,
+                    -32f * MathUtils.degreesToRadians,
+                    38f * MathUtils.degreesToRadians);
+        }
     }
 
     private void updateChaseCamera(float dt, TerrainVisuals terrain, float viewYaw) {
         updateBodyAnchor();
 
-        float orbitPitch = MathUtils.clamp(
-                state.lookPitch,
-                -35f * MathUtils.degreesToRadians,
-                32f * MathUtils.degreesToRadians);
-        float speedBlend = MathUtils.clamp(Math.abs(state.speed) / 40f, 0f, 1f);
-        speedBlend = speedBlend * speedBlend * (3f - 2f * speedBlend);
-
-        // Pull back as speed builds and a little more in the air. This makes jumps readable
-        // without making low-speed technical riding feel like the camera is in another county.
-        float chaseDistance = MathUtils.lerp(4.05f, 5.15f, speedBlend)
-                + (state.terrainAirborne ? 0.35f : 0f);
-        float horizontalDistance = chaseDistance * MathUtils.cos(orbitPitch);
+        // Keep ride-camera geometry predictable. Speed changes only FOV; it never changes
+        // chase distance, height, target lead, banking or airborne framing.
+        final float chaseDistance = 4.25f;
+        float horizontalDistance = chaseDistance * MathUtils.cos(chaseOrbitPitch);
         float sinView = MathUtils.sin(viewYaw);
         float cosView = MathUtils.cos(viewYaw);
 
         tempPosition.set(
                 bodyAnchor.x - sinView * horizontalDistance,
-                bodyAnchor.y + 0.78f + chaseDistance * MathUtils.sin(orbitPitch),
+                bodyAnchor.y + 0.72f + chaseDistance * MathUtils.sin(chaseOrbitPitch),
                 bodyAnchor.z - cosView * horizontalDistance);
 
-        // Keep the chase camera from diving through hills when orbiting low behind the bike.
         if (terrain != null) {
             float ground = terrain.groundHeight(tempPosition.x, tempPosition.z);
-            tempPosition.y = Math.max(tempPosition.y, ground + 0.68f);
+            tempPosition.y = Math.max(tempPosition.y, ground + 0.62f);
         } else {
-            tempPosition.y = Math.max(tempPosition.y, 0.68f);
+            tempPosition.y = Math.max(tempPosition.y, 0.62f);
         }
 
-        float positionResponse = MathUtils.lerp(8.5f, 12.5f, speedBlend);
-        float positionBlend = expResponse(positionResponse, dt);
         if (!rideCameraInitialized) {
             camera.position.set(tempPosition);
         } else {
-            camera.position.lerp(tempPosition, positionBlend);
+            camera.position.lerp(tempPosition, expResponse(10.5f, dt));
         }
 
-        float targetLead = MathUtils.lerp(0.75f, 1.85f, speedBlend);
+        final float targetLead = 1.05f;
         tempTarget.set(
                 bodyAnchor.x + MathUtils.sin(state.yaw) * targetLead,
-                bodyAnchor.y + 0.13f + MathUtils.sin(state.pitch) * 0.22f,
+                bodyAnchor.y + 0.10f,
                 bodyAnchor.z + MathUtils.cos(state.yaw) * targetLead);
 
         if (!rideCameraInitialized) {
             smoothedTarget.set(tempTarget);
         } else {
-            smoothedTarget.lerp(tempTarget, expResponse(13f, dt));
+            smoothedTarget.lerp(tempTarget, expResponse(12f, dt));
         }
 
         camera.up.set(Vector3.Y);
         camera.lookAt(smoothedTarget);
-        applyCameraBank((state.roll + state.terrainRoll) * 0.18f);
 
-        float targetFov = MathUtils.lerp(67f, 78f, speedBlend)
-                + (state.terrainAirborne ? 1.5f : 0f);
+        float speedBlend = MathUtils.clamp(Math.abs(state.speed) / 40f, 0f, 1f);
+        float targetFov = MathUtils.lerp(67f, 72f, speedBlend);
         camera.fieldOfView = rideCameraInitialized
-                ? MathUtils.lerp(camera.fieldOfView, targetFov, expResponse(5.5f, dt))
+                ? MathUtils.lerp(camera.fieldOfView, targetFov, expResponse(6f, dt))
                 : targetFov;
         rideCameraInitialized = true;
     }
@@ -188,13 +206,9 @@ final class GameCamera {
         tempPosition.set(0f, helmetY, helmetZ + state.riderLean * 0.055f)
                 .mul(state.bikeRoot);
 
-        // A helmet is attached to a rider, not welded to the steering head. High-frequency
-        // chassis movement is therefore attenuated while large bike motion still comes through.
-        if (!rideCameraInitialized) {
-            camera.position.set(tempPosition);
-        } else {
-            camera.position.lerp(tempPosition, expResponse(18f, dt));
-        }
+        // Do not lag the eye point behind the bike. The previous positional lerp caused visible
+        // skipping/dragging whenever chassis motion outran the smoothed camera position.
+        camera.position.set(tempPosition);
 
         float trajectoryPitchTarget;
         if (state.terrainAirborne) {
@@ -211,33 +225,26 @@ final class GameCamera {
             trajectoryPitchTarget = 0f;
         }
 
-        // The rider's eyes broadly follow trajectory rather than copying every chassis pitch.
-        // A slightly slower response in flight lets takeoff/landing attitude read naturally.
-        float cameraPitchFrequency = state.terrainAirborne ? 4.7f : 6.4f;
-        float cameraPitchDamping = state.terrainAirborne ? 0.96f : 1.10f;
+        float cameraPitchFrequency = 6.2f;
+        float cameraPitchDamping = 1.08f;
         float cameraPitchAcceleration = (trajectoryPitchTarget - helmetTrajectoryPitch)
-                * cameraPitchFrequency
-                * cameraPitchFrequency
-                - 2f
-                * cameraPitchDamping
-                * cameraPitchFrequency
+                * cameraPitchFrequency * cameraPitchFrequency
+                - 2f * cameraPitchDamping * cameraPitchFrequency
                 * helmetTrajectoryPitchVelocity;
         helmetTrajectoryPitchVelocity += cameraPitchAcceleration * dt;
         helmetTrajectoryPitch += helmetTrajectoryPitchVelocity * dt;
 
         float viewPitch = MathUtils.clamp(
                 helmetTrajectoryPitch + state.lookPitch,
-                -62f * MathUtils.degreesToRadians,
-                62f * MathUtils.degreesToRadians);
+                -60f * MathUtils.degreesToRadians,
+                60f * MathUtils.degreesToRadians);
         float cosPitch = MathUtils.cos(viewPitch);
         camera.direction.set(
                 MathUtils.sin(viewYaw) * cosPitch,
                 MathUtils.sin(viewPitch),
                 MathUtils.cos(viewYaw) * cosPitch).nor();
 
-        // Human head stabilization prevents full chassis bank from being copied 1:1. Keeping
-        // some bank preserves the sense of lean without turning the horizon into a rigid HUD.
-        float cameraBank = (state.roll + state.terrainRoll) * 0.58f;
+        float cameraBank = state.roll + state.terrainRoll;
         tempRight.set(camera.direction).crs(Vector3.Y);
         if (tempRight.len2() < 0.0001f) tempRight.set(Vector3.X);
         tempRight.nor();
@@ -245,19 +252,14 @@ final class GameCamera {
                 .rotate(camera.direction, cameraBank * MathUtils.radiansToDegrees).nor();
 
         float speedBlend = MathUtils.clamp(Math.abs(state.speed) / 40f, 0f, 1f);
-        float targetFov = MathUtils.lerp(76f, 85f, speedBlend)
-                + (state.terrainAirborne ? 1f : 0f);
+        float targetFov = MathUtils.lerp(79f, 83f, speedBlend);
         camera.fieldOfView = rideCameraInitialized
                 ? MathUtils.lerp(camera.fieldOfView, targetFov, expResponse(6f, dt))
                 : targetFov;
         rideCameraInitialized = true;
     }
 
-    /**
-     * Follow a chassis point rather than the rear-axle scalar used by the old chase camera.
-     * This is intentionally transformed by bikeRoot so suspension movement remains visible
-     * inside the frame instead of being visually cancelled by the camera following a wheel.
-     */
+    /** Follow the chassis so wheel/suspension movement remains visible inside the frame. */
     private void updateBodyAnchor() {
         if (state.bikeRoot != null) {
             bodyAnchor.set(0f, 0.62f, 0.62f).mul(state.bikeRoot);
@@ -266,12 +268,10 @@ final class GameCamera {
         }
     }
 
-    private void applyCameraBank(float bankRadians) {
-        tempRight.set(camera.direction).crs(Vector3.Y);
-        if (tempRight.len2() < 0.0001f) return;
-        tempRight.nor();
-        camera.up.set(tempRight).crs(camera.direction).nor()
-                .rotate(camera.direction, bankRadians * MathUtils.radiansToDegrees).nor();
+    private static float wrapRadians(float angle) {
+        while (angle > MathUtils.PI) angle -= MathUtils.PI2;
+        while (angle < -MathUtils.PI) angle += MathUtils.PI2;
+        return angle;
     }
 
     private static float expResponse(float responsePerSecond, float dt) {
