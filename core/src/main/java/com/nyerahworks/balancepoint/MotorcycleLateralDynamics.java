@@ -19,6 +19,13 @@ final class MotorcycleLateralDynamics {
     private static final float MAX_RIDE_ROLL = 58f * MathUtils.degreesToRadians;
     private static final float MAX_PHYSICAL_ROLL = 175f * MathUtils.degreesToRadians;
 
+    // Once airborne, yaw is intentionally left free so a scrub can become a whip. Roll is
+    // different: the rider/bike system should work the wheels back underneath itself instead of
+    // carrying a takeoff roll-rate into a barrel roll. This is an attitude spring only; it never
+    // rotates the world-space flight path.
+    private static final float AIR_ROLL_LEVEL_FREQUENCY = 3.2f;
+    private static final float AIR_ROLL_LEVEL_DAMPING = 0.92f;
+
     private static final float REAR_LONGITUDINAL_GRIP_COST = 0.32f;
     private static final float REAR_MIN_LATERAL_GRIP_FRACTION = 0.72f;
 
@@ -123,7 +130,7 @@ final class MotorcycleLateralDynamics {
             // In flight there is no tire force available to bend the trajectory or recapture
             // sideslip. World-space velocity is owned by BalancePointGame while this class keeps
             // the motorcycle's attitude dynamics. Preserve yaw angular momentum with only light
-            // aerodynamic damping rather than forcing the bike to point down its flight path.
+            // aerodynamic damping so a scrub/whip keeps rotating around the vertical axis.
             lateralAcceleration = 0f;
             yawRate *= Math.max(0f, 1f - dt * 0.08f);
         }
@@ -148,9 +155,13 @@ final class MotorcycleLateralDynamics {
                     - 2f * rollDamping * rollFrequency * rollRate;
             rollRate += rollAcceleration * dt;
         } else {
-            // Do not spring the bike upright in mid-air. Carry takeoff roll angular momentum and
-            // allow a modest rider/steer input to roll the chassis without inventing tire forces.
-            float airborneRollAcceleration = steerCommand * 1.85f - rollRate * 0.12f;
+            // A real scrub can leave the lip with both roll angle and roll rate, but the rider is
+            // actively trying to get the wheels back underneath the bike for landing. Drive roll
+            // toward upright while leaving yaw alone. This turns the same left-right takeoff move
+            // into a whip instead of a barrel roll.
+            float airborneRollAcceleration = -roll
+                    * AIR_ROLL_LEVEL_FREQUENCY * AIR_ROLL_LEVEL_FREQUENCY
+                    - 2f * AIR_ROLL_LEVEL_DAMPING * AIR_ROLL_LEVEL_FREQUENCY * rollRate;
             rollRate += airborneRollAcceleration * dt;
         }
 
