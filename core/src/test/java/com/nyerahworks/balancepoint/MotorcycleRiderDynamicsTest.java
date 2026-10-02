@@ -27,6 +27,20 @@ public final class MotorcycleRiderDynamicsTest {
     }
 
     @Test
+    public void airborneBodyThrowRespondsFasterThanGrounded() {
+        MotorcycleRiderDynamics grounded = new MotorcycleRiderDynamics(198f, 9.81f);
+        MotorcycleRiderDynamics airborne = new MotorcycleRiderDynamics(198f, 9.81f);
+
+        for (int i = 0; i < 15; i++) {
+            grounded.step(1f, 0f, false, DT);
+            airborne.step(1f, 0f, true, DT);
+        }
+
+        assertTrue(airborne.position() > grounded.position() * 1.20f);
+        assertTrue(airborne.velocity() > grounded.velocity());
+    }
+
+    @Test
     public void accelerationMakesNeutralRiderLagRearward() {
         MotorcycleRiderDynamics rider = new MotorcycleRiderDynamics(198f, 9.81f);
 
