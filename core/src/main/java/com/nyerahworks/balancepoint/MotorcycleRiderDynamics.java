@@ -18,11 +18,11 @@ final class MotorcycleRiderDynamics {
     private static final float MAX_INERTIAL_BIAS = 0.070f;
     private static final float INERTIAL_BIAS_PER_G = 0.055f;
     private static final float GROUNDED_MAX_BODY_SPEED = 2.25f;
-    private static final float AIRBORNE_MAX_BODY_SPEED = 3.10f;
+    private static final float AIRBORNE_MAX_BODY_SPEED = 4.20f;
     private static final float GROUNDED_MAX_BODY_ACCELERATION = 20f;
-    private static final float AIRBORNE_MAX_BODY_ACCELERATION = 30f;
+    private static final float AIRBORNE_MAX_BODY_ACCELERATION = 44f;
     private static final float RIDER_FORCE_HEIGHT = 0.56f;
-    private static final float MAX_PITCH_REACTION_TORQUE = 180f;
+    private static final float MAX_PITCH_REACTION_TORQUE = 360f;
 
     private final float totalMass;
     private final float gravity;
@@ -59,13 +59,12 @@ final class MotorcycleRiderDynamics {
                 -REARWARD_TRAVEL,
                 FORWARD_TRAVEL);
 
-        // Grounded movement stays deliberately planted. Once both wheels are clear, the rider
-        // can throw their body much more quickly because tire contacts are no longer fighting the
-        // motion. Airborne frequency is intentionally higher than grounded frequency so the first
-        // few frames of a body throw are quicker, while lower damping lets the movement remain
-        // lively instead of syrupy. Chassis attitude still changes only through mass reaction.
-        float naturalFrequency = airborne ? 6.2f : 5.4f;
-        float dampingRatio = airborne ? 0.62f : 0.92f;
+        // Grounded movement stays planted. With both wheels clear the rider can deliberately
+        // throw their mass much faster, which is the main human pitch-control mechanism on a
+        // real dirt bike. Low airborne damping preserves the response generated during the move
+        // instead of immediately washing it back out.
+        float naturalFrequency = airborne ? 7.6f : 5.4f;
+        float dampingRatio = airborne ? 0.50f : 0.92f;
         float maxBodyAcceleration = airborne
                 ? AIRBORNE_MAX_BODY_ACCELERATION : GROUNDED_MAX_BODY_ACCELERATION;
         float maxBodySpeed = airborne ? AIRBORNE_MAX_BODY_SPEED : GROUNDED_MAX_BODY_SPEED;
@@ -93,10 +92,7 @@ final class MotorcycleRiderDynamics {
         return position * RIDER_MASS / totalMass;
     }
 
-    /**
-     * Normalized presentation pose. +1 is fully forward, -1 fully rearward.
-     * Keeping presentation normalized lets camera/visual code remain simple.
-     */
+    /** Normalized presentation pose. +1 is fully forward, -1 fully rearward. */
     float pose() {
         if (position >= 0f) return MathUtils.clamp(position / FORWARD_TRAVEL, 0f, 1f);
         return MathUtils.clamp(position / REARWARD_TRAVEL, -1f, 0f);
@@ -105,11 +101,9 @@ final class MotorcycleRiderDynamics {
     /**
      * Chassis reaction to accelerating rider mass relative to the motorcycle.
      * A fast forward body throw nudges the nose down; rearward movement nudges it up.
-     * Internal body motion has more authority in the air because tire contacts cannot absorb
-     * as much of the reaction, but it remains intentionally weaker than brake-tap/throttle air control.
      */
     float pitchReactionTorque(boolean airborne, boolean frontTouching) {
-        float coupling = airborne ? 0.76f : (frontTouching ? 0.24f : 0.40f);
+        float coupling = airborne ? 1.00f : (frontTouching ? 0.24f : 0.40f);
         float torque = -RIDER_MASS * acceleration * RIDER_FORCE_HEIGHT * coupling;
         return MathUtils.clamp(
                 torque,
