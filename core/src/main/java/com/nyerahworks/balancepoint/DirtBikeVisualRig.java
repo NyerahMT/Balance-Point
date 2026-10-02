@@ -32,7 +32,9 @@ import com.badlogic.gdx.utils.ObjectSet;
 final class DirtBikeVisualRig {
     private static final float REAR_MAX_EXTENSION = 0.085f;
     private static final float REAR_MAX_COMPRESSION = 0.225f;
-    private static final float FRONT_MAX_EXTENSION = 0.060f;
+    // Front rider sag is a little over 70 mm, so 60 mm visually clipped the last part of droop.
+    // Keep enough range to show the entire physics-owned extension stroke without saturation.
+    private static final float FRONT_MAX_EXTENSION = 0.090f;
     private static final float FRONT_MAX_COMPRESSION = 0.260f;
 
     private final DirtBikeMeshLoader.LoadedBike bike;
