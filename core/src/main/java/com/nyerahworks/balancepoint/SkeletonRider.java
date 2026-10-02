@@ -27,11 +27,22 @@ final class SkeletonRider {
     private static final float SCALE_Y = 1.90f;
     private static final float SCALE_Z = 1.70f;
 
+    // The source torso begins at y≈0.223 and the legs end at y≈0.195. Keeping the upper body
+    // hinged around this shared pelvis point prevents the ribcage from sliding away from the
+    // hips as the rider leans fore/aft.
+    private static final float HIP_Y = 0.205f;
+    private static final float HIP_Z = 0.005f;
+
     private final Model model;
     private final ModelInstance instance;
     private final Quaternion poseRotation = new Quaternion();
+    private final Quaternion upperRotation = new Quaternion();
+    private final Quaternion localRotation = new Quaternion();
+    private final Quaternion combinedRotation = new Quaternion();
     private final Vector3 posePivot = new Vector3();
     private final Vector3 rotatedPivot = new Vector3();
+    private final Vector3 upperTranslation = new Vector3();
+    private final Vector3 localTranslation = new Vector3();
 
     private SkeletonRider(Model model) {
         this.model = model;
@@ -70,13 +81,51 @@ final class SkeletonRider {
                 .rotate(Vector3.X, -7f - shift * 7f)
                 .scale(SCALE_X, SCALE_Y, SCALE_Z);
 
-        poseNode("torso", 0f, 0.27f, 0f, -20f - shift * 7f);
-        poseNode("head", 0f, 0.45f, 0f, -8f - shift * 4f);
-        poseNode("arm-left", 0.18f, 0.42f, 0f, -64f - shift * 5f);
-        poseNode("arm-right", -0.18f, 0.42f, 0f, -64f - shift * 5f);
+        // Torso, head and arms all inherit the same hip hinge. The head and arms then add a
+        // smaller local rotation on top, so the whole upper body remains connected instead of
+        // each piece following a different fore/aft arc.
+        float spineDegrees = -18f - shift * 4f;
+        poseUpperNode("torso", 0f, HIP_Y, HIP_Z, spineDegrees, 0f);
+        poseUpperNode("head", 0f, 0.45f, 0f, spineDegrees, 10f + shift * 2f);
+        poseUpperNode("arm-left", 0.18f, 0.42f, 0f,
+                spineDegrees, -46f - shift);
+        poseUpperNode("arm-right", -0.18f, 0.42f, 0f,
+                spineDegrees, -46f - shift);
+
+        // Legs stay tied to their peg/hip pivots. Their upper ends now remain nearly coincident
+        // with the torso base through the full lean range.
         poseNode("leg-left", 0.075f, 0.20f, 0f, 27f + shift * 3f);
         poseNode("leg-right", -0.075f, 0.20f, 0f, 27f + shift * 3f);
         instance.calculateTransforms();
+    }
+
+    private void poseUpperNode(
+            String id,
+            float localPx,
+            float localPy,
+            float localPz,
+            float upperDegrees,
+            float localDegrees) {
+        Node node = instance.getNode(id, true);
+        if (node == null) return;
+
+        upperRotation.set(Vector3.X, upperDegrees);
+        posePivot.set(0f, HIP_Y, HIP_Z);
+        rotatedPivot.set(posePivot);
+        upperRotation.transform(rotatedPivot);
+        upperTranslation.set(posePivot).sub(rotatedPivot);
+
+        localRotation.set(Vector3.X, localDegrees);
+        posePivot.set(localPx, localPy, localPz);
+        rotatedPivot.set(posePivot);
+        localRotation.transform(rotatedPivot);
+        localTranslation.set(posePivot).sub(rotatedPivot);
+        upperRotation.transform(localTranslation);
+
+        combinedRotation.set(upperRotation).mul(localRotation);
+        node.translation.set(upperTranslation).add(localTranslation);
+        node.rotation.set(combinedRotation);
+        node.scale.set(1f, 1f, 1f);
     }
 
     private void poseNode(String id, float px, float py, float pz, float degrees) {
