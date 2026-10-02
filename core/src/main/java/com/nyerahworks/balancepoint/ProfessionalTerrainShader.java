@@ -7,6 +7,7 @@ import com.badlogic.gdx.graphics.GL20;
 import com.badlogic.gdx.graphics.Mesh;
 import com.badlogic.gdx.graphics.Pixmap;
 import com.badlogic.gdx.graphics.Texture;
+import com.badlogic.gdx.graphics.VertexAttribute;
 import com.badlogic.gdx.graphics.g3d.Environment;
 import com.badlogic.gdx.graphics.g3d.environment.ShadowMap;
 import com.badlogic.gdx.graphics.g3d.utils.RenderContext;
@@ -17,11 +18,51 @@ import com.badlogic.gdx.utils.GdxRuntimeException;
 
 /**
  * Mobile landscape shader using scanned materials, stochastic de-tiling, triplanar cliffs,
- * detail normals, physically motivated directional/hemisphere lighting and aerial perspective.
+ * detail normals, directional/hemisphere lighting, aerial perspective and an atmospheric sky.
  */
 final class ProfessionalTerrainShader implements Disposable {
     private static final String MATERIAL_ROOT = "terrain/materials/";
     private static final float SHADOW_TEXEL = 1f / 1024f;
+
+    private static final String SKY_VERTEX_SHADER =
+            "attribute vec3 a_position;\n"
+                    + "varying vec2 v_ndc;\n"
+                    + "void main() {\n"
+                    + "  v_ndc = a_position.xy;\n"
+                    + "  gl_Position = vec4(a_position.xy, 0.999, 1.0);\n"
+                    + "}\n";
+
+    private static final String SKY_FRAGMENT_SHADER =
+            "#ifdef GL_ES\n"
+                    + "#ifdef GL_FRAGMENT_PRECISION_HIGH\n"
+                    + "precision highp float;\n"
+                    + "#else\n"
+                    + "precision mediump float;\n"
+                    + "#endif\n"
+                    + "#endif\n"
+                    + "uniform mat4 u_invProjView;\n"
+                    + "uniform vec3 u_cameraPos;\n"
+                    + "varying vec2 v_ndc;\n"
+                    + "float sat(float x) { return clamp(x, 0.0, 1.0); }\n"
+                    + "void main() {\n"
+                    + "  vec4 farPoint = u_invProjView * vec4(v_ndc, 1.0, 1.0);\n"
+                    + "  farPoint /= max(abs(farPoint.w), 0.0001);\n"
+                    + "  vec3 dir = normalize(farPoint.xyz - u_cameraPos);\n"
+                    + "  float up = sat(dir.y);\n"
+                    + "  float gradient = pow(up, 0.58);\n"
+                    + "  vec3 horizon = vec3(0.55, 0.70, 0.80);\n"
+                    + "  vec3 zenith = vec3(0.24, 0.45, 0.67);\n"
+                    + "  vec3 color = mix(horizon, zenith, gradient);\n"
+                    + "  vec3 sunDir = normalize(vec3(0.45, 1.0, 0.28));\n"
+                    + "  float sunDot = max(dot(dir, sunDir), 0.0);\n"
+                    + "  float glow = pow(sunDot, 13.0);\n"
+                    + "  float disc = pow(sunDot, 520.0);\n"
+                    + "  color += vec3(1.00, 0.66, 0.32) * glow * 0.10;\n"
+                    + "  color += vec3(1.00, 0.90, 0.67) * disc * 1.18;\n"
+                    + "  float below = sat(-dir.y * 2.8);\n"
+                    + "  color = mix(color, vec3(0.58, 0.66, 0.69), below * 0.32);\n"
+                    + "  gl_FragColor = vec4(color, 1.0);\n"
+                    + "}\n";
 
     private static final String VERTEX_SHADER =
             "attribute vec3 a_position;\n"
@@ -234,11 +275,14 @@ final class ProfessionalTerrainShader implements Disposable {
                     + "}\n";
 
     private final ShaderProgram program;
+    private final ShaderProgram skyProgram;
     private final Texture grassTexture;
     private final Texture dirtTexture;
     private final Texture rockTexture;
     private final Texture detailNormalTexture;
+    private final Mesh skyMesh;
     private final Matrix4 noShadow = new Matrix4();
+    private final Matrix4 inverseProjectionView = new Matrix4();
 
     ProfessionalTerrainShader() {
         grassTexture = loadScannedTexture(
@@ -259,6 +303,24 @@ final class ProfessionalTerrainShader implements Disposable {
             throw new GdxRuntimeException(
                     "Professional terrain shader failed to compile: " + program.getLog());
         }
+        skyProgram = new ShaderProgram(SKY_VERTEX_SHADER, SKY_FRAGMENT_SHADER);
+        if (!skyProgram.isCompiled()) {
+            throw new GdxRuntimeException(
+                    "Atmospheric sky shader failed to compile: " + skyProgram.getLog());
+        }
+        skyMesh = createSkyMesh();
+    }
+
+    private static Mesh createSkyMesh() {
+        Mesh mesh = new Mesh(true, 4, 6, VertexAttribute.Position());
+        mesh.setVertices(new float[] {
+                -1f, -1f, 0f,
+                 1f, -1f, 0f,
+                 1f,  1f, 0f,
+                -1f,  1f, 0f
+        });
+        mesh.setIndices(new short[] {0, 1, 2, 0, 2, 3});
+        return mesh;
     }
 
     private Texture loadScannedTexture(String name, Color fallback) {
@@ -285,6 +347,8 @@ final class ProfessionalTerrainShader implements Disposable {
     }
 
     void begin(Camera camera, RenderContext context, Environment environment) {
+        renderSky(camera, context);
+
         context.setDepthTest(GL20.GL_LEQUAL, 0f, 1f);
         context.setDepthMask(true);
         context.setCullFace(GL20.GL_NONE);
@@ -312,6 +376,17 @@ final class ProfessionalTerrainShader implements Disposable {
         }
     }
 
+    private void renderSky(Camera camera, RenderContext context) {
+        context.setDepthTest(GL20.GL_NONE, 0f, 1f);
+        context.setDepthMask(false);
+        context.setCullFace(GL20.GL_NONE);
+        skyProgram.bind();
+        inverseProjectionView.set(camera.combined).inv();
+        skyProgram.setUniformMatrix("u_invProjView", inverseProjectionView);
+        skyProgram.setUniformf("u_cameraPos", camera.position);
+        skyMesh.render(skyProgram, GL20.GL_TRIANGLES);
+    }
+
     void render(Mesh mesh) {
         mesh.render(program, GL20.GL_TRIANGLES);
     }
@@ -323,6 +398,8 @@ final class ProfessionalTerrainShader implements Disposable {
     @Override
     public void dispose() {
         program.dispose();
+        skyProgram.dispose();
+        skyMesh.dispose();
         grassTexture.dispose();
         dirtTexture.dispose();
         rockTexture.dispose();
