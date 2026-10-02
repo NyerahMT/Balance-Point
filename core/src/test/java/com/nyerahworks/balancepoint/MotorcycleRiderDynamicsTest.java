@@ -60,7 +60,8 @@ public final class MotorcycleRiderDynamicsTest {
         float torque = rider.pitchReactionTorque(true, false);
 
         assertTrue(torque < 0f);
-        assertTrue(Math.abs(torque) <= 180f);
+        assertTrue(Math.abs(torque) <= 360f);
+        assertTrue(Math.abs(torque) >= 300f);
 
         for (int i = 0; i < 360; i++) {
             rider.step(1f, 0f, true, DT);

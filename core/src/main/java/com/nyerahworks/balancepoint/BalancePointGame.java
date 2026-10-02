@@ -41,21 +41,22 @@ public final class BalancePointGame extends ApplicationAdapter {
     private static final float PITCH_DAMPING = 30f;
     private static final float MAX_PITCH_RATE = 5.4f;
     private static final float REAR_WHEEL_INERTIA = 1.05f;
-    private static final float AIR_WHEEL_DRIVE_ACCEL = 115f;
-    private static final float AIR_WHEEL_BRAKE_ACCEL = 220f;
+    private static final float AIR_WHEEL_DRIVE_ACCEL = 150f;
+    private static final float AIR_WHEEL_BRAKE_ACCEL = 260f;
     private static final float AIR_WHEEL_DRAG = 0.22f;
-    private static final float AIR_PITCH_DAMPING = 0.22f;
-    private static final float AIR_MAX_PITCH_RATE = 3.8f;
-    private static final float AIR_WHEEL_REACTION_GAIN = 1.18f;
-    private static final float AIR_RIDER_TORQUE_GAIN = 1.12f;
-    private static final float AIR_CONTROL_BLEND_TIME = 0.12f;
+    private static final float AIR_PITCH_DAMPING = 0.08f;
+    private static final float AIR_MAX_PITCH_RATE = 5.2f;
+    private static final float AIR_WHEEL_REACTION_GAIN = 1.32f;
+    private static final float AIR_RIDER_TORQUE_GAIN = 1.30f;
+    private static final float AIR_CONTROL_BLEND_TIME = 0.055f;
     private static final float CONTACT_PITCH_SPRING = 38f;
     private static final float CONTACT_PITCH_DAMPING = 11f;
     private static final float LIFT_SEED_RATE = 0.08f;
     private static final float LIFT_MARGIN_FOR_FULL_SEED = 0.25f;
     private static final float THROTTLE_SNAP_RATE = 12f;
     private static final float THROTTLE_SNAP_IMPULSE = 0.52f;
-    private static final float LOOP_ANGLE = 155f * MathUtils.degreesToRadians;
+    private static final float TAKEOFF_PITCH_RATE_LIMIT = 2.2f;
+    private static final float TAKEOFF_PITCH_RATE_BLEND = 0.55f;
 
     private final MotorcycleDrivetrain drivetrain = new MotorcycleDrivetrain(WHEEL_RADIUS);
     private final MotorcycleSuspension suspension = new MotorcycleSuspension(
@@ -65,6 +66,7 @@ public final class BalancePointGame extends ApplicationAdapter {
     private final MotorcycleRiderDynamics riderDynamics = new MotorcycleRiderDynamics(
             MASS, GRAVITY);
     private final MotorcycleLandingDynamics landingDynamics = new MotorcycleLandingDynamics();
+    private final MotorcycleBodyContact bodyContact = new MotorcycleBodyContact();
 
     private GameCamera gameCamera;
     private GameScene scene;
@@ -94,6 +96,10 @@ public final class BalancePointGame extends ApplicationAdapter {
     private float rearWheelAngularSpeed;
     private float lastGroundSupportPitch;
     private float groundSupportPitchRate;
+    // Horizontal translation becomes a world-space ballistic vector at takeoff. This prevents
+    // yaw/sideslip changes in the air from bending the actual flight path.
+    private float airborneVelocityX;
+    private float airborneVelocityZ;
     private float longitudinalAcceleration;
     private float frontNormalLoad;
 
@@ -478,6 +484,7 @@ public final class BalancePointGame extends ApplicationAdapter {
             return;
         }
 
+        boolean wasTerrainAirborne = terrainAirborne;
         riderDynamics.step(riderLeanTarget, longitudinalAcceleration, terrainAirborne, dt);
         riderLean = riderDynamics.pose();
 
@@ -535,6 +542,45 @@ public final class BalancePointGame extends ApplicationAdapter {
                 -rearContactState.normalForward, rearContactState.normalUp);
         float frontSurfacePitch = MathUtils.atan2(
                 -frontContactState.normalForward, frontContactState.normalUp);
+
+        // Track the support plane while the tires are still on the jump. Its angular rate is
+        // real takeoff information: convex lips, kickers and mismatched wheel release should
+        // produce different chassis pitch momentum instead of all jumps leaving the same way.
+        if (!terrainAirborne) {
+            float supportPitch;
+            if (rearTouching && frontTouching) {
+                supportPitch = MathUtils.atan2(
+                        frontContactState.groundY - rearContactState.groundY, WHEELBASE);
+            } else if (frontTouching) {
+                supportPitch = frontSurfacePitch;
+            } else {
+                supportPitch = rearSurfacePitch;
+            }
+
+            if (!wasTerrainAirborne) {
+                float rawSupportRate = wrapAngle(supportPitch - lastGroundSupportPitch)
+                        / Math.max(dt, 0.0001f);
+                rawSupportRate = MathUtils.clamp(rawSupportRate, -3.5f, 3.5f);
+                groundSupportPitchRate += (rawSupportRate - groundSupportPitchRate)
+                        * Math.min(1f, dt * 18f);
+            } else {
+                groundSupportPitchRate = 0f;
+            }
+            lastGroundSupportPitch = supportPitch;
+        }
+
+        if (terrainAirborne && !wasTerrainAirborne) {
+            airborneVelocityX = sinYaw * speed + cosYaw * lateralSpeed;
+            airborneVelocityZ = cosYaw * speed - sinYaw * lateralSpeed;
+
+            float attitudeError = wrapAngle(lastGroundSupportPitch - pitch);
+            float takeoffPitchRate = groundSupportPitchRate * 0.72f + attitudeError * 1.6f;
+            takeoffPitchRate = MathUtils.clamp(
+                    takeoffPitchRate, -TAKEOFF_PITCH_RATE_LIMIT, TAKEOFF_PITCH_RATE_LIMIT);
+            pitchVelocity = MathUtils.lerp(
+                    pitchVelocity, takeoffPitchRate, TAKEOFF_PITCH_RATE_BLEND);
+        }
+
         MotorcycleLandingDynamics.Result landingState = landingDynamics.step(
                 rearTouching,
                 frontTouching,
@@ -588,7 +634,9 @@ public final class BalancePointGame extends ApplicationAdapter {
         float rollingMagnitude = (rearContactState.normalForce + frontContactState.normalForce)
                 * ROLLING_RESISTANCE;
         float rollingForce = absSpeed > 0.05f ? Math.signum(speed) * rollingMagnitude : 0f;
-        float aero = AERO_DRAG * speed * absSpeed;
+        // Grounded drag follows the motorcycle axis. In flight drag is applied to the preserved
+        // world-space horizontal vector below, so changing yaw cannot curve the trajectory.
+        float aero = terrainAirborne ? 0f : AERO_DRAG * speed * absSpeed;
 
         float totalForwardForce = rearNormalForward + frontNormalForward + rearTireForward
                 - rollingForce - aero;
@@ -673,8 +721,22 @@ public final class BalancePointGame extends ApplicationAdapter {
         pitchVelocity = MathUtils.clamp(pitchVelocity, -maxPitchRate, maxPitchRate);
         pitch += pitchVelocity * dt;
 
-        bikeX += (sinYaw * speed + cosYaw * lateralSpeed) * dt;
-        bikeZ += (cosYaw * speed - sinYaw * lateralSpeed) * dt;
+        if (terrainAirborne) {
+            float airHorizontalSpeed = (float) Math.sqrt(
+                    airborneVelocityX * airborneVelocityX
+                            + airborneVelocityZ * airborneVelocityZ);
+            if (airHorizontalSpeed > 0.001f) {
+                float dragRetention = Math.max(
+                        0f, 1f - (AERO_DRAG * airHorizontalSpeed / MASS) * dt);
+                airborneVelocityX *= dragRetention;
+                airborneVelocityZ *= dragRetention;
+            }
+            bikeX += airborneVelocityX * dt;
+            bikeZ += airborneVelocityZ * dt;
+        } else {
+            bikeX += (sinYaw * speed + cosYaw * lateralSpeed) * dt;
+            bikeZ += (cosYaw * speed - sinYaw * lateralSpeed) * dt;
+        }
         chassisY += verticalVelocity * dt;
 
         sinPitch = MathUtils.sin(pitch);
@@ -732,20 +794,35 @@ public final class BalancePointGame extends ApplicationAdapter {
         if (yaw > MathUtils.PI) yaw -= MathUtils.PI2;
         if (yaw < -MathUtils.PI) yaw += MathUtils.PI2;
 
-        float terrainRollTarget = 0f;
-        if (!terrainAirborne && terrainVisuals != null) {
-            float slopeX = terrainVisuals.groundSlopeX(bikeX, bikeZ);
-            float slopeZ = terrainVisuals.groundSlopeZ(bikeX, bikeZ);
-            float lateralGrade = slopeX * MathUtils.cos(yaw) - slopeZ * MathUtils.sin(yaw);
-            terrainRollTarget = (float) Math.atan(lateralGrade);
+        if (terrainAirborne) {
+            // Convert the fixed world velocity back into the moving bike frame for tire/rider
+            // state only. Rotating the chassis can no longer rotate the actual flight path.
+            float airSinYaw = MathUtils.sin(yaw);
+            float airCosYaw = MathUtils.cos(yaw);
+            speed = airSinYaw * airborneVelocityX + airCosYaw * airborneVelocityZ;
+            lateralSpeed = airCosYaw * airborneVelocityX - airSinYaw * airborneVelocityZ;
+            lateralDynamics.syncAirborneVelocity(lateralSpeed);
+
+            // Carry a crooked/cambered lip's roll attitude into flight rather than invisibly
+            // springing the terrain contribution back toward zero in mid-air.
+            terrainRollVelocity *= Math.max(0f, 1f - dt * 0.10f);
+            terrainRoll += terrainRollVelocity * dt;
+        } else {
+            float terrainRollTarget = 0f;
+            if (terrainVisuals != null) {
+                float slopeX = terrainVisuals.groundSlopeX(bikeX, bikeZ);
+                float slopeZ = terrainVisuals.groundSlopeZ(bikeX, bikeZ);
+                float lateralGrade = slopeX * MathUtils.cos(yaw) - slopeZ * MathUtils.sin(yaw);
+                terrainRollTarget = (float) Math.atan(lateralGrade);
+            }
+            float terrainRollAcceleration = (terrainRollTarget - terrainRoll)
+                    * TERRAIN_ROLL_NATURAL_FREQUENCY * TERRAIN_ROLL_NATURAL_FREQUENCY
+                    - 2f * TERRAIN_ROLL_DAMPING_RATIO * TERRAIN_ROLL_NATURAL_FREQUENCY
+                    * terrainRollVelocity;
+            terrainRollVelocity += terrainRollAcceleration * dt;
+            terrainRollVelocity = MathUtils.clamp(terrainRollVelocity, -2.5f, 2.5f);
+            terrainRoll += terrainRollVelocity * dt;
         }
-        float terrainRollAcceleration = (terrainRollTarget - terrainRoll)
-                * TERRAIN_ROLL_NATURAL_FREQUENCY * TERRAIN_ROLL_NATURAL_FREQUENCY
-                - 2f * TERRAIN_ROLL_DAMPING_RATIO * TERRAIN_ROLL_NATURAL_FREQUENCY
-                * terrainRollVelocity;
-        terrainRollVelocity += terrainRollAcceleration * dt;
-        terrainRollVelocity = MathUtils.clamp(terrainRollVelocity, -2.5f, 2.5f);
-        terrainRoll += terrainRollVelocity * dt;
 
         if (rearTouching && !frontTouching && speed > 3f) {
             wheelieTime += dt;
@@ -754,13 +831,32 @@ public final class BalancePointGame extends ApplicationAdapter {
             wheelieTime = 0f;
         }
 
-        if (landingState.crashRecommended) {
-            beginCrash();
-            return;
+        // Landing angle/impact severity is not a crash trigger. Only hard motorcycle parts
+        // intersecting terrain end the ride. The rear fender is intentionally not sampled.
+        if (terrainVisuals != null) {
+            float bodySinYaw = MathUtils.sin(yaw);
+            float bodyCosYaw = MathUtils.cos(yaw);
+            float bodySinPitch = MathUtils.sin(pitch);
+            float bodyCosPitch = MathUtils.cos(pitch);
+            float rootForward = -effectiveComForward * bodyCosPitch
+                    + COM_HEIGHT * bodySinPitch;
+            float rootVertical = -effectiveComForward * bodySinPitch
+                    - COM_HEIGHT * bodyCosPitch;
+            float rootX = bikeX + bodySinYaw * rootForward;
+            float rootZ = bikeZ + bodyCosYaw * rootForward;
+            float rootY = chassisY + rootVertical;
+            if (bodyContact.hitsGround(
+                    rootX, rootY, rootZ, yaw, pitch, roll + terrainRoll,
+                    (x, z) -> terrainVisuals.groundHeight(x, z))) {
+                beginCrash();
+                return;
+            }
         }
 
-        if (pitch > LOOP_ANGLE
-                || Float.isNaN(pitch) || Float.isNaN(speed) || Float.isNaN(lateralSpeed)
+        if (pitch > MathUtils.PI) pitch -= MathUtils.PI2;
+        if (pitch < -MathUtils.PI) pitch += MathUtils.PI2;
+
+        if (Float.isNaN(pitch) || Float.isNaN(speed) || Float.isNaN(lateralSpeed)
                 || Float.isNaN(yaw) || Float.isNaN(roll) || Float.isNaN(bikeX)
                 || Float.isNaN(bikeZ) || Float.isNaN(chassisY)) {
             beginCrash();
@@ -829,6 +925,12 @@ public final class BalancePointGame extends ApplicationAdapter {
                 compressionVelocity,
                 effectiveMass,
                 dt);
+    }
+
+    private static float wrapAngle(float angle) {
+        while (angle > MathUtils.PI) angle -= MathUtils.PI2;
+        while (angle < -MathUtils.PI) angle += MathUtils.PI2;
+        return angle;
     }
 
     private void beginCrash() {
@@ -918,6 +1020,8 @@ public final class BalancePointGame extends ApplicationAdapter {
         rearWheelAngularSpeed = 0f;
         lastGroundSupportPitch = 0f;
         groundSupportPitchRate = 0f;
+        airborneVelocityX = 0f;
+        airborneVelocityZ = 0f;
         longitudinalAcceleration = 0f;
         frontNormalLoad = FRONT_STATIC_LOAD;
         throttle = throttleTarget = previousThrottleTarget = 0f;

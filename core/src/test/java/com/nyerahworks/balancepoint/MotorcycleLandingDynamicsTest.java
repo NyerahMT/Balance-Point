@@ -73,7 +73,7 @@ public final class MotorcycleLandingDynamicsTest {
     }
 
     @Test
-    public void violentFrontFirstStrikeCanCrash() {
+    public void violentFrontFirstStrikeIsTrackedButDoesNotAutoCrash() {
         MotorcycleLandingDynamics landing = new MotorcycleLandingDynamics();
         MotorcycleSuspension suspension = suspension();
 
@@ -90,7 +90,7 @@ public final class MotorcycleLandingDynamicsTest {
 
         assertTrue(result.landedThisStep);
         assertTrue(result.frontFirst);
-        assertTrue(result.crashRecommended);
+        assertFalse(result.crashRecommended);
     }
 
     @Test
@@ -119,6 +119,6 @@ public final class MotorcycleLandingDynamicsTest {
 
         assertFalse(frontSlap.landedThisStep);
         assertTrue(frontSlap.impactSpeed > 8.4f);
-        assertTrue(frontSlap.crashRecommended);
+        assertFalse(frontSlap.crashRecommended);
     }
 }
