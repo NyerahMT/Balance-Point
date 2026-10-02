@@ -49,13 +49,16 @@ jobs:
       - name: Stage CC0 skeleton rider asset
         run: python3 tools/fetch_skeleton_rider.py
 
-      - name: Stage app icons
+      - name: Stage generated mobile assets
         run: |
           python3 -m venv .icon-venv
           . .icon-venv/bin/activate
           python -m pip install --disable-pip-version-check Pillow
           python tools/stage_app_icons.py
+          python tools/stage_supercross_test_track.py
           test -f app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+          test -s app/src/main/assets/terrain/world.bpheight
+          test -s app/src/main/assets/terrain/world_albedo.png
 
       - name: Set up Java 17
         uses: actions/setup-java@v6
@@ -108,13 +111,16 @@ jobs:
       - name: Stage CC0 skeleton rider asset
         run: python3 tools/fetch_skeleton_rider.py
 
-      - name: Stage app icons
+      - name: Stage generated mobile assets
         run: |
           python3 -m venv .icon-venv
           . .icon-venv/bin/activate
           python -m pip install --disable-pip-version-check Pillow
           python tools/stage_app_icons.py
+          python tools/stage_supercross_test_track.py
           test -f ios/data/Icon-60@3x.png
+          test -s app/src/main/assets/terrain/world.bpheight
+          test -s app/src/main/assets/terrain/world_albedo.png
 
       - name: Set up Java 17
         uses: actions/setup-java@v6
