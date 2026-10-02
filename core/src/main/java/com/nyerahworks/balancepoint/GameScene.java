@@ -22,7 +22,7 @@ import com.badlogic.gdx.math.Matrix4;
 import com.badlogic.gdx.math.Vector3;
 import com.badlogic.gdx.utils.Array;
 
-/** Owns world and motorcycle presentation resources; simulation remains in the game coordinator. */
+/** Owns world presentation; motorcycle presentation is delegated to Motorcycle. */
 final class GameScene {
     static final class BikeState {
         float bikeX;
@@ -92,9 +92,7 @@ final class GameScene {
     private ModelInstance instrumentButtonLeft;
     private ModelInstance instrumentButtonRight;
 
-    private DirtBikeMeshLoader.LoadedBike importedBike;
-    private DirtBikeVisualRig importedRig;
-    private boolean importedBikeLoaded;
+    private Motorcycle motorcycle;
 
     GameScene(
             InstrumentDisplay instrumentDisplay,
@@ -139,7 +137,7 @@ final class GameScene {
     }
 
     boolean importedBikeLoaded() {
-        return importedBikeLoaded;
+        return motorcycle != null;
     }
 
     void disableShadows() {
@@ -310,16 +308,14 @@ final class GameScene {
         instrumentButtonRight = new ModelInstance(dashButtonM);
 
         try {
-            importedBike = DirtBikeMeshLoader.load(ownedModels,
+            DirtBikeMeshLoader.LoadedBike loadedBike = DirtBikeMeshLoader.load(
+                    ownedModels,
                     material(0.08f, 0.52f, 0.12f),
                     material(0.16f, 0.17f, 0.18f),
                     material(0.045f, 0.048f, 0.052f));
-            importedRig = new DirtBikeVisualRig(importedBike, wheelbase, wheelRadius);
-            importedBikeLoaded = true;
+            motorcycle = new Motorcycle(loadedBike, wheelbase, wheelRadius);
         } catch (Exception e) {
-            importedBike = null;
-            importedRig = null;
-            importedBikeLoaded = false;
+            motorcycle = null;
             Gdx.app.error("BalancePoint", "Could not load imported dirt bike; using fallback", e);
         }
     }
@@ -397,7 +393,7 @@ final class GameScene {
         instrumentButtonRight.transform.set(instrumentPanel.transform)
                 .translate(0.041f, 0.0143f, -0.032f);
 
-        if (importedBikeLoaded) {
+        if (motorcycle != null) {
             setPart(riderTorso, 0f, 0.94f, 0.49f);
             riderTorso.transform.rotate(Vector3.X, -16f).scale(
                     IMPORTED_RIDER_SCALE, IMPORTED_RIDER_SCALE, IMPORTED_RIDER_SCALE);
@@ -431,11 +427,11 @@ final class GameScene {
             riderArmRight.transform.rotate(Vector3.X, 69f);
         }
 
-        if (importedBikeLoaded) {
-            importedRig.update(bikeRoot, state, terrainVisuals);
+        if (motorcycle != null) {
+            motorcycle.update(bikeRoot, state, terrainVisuals);
 
-            tempA.set(0f, 0.915f, 0.985f).sub(importedBike.steeringHead);
-            instrumentPanel.transform.set(importedRig.steeringRoot())
+            tempA.set(0f, 0.915f, 0.985f).sub(motorcycle.steeringHead());
+            instrumentPanel.transform.set(motorcycle.steeringRoot())
                     .translate(tempA)
                     .rotate(Vector3.X, -22f);
             instrumentScreen.transform.set(instrumentPanel.transform)
@@ -458,13 +454,8 @@ final class GameScene {
     }
 
     private void renderBikeShadow() {
-        if (importedBikeLoaded) {
-            shadowBatch.render(importedBike.body);
-            shadowBatch.render(importedBike.engine);
-            shadowBatch.render(importedBike.steering);
-            importedRig.renderShadowExtras(shadowBatch);
-            shadowBatch.render(importedBike.rearWheel);
-            shadowBatch.render(importedBike.frontWheel);
+        if (motorcycle != null) {
+            motorcycle.renderShadow(shadowBatch);
             return;
         }
 
@@ -489,13 +480,8 @@ final class GameScene {
     }
 
     private void renderBike() {
-        if (importedBikeLoaded) {
-            modelBatch.render(importedBike.body, environment);
-            modelBatch.render(importedBike.engine, environment);
-            modelBatch.render(importedBike.steering, environment);
-            importedRig.renderExtras(modelBatch, environment);
-            modelBatch.render(importedBike.rearWheel, environment);
-            modelBatch.render(importedBike.frontWheel, environment);
+        if (motorcycle != null) {
+            motorcycle.render(modelBatch, environment);
             modelBatch.render(instrumentPanel, environment);
             modelBatch.render(instrumentScreen, environment);
             modelBatch.render(instrumentButtonLeft, environment);
