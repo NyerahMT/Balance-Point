@@ -76,15 +76,17 @@ final class SkeletonRider {
 
     void update(Matrix4 bikeRoot, float riderLean) {
         float shift = riderLean;
+        float leanMagnitude = Math.abs(shift);
         instance.transform.set(bikeRoot)
-                .translate(0f, 0.29f - Math.abs(shift) * 0.015f, 0.45f + shift * 0.15f)
+                .translate(0f, 0.29f - leanMagnitude * 0.015f, 0.45f + shift * 0.15f)
                 .rotate(Vector3.X, -7f - shift * 7f)
                 .scale(SCALE_X, SCALE_Y, SCALE_Z);
 
-        // Torso, head and arms all inherit the same hip hinge. The head and arms then add a
-        // smaller local rotation on top, so the whole upper body remains connected instead of
-        // each piece following a different fore/aft arc.
-        float spineDegrees = -18f - shift * 4f;
+        // The pelvis follows the rider mass directly. The upper torso hinges from that pelvis
+        // in the SAME direction, so shoulders travel slightly farther fore/aft than the hips
+        // instead of the hips sliding underneath a nearly stationary chest. The extra reach is
+        // mildly progressive near full lean to give the pose a natural bowed/extended shape.
+        float spineDegrees = -18f + shift * (6f + 4f * leanMagnitude);
         poseUpperNode("torso", 0f, HIP_Y, HIP_Z, spineDegrees, 0f);
         poseUpperNode("head", 0f, 0.45f, 0f, spineDegrees, 10f + shift * 2f);
         poseUpperNode("arm-left", 0.18f, 0.42f, 0f,
@@ -92,8 +94,7 @@ final class SkeletonRider {
         poseUpperNode("arm-right", -0.18f, 0.42f, 0f,
                 spineDegrees, -46f - shift);
 
-        // Legs stay tied to their peg/hip pivots. Their upper ends now remain nearly coincident
-        // with the torso base through the full lean range.
+        // Legs stay tied to their peg/hip pivots while the torso remains connected at the pelvis.
         poseNode("leg-left", 0.075f, 0.20f, 0f, 27f + shift * 3f);
         poseNode("leg-right", -0.075f, 0.20f, 0f, 27f + shift * 3f);
         instance.calculateTransforms();
