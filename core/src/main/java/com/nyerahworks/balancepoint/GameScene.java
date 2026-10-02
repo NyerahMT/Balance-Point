@@ -28,6 +28,7 @@ final class GameScene {
         float bikeX;
         float bikeZ;
         float chassisY;
+        float effectiveComForward;
         float pitch;
         float roll;
         float yaw;
@@ -349,8 +350,10 @@ final class GameScene {
         float cosYaw = MathUtils.cos(state.yaw);
         float sinPitch = MathUtils.sin(state.pitch);
         float cosPitch = MathUtils.cos(state.pitch);
-        float rearForward = -comForward * cosPitch + comHeight * sinPitch;
-        float rearVertical = -comForward * sinPitch - comHeight * cosPitch;
+        float visualComForward = state.effectiveComForward > 0f
+                ? state.effectiveComForward : comForward;
+        float rearForward = -visualComForward * cosPitch + comHeight * sinPitch;
+        float rearVertical = -visualComForward * sinPitch - comHeight * cosPitch;
         float rootX = state.bikeX + sinYaw * rearForward;
         float rootZ = state.bikeZ + cosYaw * rearForward;
         float rootHeight = state.chassisY + rearVertical;
