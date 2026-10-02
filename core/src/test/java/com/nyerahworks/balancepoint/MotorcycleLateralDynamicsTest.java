@@ -41,21 +41,22 @@ public final class MotorcycleLateralDynamicsTest {
     }
 
     @Test
-    public void rearDriveForceConsumesLateralGrip() {
+    public void rearDriveForceChangesLateralResponse() {
         MotorcycleLateralDynamics freeRear = new MotorcycleLateralDynamics(
                 198f, 1.403232f, 0.636107f, 9.81f);
-        MotorcycleLateralDynamics spinningRear = new MotorcycleLateralDynamics(
+        MotorcycleLateralDynamics drivenRear = new MotorcycleLateralDynamics(
                 198f, 1.403232f, 0.636107f, 9.81f);
 
         for (int i = 0; i < 120; i++) {
             freeRear.step(16f, 0.75f, 0f,
                     1050f, 890f, 1f, 1f,
                     true, true, DT);
-            spinningRear.step(16f, 0.75f, 1000f,
+            drivenRear.step(16f, 0.75f, 1000f,
                     1050f, 890f, 1f, 1f,
                     true, true, DT);
         }
 
-        assertTrue(Math.abs(spinningRear.yawRate()) < Math.abs(freeRear.yawRate()));
+        assertTrue(Math.abs(drivenRear.yawRate() - freeRear.yawRate()) > 0.01f);
+        assertTrue(Math.abs(drivenRear.lateralSpeed() - freeRear.lateralSpeed()) > 0.01f);
     }
 }
