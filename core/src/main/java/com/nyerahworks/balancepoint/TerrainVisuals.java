@@ -1,6 +1,7 @@
 package com.nyerahworks.balancepoint;
 
 import com.badlogic.gdx.Gdx;
+import com.badlogic.gdx.graphics.Camera;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.GL20;
 import com.badlogic.gdx.graphics.Mesh;
@@ -15,21 +16,20 @@ import com.badlogic.gdx.graphics.g3d.attributes.ColorAttribute;
 import com.badlogic.gdx.graphics.g3d.attributes.IntAttribute;
 import com.badlogic.gdx.graphics.g3d.utils.ModelBuilder;
 import com.badlogic.gdx.math.MathUtils;
+import com.badlogic.gdx.math.Vector3;
 import com.badlogic.gdx.utils.Array;
 import com.badlogic.gdx.utils.GdxRuntimeException;
 
-import java.io.BufferedInputStream;
-import java.io.DataInputStream;
-import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.ShortBuffer;
 import java.util.ArrayList;
 
 /**
  * Streamed terrain backed by the same offline-eroded heightfield used by motorcycle collision.
  *
- * Visual material work intentionally does not use mesh UVs. The ground mesh carries only world
- * position and geometric normal; ProfessionalTerrainShader performs scanned grass/dirt/rock
- * blending in world space. That avoids UV stretching on hills and prevents terrain grid rows from
- * becoming visible as texture bands at shallow camera angles.
+ * Physics keeps the compact heightfield resident while visual chunks are created incrementally.
+ * This prevents scene entry from constructing every terrain/detail mesh on one Android frame.
  */
 final class TerrainVisuals {
     static final float FLAT_CORRIDOR_HALF_WIDTH = 27f;
@@ -41,6 +41,12 @@ final class TerrainVisuals {
     private static final int Z_CELLS = 16;
     private static final int SEGMENTS = 24;
     private static final int TREES_PER_SEGMENT = 8;
+    private static final float DETAIL_DISTANCE = 90f;
+    private static final float HIGH_TERRAIN_DISTANCE = 500f;
+    private static final float LOW_TERRAIN_DISTANCE = 340f;
+    private static final float HIGH_TREE_DISTANCE = 230f;
+    private static final float LOW_TREE_DISTANCE = 145f;
+    private static final float LOW_FULL_DENSITY_DISTANCE = 78f;
     private static final float SUPERCROSS_CENTER_X = 7.5f;
     private static final float SUPERCROSS_Z_START = 18f;
     private static final float SUPERCROSS_Z_END = 270f;
@@ -50,17 +56,27 @@ final class TerrainVisuals {
     private final Mesh[] terrainMeshes = new Mesh[SEGMENTS];
     private final Model[] groundDetailModels = new Model[SEGMENTS];
     private final ModelInstance[] groundDetailInstances = new ModelInstance[SEGMENTS];
+    private final boolean[] groundDetailReady = new boolean[SEGMENTS];
     private final int[] terrainWorldIndex = new int[SEGMENTS];
+    private final float[] segmentMinY = new float[SEGMENTS];
+    private final float[] segmentMaxY = new float[SEGMENTS];
+
     private final ModelInstance[] trees = new ModelInstance[SEGMENTS * TREES_PER_SEGMENT * 2];
     private final ModelInstance[] trunks = new ModelInstance[SEGMENTS * TREES_PER_SEGMENT * 2];
     private final boolean[] treeActive = new boolean[SEGMENTS * TREES_PER_SEGMENT * 2];
+    private final float[] treeWorldX = new float[SEGMENTS * TREES_PER_SEGMENT * 2];
+    private final float[] treeWorldY = new float[SEGMENTS * TREES_PER_SEGMENT * 2];
     private final float[] treeWorldZ = new float[SEGMENTS * TREES_PER_SEGMENT * 2];
+    private final float[] treeScale = new float[SEGMENTS * TREES_PER_SEGMENT * 2];
 
     private final ProfessionalTerrainShader terrainShader;
     private final Material groundDetailMaterial;
     private final Color colorScratch = new Color();
     private final SurfaceSample surfaceScratch = new SurfaceSample();
     private final CellSample cellScratch = new CellSample();
+    private final Vector3 boundsCenterScratch = new Vector3();
+    private final Vector3 boundsDimensionsScratch = new Vector3();
+    private final Vector3 treeCenterScratch = new Vector3();
 
     private final FastNoiseLite materialNoise = createNoise(4502157, 0.035f, 4, 0.48f);
     private final FastNoiseLite macroNoise = createNoise(4502281, 0.0065f, 4, 0.52f);
@@ -105,34 +121,43 @@ final class TerrainVisuals {
     }
 
     private void loadHeightfield() {
-        try (DataInputStream input = new DataInputStream(new BufferedInputStream(
-                Gdx.files.internal(HEIGHT_PATH).read(), 1 << 20))) {
-            if (input.readInt() != HEIGHT_MAGIC) {
-                throw new GdxRuntimeException("Invalid Balance Point terrain heightfield");
-            }
-            int version = input.readInt();
-            if (version != 1) {
-                throw new GdxRuntimeException("Unsupported terrain version " + version);
-            }
-
-            mapWidth = input.readInt();
-            mapHeight = input.readInt();
-            sampleSpacing = input.readFloat();
-            originX = input.readFloat();
-            originZ = input.readFloat();
-            encodedMin = input.readFloat();
-            encodedMax = input.readFloat();
-            if (mapWidth < 2 || mapHeight < 2 || sampleSpacing <= 0f) {
-                throw new GdxRuntimeException("Invalid terrain dimensions");
-            }
-
-            heightSamples = new short[mapWidth * mapHeight];
-            for (int i = 0; i < heightSamples.length; i++) {
-                heightSamples[i] = input.readShort();
-            }
-        } catch (IOException e) {
-            throw new GdxRuntimeException("Could not load " + HEIGHT_PATH, e);
+        byte[] bytes = Gdx.files.internal(HEIGHT_PATH).readBytes();
+        if (bytes.length < 36) {
+            throw new GdxRuntimeException("Truncated Balance Point terrain heightfield");
         }
+
+        ByteBuffer input = ByteBuffer.wrap(bytes).order(ByteOrder.BIG_ENDIAN);
+        if (input.getInt() != HEIGHT_MAGIC) {
+            throw new GdxRuntimeException("Invalid Balance Point terrain heightfield");
+        }
+        int version = input.getInt();
+        if (version != 1) {
+            throw new GdxRuntimeException("Unsupported terrain version " + version);
+        }
+
+        mapWidth = input.getInt();
+        mapHeight = input.getInt();
+        sampleSpacing = input.getFloat();
+        originX = input.getFloat();
+        originZ = input.getFloat();
+        encodedMin = input.getFloat();
+        encodedMax = input.getFloat();
+        if (mapWidth < 2 || mapHeight < 2 || sampleSpacing <= 0f) {
+            throw new GdxRuntimeException("Invalid terrain dimensions");
+        }
+
+        long sampleCountLong = (long) mapWidth * mapHeight;
+        if (sampleCountLong > Integer.MAX_VALUE) {
+            throw new GdxRuntimeException("Terrain heightfield is too large");
+        }
+        int sampleCount = (int) sampleCountLong;
+        if (input.remaining() < sampleCount * 2L) {
+            throw new GdxRuntimeException("Truncated Balance Point terrain sample data");
+        }
+
+        heightSamples = new short[sampleCount];
+        ShortBuffer samples = input.slice().order(ByteOrder.BIG_ENDIAN).asShortBuffer();
+        samples.get(heightSamples);
     }
 
     private static Material material(float r, float g, float b) {
@@ -150,7 +175,6 @@ final class TerrainVisuals {
         return noise;
     }
 
-    /** Longitudinal tire friction coefficient at a world point. */
     float tractionCoefficient(float x, float z) {
         if (Math.abs(x) <= ROAD_EDGE) return 1.00f;
 
@@ -300,14 +324,50 @@ final class TerrainVisuals {
         return encodedMin + (q / 65535f) * (encodedMax - encodedMin);
     }
 
-    void update(float bikeZ) {
-        int firstWorldIndex = MathUtils.floor((bikeZ - 120f) / SEGMENT_LENGTH);
+    void update(float centerZ) {
+        int firstWorldIndex = MathUtils.floor((centerZ - 120f) / SEGMENT_LENGTH);
+        int loaded = countLoadedDesired(firstWorldIndex);
+        int buildBudget = loaded < 8 ? 2 : 1;
+
+        for (int build = 0; build < buildBudget; build++) {
+            int bestWorldIndex = findNearestMissing(firstWorldIndex, centerZ);
+            if (bestWorldIndex == Integer.MIN_VALUE) break;
+            int slot = slotForWorldIndex(bestWorldIndex);
+            rebuildSegment(slot, bestWorldIndex);
+        }
+
+        buildNearestGroundDetail(centerZ);
+    }
+
+    private int countLoadedDesired(int firstWorldIndex) {
+        int loaded = 0;
         for (int n = 0; n < SEGMENTS; n++) {
             int worldIndex = firstWorldIndex + n;
-            int slot = worldIndex % SEGMENTS;
-            if (slot < 0) slot += SEGMENTS;
-            if (terrainWorldIndex[slot] != worldIndex) rebuildSegment(slot, worldIndex);
+            if (terrainWorldIndex[slotForWorldIndex(worldIndex)] == worldIndex) loaded++;
         }
+        return loaded;
+    }
+
+    private int findNearestMissing(int firstWorldIndex, float centerZ) {
+        int best = Integer.MIN_VALUE;
+        float bestDistance = Float.POSITIVE_INFINITY;
+        for (int n = 0; n < SEGMENTS; n++) {
+            int worldIndex = firstWorldIndex + n;
+            int slot = slotForWorldIndex(worldIndex);
+            if (terrainWorldIndex[slot] == worldIndex) continue;
+            float segmentCenter = worldIndex * SEGMENT_LENGTH + SEGMENT_LENGTH * 0.5f;
+            float distance = Math.abs(segmentCenter - centerZ);
+            if (distance < bestDistance) {
+                bestDistance = distance;
+                best = worldIndex;
+            }
+        }
+        return best;
+    }
+
+    private static int slotForWorldIndex(int worldIndex) {
+        int slot = worldIndex % SEGMENTS;
+        return slot < 0 ? slot + SEGMENTS : slot;
     }
 
     private void rebuildSegment(int slot, int worldIndex) {
@@ -315,37 +375,99 @@ final class TerrainVisuals {
             terrainMeshes[slot].dispose();
             terrainMeshes[slot] = null;
         }
-        if (groundDetailModels[slot] != null) {
-            groundDetailModels[slot].dispose();
-            groundDetailModels[slot] = null;
-            groundDetailInstances[slot] = null;
-        }
+        disposeGroundDetail(slot);
 
-        terrainMeshes[slot] = buildSegmentMesh(worldIndex);
-        Model details = buildGroundDetailModel(worldIndex);
-        groundDetailModels[slot] = details;
-        groundDetailInstances[slot] = details == null ? null : new ModelInstance(details);
+        terrainMeshes[slot] = buildSegmentMesh(slot, worldIndex);
         terrainWorldIndex[slot] = worldIndex;
+        groundDetailReady[slot] = false;
         placeTreesForSegment(slot, worldIndex);
     }
 
-    private Mesh buildSegmentMesh(int worldIndex) {
+    private void disposeGroundDetail(int slot) {
+        if (groundDetailModels[slot] != null) {
+            groundDetailModels[slot].dispose();
+            groundDetailModels[slot] = null;
+        }
+        groundDetailInstances[slot] = null;
+        groundDetailReady[slot] = false;
+    }
+
+    private void buildNearestGroundDetail(float centerZ) {
+        int bestSlot = -1;
+        float bestDistance = Float.POSITIVE_INFINITY;
+        for (int slot = 0; slot < SEGMENTS; slot++) {
+            if (terrainMeshes[slot] == null || groundDetailReady[slot]) continue;
+            int worldIndex = terrainWorldIndex[slot];
+            if (worldIndex == Integer.MIN_VALUE) continue;
+            float segmentCenter = worldIndex * SEGMENT_LENGTH + SEGMENT_LENGTH * 0.5f;
+            float distance = Math.abs(segmentCenter - centerZ);
+            if (distance <= DETAIL_DISTANCE && distance < bestDistance) {
+                bestDistance = distance;
+                bestSlot = slot;
+            }
+        }
+
+        if (bestSlot < 0) return;
+        int worldIndex = terrainWorldIndex[bestSlot];
+        Model details = buildGroundDetailModel(worldIndex);
+        groundDetailModels[bestSlot] = details;
+        groundDetailInstances[bestSlot] = details == null ? null : new ModelInstance(details);
+        groundDetailReady[bestSlot] = true;
+    }
+
+    private Mesh buildSegmentMesh(int slot, int worldIndex) {
         float zStart = worldIndex * SEGMENT_LENGTH;
         float zStep = SEGMENT_LENGTH / Z_CELLS;
         int xCount = X_SAMPLES.length;
         int zCount = Z_CELLS + 1;
         int vertexCount = xCount * zCount;
         int indexCount = (xCount - 1) * Z_CELLS * 6;
+        float[] heights = new float[vertexCount];
         float[] vertices = new float[vertexCount * 6];
         short[] indices = new short[indexCount];
+
+        float minY = Float.POSITIVE_INFINITY;
+        float maxY = Float.NEGATIVE_INFINITY;
+        for (int zi = 0; zi < zCount; zi++) {
+            float z = zStart + zi * zStep;
+            int row = zi * xCount;
+            for (int xi = 0; xi < xCount; xi++) {
+                float y = meshVertexHeight(X_SAMPLES[xi], z);
+                heights[row + xi] = y;
+                minY = Math.min(minY, y);
+                maxY = Math.max(maxY, y);
+            }
+        }
 
         int vo = 0;
         for (int zi = 0; zi < zCount; zi++) {
             float z = zStart + zi * zStep;
-            for (float x : X_SAMPLES) {
-                float y = meshVertexHeight(x, z);
-                float sx = groundSlopeX(x, z);
-                float sz = groundSlopeZ(x, z);
+            int row = zi * xCount;
+            for (int xi = 0; xi < xCount; xi++) {
+                float x = X_SAMPLES[xi];
+                float y = heights[row + xi];
+
+                float sx;
+                if (xi == 0) {
+                    sx = (heights[row + 1] - y) / (X_SAMPLES[1] - X_SAMPLES[0]);
+                } else if (xi == xCount - 1) {
+                    sx = (y - heights[row + xi - 1])
+                            / (X_SAMPLES[xi] - X_SAMPLES[xi - 1]);
+                } else {
+                    sx = (heights[row + xi + 1] - heights[row + xi - 1])
+                            / (X_SAMPLES[xi + 1] - X_SAMPLES[xi - 1]);
+                }
+
+                float sz;
+                if (zi == 0 || zi == zCount - 1) {
+                    float before = meshVertexHeight(x, z - zStep);
+                    float after = meshVertexHeight(x, z + zStep);
+                    sz = (after - before) / (2f * zStep);
+                } else {
+                    sz = (heights[(zi + 1) * xCount + xi]
+                            - heights[(zi - 1) * xCount + xi]) / (2f * zStep);
+                }
+
                 float inv = 1f / (float) Math.sqrt(1f + sx * sx + sz * sz);
                 vertices[vo++] = x;
                 vertices[vo++] = y;
@@ -366,11 +488,11 @@ final class TerrainVisuals {
                 short c = (short) (row1 + xi);
                 short d = (short) (row1 + xi + 1);
                 indices[io++] = a;
-                indices[io++] = b;
                 indices[io++] = c;
                 indices[io++] = b;
+                indices[io++] = b;
+                indices[io++] = c;
                 indices[io++] = d;
-                indices[io++] = c;
             }
         }
 
@@ -378,6 +500,8 @@ final class TerrainVisuals {
                 VertexAttribute.Position(), VertexAttribute.Normal());
         mesh.setVertices(vertices);
         mesh.setIndices(indices);
+        segmentMinY[slot] = minY;
+        segmentMaxY[slot] = maxY;
         return mesh;
     }
 
@@ -400,7 +524,8 @@ final class TerrainVisuals {
             SurfaceSample surface = classifySurface(x, z, y, slope, surfaceScratch);
             float cluster = noise01(scatterNoise, x, z);
             float spawn = hash01(worldIndex * 433 + i, 937);
-            float grassChance = (0.18f + surface.grass * 0.55f) * MathUtils.lerp(0.55f, 1.25f, cluster);
+            float grassChance = (0.18f + surface.grass * 0.55f)
+                    * MathUtils.lerp(0.55f, 1.25f, cluster);
 
             if (surface.wear < 0.30f && surface.grass > 0.30f && spawn < grassChance) {
                 addGrassClump(output, x, y + 0.012f, z, worldIndex, i);
@@ -580,12 +705,18 @@ final class TerrainVisuals {
         trees[index].transform.setToTranslation(x, ground + 4.15f * scale, treeZ)
                 .scale(scale, scale, scale);
         treeActive[index] = true;
+        treeWorldX[index] = x;
+        treeWorldY[index] = ground + 3.25f * scale;
         treeWorldZ[index] = treeZ;
+        treeScale[index] = scale;
     }
 
     private void hideTree(int index) {
         treeActive[index] = false;
+        treeWorldX[index] = 0f;
+        treeWorldY[index] = -1000f;
         treeWorldZ[index] = 0f;
+        treeScale[index] = 0f;
         trunks[index].transform.setToTranslation(0f, -1000f, 0f);
         trees[index].transform.setToTranslation(0f, -1000f, 0f);
     }
@@ -599,40 +730,62 @@ final class TerrainVisuals {
     }
 
     void render(ModelBatch batch, Environment environment, float centerZ, boolean highQuality) {
-        // Terrain uses a purpose-built material shader. Flush the regular batch before touching
-        // its shared RenderContext, then hand control back for vegetation/road/bike rendering.
+        Camera camera = batch.getCamera();
+        float terrainDistance = highQuality ? HIGH_TERRAIN_DISTANCE : LOW_TERRAIN_DISTANCE;
+
         batch.flush();
-        terrainShader.begin(batch.getCamera(), batch.getRenderContext(), environment);
-        for (Mesh mesh : terrainMeshes) {
-            if (mesh != null) terrainShader.render(mesh);
+        terrainShader.begin(camera, batch.getRenderContext(), environment);
+        for (int slot = 0; slot < terrainMeshes.length; slot++) {
+            Mesh mesh = terrainMeshes[slot];
+            if (mesh != null && segmentVisible(camera, slot, centerZ, terrainDistance, false)) {
+                terrainShader.render(mesh);
+            }
         }
         terrainShader.end();
 
         if (highQuality) {
-            for (int i = 0; i < groundDetailInstances.length; i++) {
-                ModelInstance instance = groundDetailInstances[i];
-                if (instance == null || terrainWorldIndex[i] == Integer.MIN_VALUE) continue;
-                float segmentCenter = terrainWorldIndex[i] * SEGMENT_LENGTH + SEGMENT_LENGTH * 0.5f;
-                // Tiny geometry aliases into black specks at long range. Professionals LOD it out
-                // instead of drawing individual blades until they are sub-pixel.
-                if (Math.abs(segmentCenter - centerZ) <= 84f) {
+            for (int slot = 0; slot < groundDetailInstances.length; slot++) {
+                ModelInstance instance = groundDetailInstances[slot];
+                if (instance == null || terrainWorldIndex[slot] == Integer.MIN_VALUE) continue;
+                float segmentCenter = segmentCenterZ(slot);
+                if (Math.abs(segmentCenter - centerZ) <= 84f
+                        && segmentVisible(camera, slot, centerZ, 90f, true)) {
                     batch.render(instance, environment);
                 }
             }
         }
 
-        final float lowTreeDistance = 145f;
-        final float lowFullDensityDistance = 78f;
+        float treeDistance = highQuality ? HIGH_TREE_DISTANCE : LOW_TREE_DISTANCE;
         for (int i = 0; i < trees.length; i++) {
             if (!treeActive[i]) continue;
-            if (!highQuality) {
-                float distance = Math.abs(treeWorldZ[i] - centerZ);
-                if (distance > lowTreeDistance) continue;
-                if (distance > lowFullDensityDistance && (i & 1) != 0) continue;
-            }
+            float distance = Math.abs(treeWorldZ[i] - centerZ);
+            if (distance > treeDistance) continue;
+            if (!highQuality && distance > LOW_FULL_DENSITY_DISTANCE && (i & 1) != 0) continue;
+            treeCenterScratch.set(treeWorldX[i], treeWorldY[i], treeWorldZ[i]);
+            if (!camera.frustum.sphereInFrustum(treeCenterScratch, 3.9f * treeScale[i])) continue;
             batch.render(trunks[i], environment);
             batch.render(trees[i], environment);
         }
+    }
+
+    private boolean segmentVisible(Camera camera, int slot, float centerZ,
+                                   float maxDistance, boolean detailBounds) {
+        if (terrainWorldIndex[slot] == Integer.MIN_VALUE) return false;
+        float segmentCenter = segmentCenterZ(slot);
+        if (Math.abs(segmentCenter - centerZ) > maxDistance) return false;
+
+        float minY = segmentMinY[slot];
+        float maxY = segmentMaxY[slot];
+        float centerY = (minY + maxY) * 0.5f;
+        float height = Math.max(16f, maxY - minY + 12f);
+        float width = detailBounds ? 116f : X_SAMPLES[X_SAMPLES.length - 1] - X_SAMPLES[0] + 4f;
+        boundsCenterScratch.set(0f, centerY, segmentCenter);
+        boundsDimensionsScratch.set(width, height, SEGMENT_LENGTH + 4f);
+        return camera.frustum.boundsInFrustum(boundsCenterScratch, boundsDimensionsScratch);
+    }
+
+    private float segmentCenterZ(int slot) {
+        return terrainWorldIndex[slot] * SEGMENT_LENGTH + SEGMENT_LENGTH * 0.5f;
     }
 
     void dispose() {
@@ -641,11 +794,7 @@ final class TerrainVisuals {
                 terrainMeshes[i].dispose();
                 terrainMeshes[i] = null;
             }
-            if (groundDetailModels[i] != null) {
-                groundDetailModels[i].dispose();
-                groundDetailModels[i] = null;
-                groundDetailInstances[i] = null;
-            }
+            disposeGroundDetail(i);
         }
         terrainShader.dispose();
     }
