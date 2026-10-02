@@ -90,6 +90,7 @@ final class DirtBikeVisualRig {
 
         Gdx.app.log("BalancePoint", "Visual suspension rig: swingarmParts="
                 + swingarmIds.size + " lowerForkParts=" + sliderIds.size
+                + " lowerForkIds=" + sliderIds
                 + " swingarmPivot=" + swingarmPivot
                 + " forkCompressionAxis=" + frontCompressionAxis);
     }
@@ -221,37 +222,49 @@ final class DirtBikeVisualRig {
 
     private ObjectSet<String> findFrontSliderParts(Array<PartBounds> parts) {
         ObjectSet<String> result = new ObjectSet<>();
-        Vector3 frontLocal = new Vector3(bike.frontAxleOffset).sub(bike.steeringHead);
 
+        // Steering geometry has already been rebased around a point on the fork axis near the
+        // front axle. Classify lower-fork pieces by distance ALONG that axis and perpendicular
+        // distance FROM it. The old frontAxle-steeringHead Y window was nearly zero by design,
+        // so it could never robustly describe where the lower fork actually lives.
         for (PartBounds part : parts) {
-            if (isLowerForkGuard(part, frontLocal, true)) result.add(part.id);
+            if (isLowerForkGuard(part, bike.steeringAxis, true)) result.add(part.id);
         }
 
         if (result.size >= 2) return result;
         result.clear();
         for (PartBounds part : parts) {
-            if (isLowerForkGuard(part, frontLocal, false)) result.add(part.id);
+            if (isLowerForkGuard(part, bike.steeringAxis, false)) result.add(part.id);
         }
         return result;
     }
 
     private static boolean isLowerForkGuard(PartBounds part,
-                                            Vector3 frontLocal,
+                                            Vector3 forkAxis,
                                             boolean requireOrange) {
         float spanX = part.max.x - part.min.x;
         float spanY = part.max.y - part.min.y;
         float spanZ = part.max.z - part.min.z;
         float longDimension = (float)Math.sqrt(spanY * spanY + spanZ * spanZ);
+
+        float alongAxis = part.center.dot(forkAxis);
+        float radialX = part.center.x - forkAxis.x * alongAxis;
+        float radialY = part.center.y - forkAxis.y * alongAxis;
+        float radialZ = part.center.z - forkAxis.z * alongAxis;
+        float radialDistance = (float)Math.sqrt(
+                radialX * radialX + radialY * radialY + radialZ * radialZ);
+
         boolean orange = isOrange(part.color);
-        boolean lowerHalf = part.center.y < -0.10f;
-        boolean nearFork = Math.abs(part.center.x - frontLocal.x) < 0.24f;
-        boolean slender = spanX < 0.20f && longDimension > 0.22f;
-        boolean betweenHeadAndAxle = part.center.y > frontLocal.y - 0.18f;
+        boolean lowerForkZone = alongAxis > 0.045f && alongAxis < 0.52f;
+        boolean nearForkAxis = radialDistance < 0.27f;
+        boolean slender = spanX < 0.20f
+                && longDimension > 0.20f
+                && longDimension < 0.72f;
+
         return (!requireOrange || orange)
-                && lowerHalf
-                && nearFork
-                && slender
-                && betweenHeadAndAxle;
+                && lowerForkZone
+                && nearForkAxis
+                && slender;
     }
 
     private static boolean isOrange(Color color) {
