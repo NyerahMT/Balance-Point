@@ -8,7 +8,7 @@ from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "tools" / "branding" / "balancepoint-icon.jpg"
-EXPECTED_SHA256 = "ac1a0645bb2155675d2a0f127e31d867d71f04bcb96e04f8e1bc331ad3c94934"
+EXPECTED_SHA256 = "45a9b76ef05ab995d3aababe32ce48fe152ac4b8a172f16078927c499f31afad"
 IOS_CATALOG = ROOT / "ios" / "data" / "Media.xcassets"
 IOS_APPICON = IOS_CATALOG / "AppIcon.appiconset"
 
