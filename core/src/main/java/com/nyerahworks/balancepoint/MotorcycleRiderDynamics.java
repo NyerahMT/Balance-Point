@@ -61,10 +61,11 @@ final class MotorcycleRiderDynamics {
 
         // Grounded movement stays deliberately planted. Once both wheels are clear, the rider
         // can throw their body much more quickly because tire contacts are no longer fighting the
-        // motion. The lower damping is intentional: air corrections should feel immediate, but
-        // they still come from accelerating rider mass rather than directly rotating the chassis.
-        float naturalFrequency = airborne ? 5.0f : 5.4f;
-        float dampingRatio = airborne ? 0.60f : 0.92f;
+        // motion. Airborne frequency is intentionally higher than grounded frequency so the first
+        // few frames of a body throw are quicker, while lower damping lets the movement remain
+        // lively instead of syrupy. Chassis attitude still changes only through mass reaction.
+        float naturalFrequency = airborne ? 6.2f : 5.4f;
+        float dampingRatio = airborne ? 0.62f : 0.92f;
         float maxBodyAcceleration = airborne
                 ? AIRBORNE_MAX_BODY_ACCELERATION : GROUNDED_MAX_BODY_ACCELERATION;
         float maxBodySpeed = airborne ? AIRBORNE_MAX_BODY_SPEED : GROUNDED_MAX_BODY_SPEED;
