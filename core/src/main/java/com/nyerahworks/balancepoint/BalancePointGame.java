@@ -15,19 +15,6 @@ public final class BalancePointGame extends ApplicationAdapter {
     private static final float MASS = 198f;
     private static final float GRAVITY = 9.81f;
     private static final float PITCH_INERTIA = 168f;
-    // Unified wheel/terrain contact. Wheels generate forces continuously from local terrain
-    // penetration and point velocity; wheelies, jumps and landings are results, not modes.
-    // Off-road suspension tune: softer spring, light compression damping so square edges do
-    // not kick the chassis upward, and stronger rebound damping so stored spring energy is
-    // dissipated instead of producing repeated pogo oscillations.
-    private static final float CONTACT_STIFFNESS = 43_000f;
-    private static final float CONTACT_COMPRESSION_DAMPING = 3_600f;
-    // High-speed damping is quadratic in compression velocity: ordinary bumps stay compliant,
-    // but drop landings shed far more kinetic energy instead of storing it in the spring.
-    private static final float CONTACT_HIGH_SPEED_COMPRESSION = 300f;
-    private static final float CONTACT_REBOUND_DAMPING = 9_200f;
-    private static final float CONTACT_BUMP_START = 0.075f;
-    private static final float CONTACT_BUMP_STIFFNESS = 60_000f;
     private static final float MAX_CONTACT_FORCE = MASS * GRAVITY * 5f;
     // Angular damping is contact-dependent. With both tires loaded the chassis should
     // absorb short terrain impulses instead of carrying the rotation; a rear-only wheelie
@@ -49,10 +36,10 @@ public final class BalancePointGame extends ApplicationAdapter {
     private static final float AIRBORNE_COM_SHIFT_START = 25f * MathUtils.degreesToRadians;
     private static final float AIRBORNE_COM_SHIFT_END = 55f * MathUtils.degreesToRadians;
     private static final float COM_HEIGHT = 0.36f;
-    private static final float REAR_CONTACT_PRELOAD = MASS * GRAVITY
-            * (WHEELBASE - COM_FORWARD) / WHEELBASE / CONTACT_STIFFNESS;
-    private static final float FRONT_CONTACT_PRELOAD = MASS * GRAVITY
-            * COM_FORWARD / WHEELBASE / CONTACT_STIFFNESS;
+    private static final float REAR_STATIC_LOAD = MASS * GRAVITY
+            * (WHEELBASE - COM_FORWARD) / WHEELBASE;
+    private static final float FRONT_STATIC_LOAD = MASS * GRAVITY
+            * COM_FORWARD / WHEELBASE;
     // Maximum fore/aft shift of the combined bike+rider COM from rider body movement.
     // About 180 mm gives meaningful weight transfer while staying plausible for a rider
     // moving between the tank and rear of the seat.
@@ -88,6 +75,8 @@ public final class BalancePointGame extends ApplicationAdapter {
     private static final float LOOP_ANGLE = 155f * MathUtils.degreesToRadians;
 
     private final MotorcycleDrivetrain drivetrain = new MotorcycleDrivetrain(WHEEL_RADIUS);
+    private final MotorcycleSuspension suspension = new MotorcycleSuspension(
+            REAR_STATIC_LOAD, FRONT_STATIC_LOAD, MAX_CONTACT_FORCE);
 
     private GameCamera gameCamera;
     private GameScene scene;
@@ -174,7 +163,7 @@ public final class BalancePointGame extends ApplicationAdapter {
 
     private final WheelContact rearContactState = new WheelContact();
     private final WheelContact frontContactState = new WheelContact();
-    // Scratch contacts used by the post-step non-penetration check. Keeping the same
+    // Scratch contacts used by the post-step bottom-out constraint. Keeping the same
     // finite-radius terrain query in both the force solve and correction prevents the two
     // stages from disagreeing about where the tire actually touches the heightfield.
     private final WheelContact rearPostContact = new WheelContact();
@@ -523,8 +512,8 @@ public final class BalancePointGame extends ApplicationAdapter {
         float rearY = chassisY + rearVertical;
         float frontY = chassisY + frontVertical;
 
-        // Point velocity = COM translation + angular velocity x radius. This is what lets one
-        // wheel leave/strike the terrain independently without any explicit landing mode.
+        // Point velocity = COM translation + angular velocity x radius. Suspension shaft speed
+        // is the negative normal velocity of the chassis hardpoint relative to the terrain.
         float rearForwardVelocity = speed - pitchVelocity * rearVertical;
         float rearVerticalVelocity = verticalVelocity + pitchVelocity * rearForward;
         float frontForwardVelocity = speed - pitchVelocity * frontVertical;
@@ -534,10 +523,10 @@ public final class BalancePointGame extends ApplicationAdapter {
         float frontEffectiveMass = MASS - rearEffectiveMass;
         solveWheelContact(rearContactState, rearX, rearY, rearZ,
                 rearForwardVelocity, rearVerticalVelocity, sinYaw, cosYaw,
-                REAR_CONTACT_PRELOAD, rearEffectiveMass, dt);
+                suspension.rear(), rearEffectiveMass, dt);
         solveWheelContact(frontContactState, frontX, frontY, frontZ,
                 frontForwardVelocity, frontVerticalVelocity, sinYaw, cosYaw,
-                FRONT_CONTACT_PRELOAD, frontEffectiveMass, dt);
+                suspension.front(), frontEffectiveMass, dt);
 
         boolean rearTouching = rearContactState.touching();
         boolean frontTouching = frontContactState.touching();
@@ -636,15 +625,17 @@ public final class BalancePointGame extends ApplicationAdapter {
                 : actualAngularAcceleration * REAR_WHEEL_INERTIA;
 
         // Apply contact forces at the actual tire contact patches and integrate the resulting
-        // moment about the already-shifted COM. No second COM offset is applied here: axle
-        // geometry above already contains the rider weight transfer.
+        // moment about the already-shifted COM. Suspension compression moves the axle/contact
+        // point vertically relative to the chassis, so it also changes the pitch lever arm.
         float rearContactForwardArm = rearForward
                 - WHEEL_RADIUS * rearContactState.normalForward;
         float rearContactVerticalArm = rearVertical
+                + suspension.rear().physicalRideOffset()
                 - WHEEL_RADIUS * rearContactState.normalUp;
         float frontContactForwardArm = frontForward
                 - WHEEL_RADIUS * frontContactState.normalForward;
         float frontContactVerticalArm = frontVertical
+                + suspension.front().physicalRideOffset()
                 - WHEEL_RADIUS * frontContactState.normalUp;
 
         float rearForceForward = rearNormalForward + rearTireForward;
@@ -668,8 +659,9 @@ public final class BalancePointGame extends ApplicationAdapter {
         bikeZ += cosYaw * speed * dt;
         chassisY += verticalVelocity * dt;
 
-        // Position-level non-penetration constraint. This fixes tunnelling without adding
-        // upward momentum; the force solver still owns suspension response and pitch.
+        // Position-level bottom-out constraint. Negative geometric gap is now valid suspension
+        // compression; correction begins only after the demanded stroke exceeds mechanical
+        // travel (plus a small tire/solver tolerance), so this no longer locks the suspension.
         sinPitch = MathUtils.sin(pitch);
         cosPitch = MathUtils.cos(pitch);
         float rearForwardPost = -effectiveComForward * cosPitch + COM_HEIGHT * sinPitch;
@@ -694,9 +686,13 @@ public final class BalancePointGame extends ApplicationAdapter {
                 frontPostZ,
                 sinYaw,
                 cosYaw);
-        float rearPenetration = Math.max(0f, -rearPostContact.gap);
-        float frontPenetration = Math.max(0f, -frontPostContact.gap);
-        float penetrationCorrection = Math.max(rearPenetration, frontPenetration) - 0.012f;
+        float rearOverTravel = Math.max(0f,
+                suspension.rear().staticCompression() - rearPostContact.gap
+                        - suspension.rear().travel());
+        float frontOverTravel = Math.max(0f,
+                suspension.front().staticCompression() - frontPostContact.gap
+                        - suspension.front().travel());
+        float penetrationCorrection = Math.max(rearOverTravel, frontOverTravel) - 0.012f;
         if (penetrationCorrection > 0f) {
             chassisY += Math.min(penetrationCorrection, 0.16f);
             if (verticalVelocity < 0f) {
@@ -706,7 +702,8 @@ public final class BalancePointGame extends ApplicationAdapter {
             }
         }
 
-        // Derived rear-axle height retained for camera/UI code. Physics itself lives at COM.
+        // Derived rear-axle hardpoint height retained for camera/UI code. The rendered wheel
+        // moves relative to this point through the suspension rig.
         rearVertical = -COM_FORWARD * sinPitch - COM_HEIGHT * cosPitch;
         bikeY = chassisY + rearVertical;
 
@@ -792,98 +789,78 @@ public final class BalancePointGame extends ApplicationAdapter {
         }
     }
 
-/**
- * Finds the closest terrain plane under the lower arc of a finite-radius motorcycle tire.
- * The old solver sampled only the height directly below the axle and then added R, which is
- * geometrically valid only on level ground. A circle tangent to a slope needs its center
- * farther above the vertical height sample, and on a crest the contact point can sit ahead
- * or behind the axle. Sampling seven tangent planes across the lower tire footprint fixes
- * both cases while still colliding against the exact baked heightfield.
- */
-private void sampleWheelSurface(WheelContact out, float worldX, float wheelY, float worldZ,
-                                float sinYaw, float cosYaw) {
-    final float[] offsets = {-0.90f, -0.60f, -0.30f, 0f, 0.30f, 0.60f, 0.90f};
-    final float slopeProbe = 0.075f;
-    float bestGap = Float.POSITIVE_INFINITY;
-    float bestNormalForward = 0f;
-    float bestNormalUp = 1f;
-    float bestGroundY = WHEEL_RADIUS;
+    /**
+     * Finds the closest terrain plane under the lower arc of a finite-radius motorcycle tire.
+     * The old solver sampled only the height directly below the axle and then added R, which is
+     * geometrically valid only on level ground. A circle tangent to a slope needs its center
+     * farther above the vertical height sample, and on a crest the contact point can sit ahead
+     * or behind the axle. Sampling seven tangent planes across the lower tire footprint fixes
+     * both cases while still colliding against the exact baked heightfield.
+     */
+    private void sampleWheelSurface(WheelContact out, float worldX, float wheelY, float worldZ,
+                                    float sinYaw, float cosYaw) {
+        final float[] offsets = {-0.90f, -0.60f, -0.30f, 0f, 0.30f, 0.60f, 0.90f};
+        final float slopeProbe = 0.075f;
+        float bestGap = Float.POSITIVE_INFINITY;
+        float bestNormalForward = 0f;
+        float bestNormalUp = 1f;
+        float bestGroundY = WHEEL_RADIUS;
 
-    for (float factor : offsets) {
-        float offset = factor * WHEEL_RADIUS;
-        float sampleX = worldX + sinYaw * offset;
-        float sampleZ = worldZ + cosYaw * offset;
-        float ground = terrainVisuals != null
-                ? terrainVisuals.groundHeight(sampleX, sampleZ) : 0f;
+        for (float factor : offsets) {
+            float offset = factor * WHEEL_RADIUS;
+            float sampleX = worldX + sinYaw * offset;
+            float sampleZ = worldZ + cosYaw * offset;
+            float ground = terrainVisuals != null
+                    ? terrainVisuals.groundHeight(sampleX, sampleZ) : 0f;
 
-        // Probe the exact height surface in the wheel's rolling direction rather than
-        // using the deliberately smoothed 6 m render/contact normal.
-        float ahead = terrainVisuals != null
-                ? terrainVisuals.groundHeight(sampleX + sinYaw * slopeProbe,
-                sampleZ + cosYaw * slopeProbe) : 0f;
-        float behind = terrainVisuals != null
-                ? terrainVisuals.groundHeight(sampleX - sinYaw * slopeProbe,
-                sampleZ - cosYaw * slopeProbe) : 0f;
-        float forwardSlope = (ahead - behind) / (2f * slopeProbe);
-        float invLength = 1f / (float) Math.sqrt(1f + forwardSlope * forwardSlope);
-        float normalForward = -forwardSlope * invLength;
-        float normalUp = invLength;
+            // Probe the exact height surface in the wheel's rolling direction rather than
+            // using the deliberately smoothed 6 m render/contact normal.
+            float ahead = terrainVisuals != null
+                    ? terrainVisuals.groundHeight(sampleX + sinYaw * slopeProbe,
+                    sampleZ + cosYaw * slopeProbe) : 0f;
+            float behind = terrainVisuals != null
+                    ? terrainVisuals.groundHeight(sampleX - sinYaw * slopeProbe,
+                    sampleZ - cosYaw * slopeProbe) : 0f;
+            float forwardSlope = (ahead - behind) / (2f * slopeProbe);
+            float invLength = 1f / (float) Math.sqrt(1f + forwardSlope * forwardSlope);
+            float normalForward = -forwardSlope * invLength;
+            float normalUp = invLength;
 
-        float centerFromProbe = -offset;
-        float signedDistance = normalForward * centerFromProbe
-                + normalUp * (wheelY - ground);
-        float gap = signedDistance - WHEEL_RADIUS;
-        if (gap < bestGap) {
-            bestGap = gap;
-            bestNormalForward = normalForward;
-            bestNormalUp = normalUp;
-            bestGroundY = ground
-                    + (WHEEL_RADIUS - normalForward * centerFromProbe) / normalUp;
+            float centerFromProbe = -offset;
+            float signedDistance = normalForward * centerFromProbe
+                    + normalUp * (wheelY - ground);
+            float gap = signedDistance - WHEEL_RADIUS;
+            if (gap < bestGap) {
+                bestGap = gap;
+                bestNormalForward = normalForward;
+                bestNormalUp = normalUp;
+                bestGroundY = ground
+                        + (WHEEL_RADIUS - normalForward * centerFromProbe) / normalUp;
+            }
         }
+
+        out.normalForward = bestNormalForward;
+        out.normalUp = bestNormalUp;
+        out.groundY = bestGroundY;
+        out.gap = bestGap;
     }
 
-    out.normalForward = bestNormalForward;
-    out.normalUp = bestNormalUp;
-    out.groundY = bestGroundY;
-    out.gap = bestGap;
-}
-
-private void solveWheelContact(WheelContact out, float worldX, float wheelY, float worldZ,
-                               float pointForwardVelocity, float pointVerticalVelocity,
-                               float sinYaw, float cosYaw, float preloadGap,
-                               float effectiveMass, float dt) {
-    sampleWheelSurface(out, worldX, wheelY, worldZ, sinYaw, cosYaw);
-
-    float virtualCompression = preloadGap - out.gap;
-        if (virtualCompression <= 0f) {
-            out.normalForce = 0f;
-            return;
-        }
+    private void solveWheelContact(WheelContact out, float worldX, float wheelY, float worldZ,
+                                   float pointForwardVelocity, float pointVerticalVelocity,
+                                   float sinYaw, float cosYaw,
+                                   MotorcycleSuspension.Unit suspensionUnit,
+                                   float effectiveMass, float dt) {
+        sampleWheelSurface(out, worldX, wheelY, worldZ, sinYaw, cosYaw);
 
         float normalVelocity = pointForwardVelocity * out.normalForward
                 + pointVerticalVelocity * out.normalUp;
-        float force = CONTACT_STIFFNESS * virtualCompression;
-        if (normalVelocity < 0f) {
-            float compressionSpeed = -normalVelocity;
-            float dampingForce = CONTACT_COMPRESSION_DAMPING * compressionSpeed
-                    + CONTACT_HIGH_SPEED_COMPRESSION * compressionSpeed * compressionSpeed;
-            // A fixed-step damping impulse may remove most of the incoming normal velocity,
-            // but cannot reverse it hard enough to turn a grade change into a launch ramp.
-            float maxDampingForce = effectiveMass * compressionSpeed
-                    / Math.max(dt, 0.0001f) * 0.82f;
-            force += Math.min(dampingForce, maxDampingForce);
-        } else {
-            force -= CONTACT_REBOUND_DAMPING * normalVelocity;
-        }
-
-        float actualPenetration = Math.max(0f, -out.gap);
-        if (actualPenetration > CONTACT_BUMP_START) {
-            // Softer progressive bump stop: prevents tunneling/bottoming without acting like
-            // a second stiff launch spring on the way back out.
-            float bumpTravel = actualPenetration - CONTACT_BUMP_START;
-            force += CONTACT_BUMP_STIFFNESS * bumpTravel * (1f + bumpTravel * 3.5f);
-        }
-        out.normalForce = MathUtils.clamp(force, 0f, MAX_CONTACT_FORCE);
+        float demandedCompression = suspensionUnit.staticCompression() - out.gap;
+        float compressionVelocity = -normalVelocity;
+        out.normalForce = suspensionUnit.solve(
+                demandedCompression,
+                compressionVelocity,
+                effectiveMass,
+                dt);
     }
 
     private void beginCrash() {
@@ -894,6 +871,7 @@ private void solveWheelContact(WheelContact out, float worldX, float wheelY, flo
         rollVelocity = 0f;
         yawVelocity = 0f;
         terrainRollVelocity = 0f;
+        suspension.reset();
         crashSide = roll < -0.05f ? -1f : (roll > 0.05f ? 1f : (steer < 0f ? -1f : 1f));
         crashPitchRate = MathUtils.clamp(pitchVelocity + 0.75f, -1.2f, 3.2f);
         crashRollRate = crashSide * (1.4f + MathUtils.clamp(speed * 0.045f, 0f, 1.5f));
@@ -968,7 +946,7 @@ private void solveWheelContact(WheelContact out, float worldX, float wheelY, flo
         lastGroundSupportPitch = 0f;
         groundSupportPitchRate = 0f;
         longitudinalAcceleration = 0f;
-        frontNormalLoad = MASS * GRAVITY * COM_FORWARD / WHEELBASE;
+        frontNormalLoad = FRONT_STATIC_LOAD;
         throttle = throttleTarget = previousThrottleTarget = 0f;
         throttleSnap = 0f;
         rearBrake = rearBrakeTarget = 0f;
@@ -978,6 +956,7 @@ private void solveWheelContact(WheelContact out, float worldX, float wheelY, flo
         if (gameCamera != null) gameCamera.resetRide();
         shiftDownHeld = shiftUpHeld = false;
         drivetrain.reset();
+        suspension.reset();
         frontGrounded = true;
         crashed = false;
         crashSettled = false;
@@ -1001,6 +980,8 @@ private void solveWheelContact(WheelContact out, float worldX, float wheelY, flo
         state.speed = speed;
         state.steer = steer;
         state.riderLean = riderLean;
+        state.rearSuspensionTravel = suspension.rear().rideOffset();
+        state.frontSuspensionTravel = suspension.front().rideOffset();
         state.frontGrounded = frontGrounded;
         state.terrainAirborne = terrainAirborne;
         state.crashed = crashed;
