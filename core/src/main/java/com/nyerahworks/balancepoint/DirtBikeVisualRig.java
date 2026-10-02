@@ -144,7 +144,10 @@ final class DirtBikeVisualRig {
                 state.frontSuspensionTravel,
                 -FRONT_MAX_EXTENSION,
                 FRONT_MAX_COMPRESSION);
-        float effectiveFrontOffset = frontSliders != null ? frontOffset : 0f;
+        // Wheel travel is physics-owned and must never depend on whether the visual lower-fork
+        // classifier found its optional mesh group. If slider extraction ever fails, the axle
+        // still moves correctly and the failure is isolated to presentation.
+        float effectiveFrontOffset = frontOffset;
         tempA.set(frontCompressionAxis).scl(effectiveFrontOffset);
         if (frontSliders != null) {
             frontSuspensionRoot.set(steeringRoot).translate(tempA);
