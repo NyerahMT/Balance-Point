@@ -46,6 +46,9 @@ public final class BalancePointGame extends ApplicationAdapter {
     private static final float AIR_WHEEL_DRAG = 0.22f;
     private static final float AIR_PITCH_DAMPING = 0.22f;
     private static final float AIR_MAX_PITCH_RATE = 3.8f;
+    private static final float AIR_WHEEL_REACTION_GAIN = 1.18f;
+    private static final float AIR_RIDER_TORQUE_GAIN = 1.12f;
+    private static final float AIR_CONTROL_BLEND_TIME = 0.12f;
     private static final float CONTACT_PITCH_SPRING = 38f;
     private static final float CONTACT_PITCH_DAMPING = 11f;
     private static final float LIFT_SEED_RATE = 0.08f;
@@ -61,6 +64,7 @@ public final class BalancePointGame extends ApplicationAdapter {
             MASS, WHEELBASE, COM_FORWARD, GRAVITY);
     private final MotorcycleRiderDynamics riderDynamics = new MotorcycleRiderDynamics(
             MASS, GRAVITY);
+    private final MotorcycleLandingDynamics landingDynamics = new MotorcycleLandingDynamics();
 
     private GameCamera gameCamera;
     private GameScene scene;
@@ -138,6 +142,7 @@ public final class BalancePointGame extends ApplicationAdapter {
         float normalUp;
         float groundY;
         float gap;
+        float normalVelocity;
 
         boolean touching() {
             return normalForce > 12f;
@@ -526,6 +531,27 @@ public final class BalancePointGame extends ApplicationAdapter {
         frontGrounded = frontTouching;
         frontNormalLoad = frontContactState.normalForce;
 
+        float rearSurfacePitch = MathUtils.atan2(
+                -rearContactState.normalForward, rearContactState.normalUp);
+        float frontSurfacePitch = MathUtils.atan2(
+                -frontContactState.normalForward, frontContactState.normalUp);
+        MotorcycleLandingDynamics.Result landingState = landingDynamics.step(
+                rearTouching,
+                frontTouching,
+                rearContactState.normalVelocity,
+                frontContactState.normalVelocity,
+                rearSurfacePitch,
+                frontSurfacePitch,
+                suspension.rear(),
+                suspension.front(),
+                pitch,
+                roll,
+                pitchVelocity,
+                dt);
+        float airControlBlend = terrainAirborne
+                ? MathUtils.clamp(landingState.airborneTime / AIR_CONTROL_BLEND_TIME, 0f, 1f)
+                : 0f;
+
         float absSpeed = Math.abs(speed);
         float rearTangentForward = rearContactState.normalUp;
         float rearTangentUp = -rearContactState.normalForward;
@@ -598,8 +624,15 @@ public final class BalancePointGame extends ApplicationAdapter {
 
         float actualAngularAcceleration = (rearWheelAngularSpeed - previousWheelAngularSpeed)
                 / Math.max(dt, 0.0001f);
+        if (!rearTouching) {
+            actualAngularAcceleration = MathUtils.clamp(
+                    actualAngularAcceleration,
+                    -AIR_WHEEL_BRAKE_ACCEL,
+                    AIR_WHEEL_DRIVE_ACCEL);
+        }
+        float wheelReactionGain = MathUtils.lerp(1f, AIR_WHEEL_REACTION_GAIN, airControlBlend);
         float wheelReactionTorque = rearTouching ? 0f
-                : actualAngularAcceleration * REAR_WHEEL_INERTIA;
+                : actualAngularAcceleration * REAR_WHEEL_INERTIA * wheelReactionGain;
 
         float rearContactForwardArm = rearForward
                 - WHEEL_RADIUS * rearContactState.normalForward;
@@ -614,7 +647,8 @@ public final class BalancePointGame extends ApplicationAdapter {
 
         float rearForceForward = rearNormalForward + rearTireForward;
         float rearForceUp = rearNormalUp + rearTireUp;
-        float riderPitchTorque = riderDynamics.pitchReactionTorque(terrainAirborne, frontTouching);
+        float riderPitchTorque = riderDynamics.pitchReactionTorque(terrainAirborne, frontTouching)
+                * MathUtils.lerp(1f, AIR_RIDER_TORQUE_GAIN, airControlBlend);
         float pitchTorque = rearContactForwardArm * rearForceUp
                 - rearContactVerticalArm * rearForceForward
                 + frontContactForwardArm * frontNormalUp
@@ -622,12 +656,21 @@ public final class BalancePointGame extends ApplicationAdapter {
                 + wheelReactionTorque
                 + riderPitchTorque;
 
-        float pitchDamping = frontTouching ? PITCH_DAMPING_GROUNDED
-                : (rearTouching ? PITCH_DAMPING_WHEELIE : PITCH_DAMPING_AIR);
+        float pitchDamping;
+        if (frontTouching) {
+            pitchDamping = PITCH_DAMPING_GROUNDED;
+        } else if (rearTouching) {
+            pitchDamping = PITCH_DAMPING_WHEELIE;
+        } else {
+            pitchDamping = MathUtils.lerp(PITCH_DAMPING_AIR, AIR_PITCH_DAMPING, airControlBlend);
+        }
         float pitchAcceleration = pitchTorque / PITCH_INERTIA
                 - pitchVelocity * pitchDamping;
         pitchVelocity += pitchAcceleration * dt;
-        pitchVelocity = MathUtils.clamp(pitchVelocity, -MAX_PITCH_RATE, MAX_PITCH_RATE);
+        float maxPitchRate = terrainAirborne
+                ? MathUtils.lerp(MAX_PITCH_RATE, AIR_MAX_PITCH_RATE, airControlBlend)
+                : MAX_PITCH_RATE;
+        pitchVelocity = MathUtils.clamp(pitchVelocity, -maxPitchRate, maxPitchRate);
         pitch += pitchVelocity * dt;
 
         bikeX += (sinYaw * speed + cosYaw * lateralSpeed) * dt;
@@ -711,6 +754,11 @@ public final class BalancePointGame extends ApplicationAdapter {
             wheelieTime = 0f;
         }
 
+        if (landingState.crashRecommended) {
+            beginCrash();
+            return;
+        }
+
         if (pitch > LOOP_ANGLE
                 || Float.isNaN(pitch) || Float.isNaN(speed) || Float.isNaN(lateralSpeed)
                 || Float.isNaN(yaw) || Float.isNaN(roll) || Float.isNaN(bikeX)
@@ -773,6 +821,7 @@ public final class BalancePointGame extends ApplicationAdapter {
 
         float normalVelocity = pointForwardVelocity * out.normalForward
                 + pointVerticalVelocity * out.normalUp;
+        out.normalVelocity = normalVelocity;
         float demandedCompression = suspensionUnit.staticCompression() - out.gap;
         float compressionVelocity = -normalVelocity;
         out.normalForce = suspensionUnit.solve(
@@ -792,6 +841,7 @@ public final class BalancePointGame extends ApplicationAdapter {
         yawVelocity = 0f;
         terrainRollVelocity = 0f;
         suspension.reset();
+        landingDynamics.reset();
         crashSide = roll < -0.05f ? -1f : (roll > 0.05f ? 1f : (steer < 0f ? -1f : 1f));
         crashPitchRate = MathUtils.clamp(pitchVelocity + 0.75f, -1.2f, 3.2f);
         crashRollRate = crashSide * (1.4f + MathUtils.clamp(speed * 0.045f, 0f, 1.5f));
@@ -884,6 +934,7 @@ public final class BalancePointGame extends ApplicationAdapter {
         suspension.reset();
         lateralDynamics.reset();
         riderDynamics.reset();
+        landingDynamics.reset();
         frontGrounded = true;
         crashed = false;
         crashSettled = false;
