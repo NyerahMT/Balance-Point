@@ -10,12 +10,19 @@ import com.badlogic.gdx.math.MathUtils;
  * countersteer micromanagement from a phone control pad.
  */
 final class MotorcycleLateralDynamics {
-    private static final float FRONT_CORNERING_GAIN = 7.2f;
-    private static final float REAR_CORNERING_GAIN = 8.0f;
-    private static final float YAW_INERTIA = 72f;
-    private static final float MAX_YAW_RATE = 2.35f;
-    private static final float MAX_LATERAL_SPEED = 15f;
+    private static final float FRONT_CORNERING_GAIN = 7.0f;
+    private static final float REAR_CORNERING_GAIN = 7.6f;
+    private static final float YAW_INERTIA = 82f;
+    private static final float YAW_DAMPING = 1.02f;
+    private static final float MAX_YAW_RATE = 1.75f;
+    private static final float MAX_LATERAL_SPEED = 3.0f;
     private static final float MAX_ROLL = 58f * MathUtils.degreesToRadians;
+
+    // Balance Point is aiming for believable, controllable bike behavior rather than a tire
+    // engineering simulator. Longitudinal drive can loosen the rear, but it must not erase
+    // essentially all lateral authority the instant the tire reaches its drive-force limit.
+    private static final float REAR_LONGITUDINAL_GRIP_COST = 0.32f;
+    private static final float REAR_MIN_LATERAL_GRIP_FRACTION = 0.72f;
 
     private final float mass;
     private final float wheelbase;
@@ -74,9 +81,17 @@ final class MotorcycleLateralDynamics {
 
             float frontLimit = Math.max(0f, frontMu * frontNormalLoad);
             float rearCircle = Math.max(0f, rearMu * rearNormalLoad);
-            float rearLimit = (float) Math.sqrt(Math.max(
-                    0f, rearCircle * rearCircle
-                            - rearLongitudinalForce * rearLongitudinalForce));
+
+            // Drive force reduces rear cornering authority, but only partially. The previous
+            // full friction-circle subtraction could drive rear lateral grip nearly to zero at
+            // full throttle, which made power-on turns feel like the rear tire was on ice.
+            float rearDriveUse = rearCircle > 0.001f
+                    ? MathUtils.clamp(Math.abs(rearLongitudinalForce) / rearCircle, 0f, 1f)
+                    : 0f;
+            float rearGripRetention = (float) Math.sqrt(Math.max(
+                    0f, 1f - REAR_LONGITUDINAL_GRIP_COST * rearDriveUse * rearDriveUse));
+            rearGripRetention = Math.max(REAR_MIN_LATERAL_GRIP_FRACTION, rearGripRetention);
+            float rearLimit = rearCircle * rearGripRetention;
 
             float frontLateralForce = frontTouching
                     ? softLimit(-frontSlipAngle * frontNormalLoad * FRONT_CORNERING_GAIN,
@@ -90,18 +105,32 @@ final class MotorcycleLateralDynamics {
             lateralAcceleration = (frontLateralForce + rearLateralForce) / mass;
             float bodyLateralAcceleration = lateralAcceleration - speed * yawRate;
             lateralSpeed += bodyLateralAcceleration * dt;
-            lateralSpeed *= Math.max(0f, 1f - dt * 0.30f);
+
+            // Motorcycle sideslip should be something the player can catch, not momentum that
+            // persists for half the track. When both tires are planted they rapidly recapture
+            // the chassis velocity, especially as the rider releases steering input. Rear-only
+            // contact keeps much less of this assistance so wheelies can still move around.
+            float steerMagnitude = MathUtils.clamp(Math.abs(steerCommand), 0f, 1f);
+            float lateralCapture = 0f;
+            if (frontTouching && rearTouching) {
+                lateralCapture = MathUtils.lerp(5.0f, 3.1f, steerMagnitude);
+            } else if (rearTouching) {
+                lateralCapture = 1.25f;
+            } else if (frontTouching) {
+                lateralCapture = 2.4f;
+            }
+            lateralSpeed *= Math.max(0f, 1f - dt * lateralCapture);
             lateralSpeed = MathUtils.clamp(
                     lateralSpeed, -MAX_LATERAL_SPEED, MAX_LATERAL_SPEED);
 
             float yawTorque = frontArm * frontLateralForce - rearArm * rearLateralForce;
-            float yawAcceleration = yawTorque / YAW_INERTIA - yawRate * 0.78f;
+            float yawAcceleration = yawTorque / YAW_INERTIA - yawRate * YAW_DAMPING;
 
             // With the front wheel in the air there is no front contact patch to steer with.
             // A modest rear-only authority keeps wheelies controllable without reverting to a
             // canned yaw-rate target.
             if (rearTouching && !frontTouching) {
-                float wheelieAuthority = MathUtils.lerp(2.2f, 0.80f, speedBlend);
+                float wheelieAuthority = MathUtils.lerp(2.0f, 0.72f, speedBlend);
                 yawAcceleration += -steerCommand * wheelieAuthority * motionBlend;
             }
 
@@ -128,11 +157,11 @@ final class MotorcycleLateralDynamics {
                 MAX_ROLL);
 
         float rollFrequency = frontTouching ? 5.3f : (rearTouching ? 4.2f : 2.7f);
-        float rollDamping = frontTouching ? 0.82f : (rearTouching ? 0.78f : 0.68f);
+        float rollDamping = frontTouching ? 0.86f : (rearTouching ? 0.80f : 0.68f);
         float rollAcceleration = (rollTarget - roll) * rollFrequency * rollFrequency
                 - 2f * rollDamping * rollFrequency * rollRate;
         rollRate += rollAcceleration * dt;
-        rollRate = MathUtils.clamp(rollRate, -4.6f, 4.6f);
+        rollRate = MathUtils.clamp(rollRate, -4.3f, 4.3f);
         roll += rollRate * dt;
         roll = MathUtils.clamp(roll, -MAX_ROLL, MAX_ROLL);
     }
