@@ -24,12 +24,16 @@ import com.badlogic.gdx.utils.ObjectSet;
  * disconnected pieces into individual mesh parts. This rig duplicates only the pieces
  * that belong to the swingarm and lower fork guards, hides those pieces in the rigid
  * instances, then animates the duplicates around real motorcycle-style pivots.
+ *
+ * Suspension motion is presentation-only here: GameScene.BikeState receives signed travel
+ * directly from the physics-owned MotorcycleSuspension model. The rig never samples terrain
+ * or invents its own suspension response.
  */
 final class DirtBikeVisualRig {
     private static final float REAR_MAX_EXTENSION = 0.085f;
-    private static final float REAR_MAX_COMPRESSION = 0.170f;
-    private static final float FRONT_MAX_EXTENSION = 0.075f;
-    private static final float FRONT_MAX_COMPRESSION = 0.160f;
+    private static final float REAR_MAX_COMPRESSION = 0.225f;
+    private static final float FRONT_MAX_EXTENSION = 0.060f;
+    private static final float FRONT_MAX_COMPRESSION = 0.260f;
 
     private final DirtBikeMeshLoader.LoadedBike bike;
     private final float wheelbase;
@@ -45,11 +49,6 @@ final class DirtBikeVisualRig {
 
     private final ModelInstance swingarm;
     private final ModelInstance frontSliders;
-    private final float rearNeutralGap;
-    private final float frontNeutralGap;
-
-    private float rearOffset;
-    private float frontOffset;
 
     DirtBikeVisualRig(DirtBikeMeshLoader.LoadedBike bike,
                       float wheelbase,
@@ -87,9 +86,6 @@ final class DirtBikeVisualRig {
                 .sub(bike.frontAxleOffset)
                 .nor();
 
-        rearNeutralGap = bike.rearAxleOffset.y + physicsWheelRadius - bike.wheelRadius;
-        frontNeutralGap = bike.frontAxleOffset.y + physicsWheelRadius - bike.wheelRadius;
-
         Gdx.app.log("BalancePoint", "Visual suspension rig: swingarmParts="
                 + swingarmIds.size + " lowerForkParts=" + sliderIds.size
                 + " swingarmPivot=" + swingarmPivot
@@ -101,8 +97,6 @@ final class DirtBikeVisualRig {
     }
 
     void update(Matrix4 bikeRoot, GameScene.BikeState state, TerrainVisuals terrain) {
-        updateSuspensionOffsets(bikeRoot, state, terrain);
-
         bike.body.transform.set(bikeRoot);
         bike.engine.transform.set(bikeRoot);
 
@@ -110,12 +104,16 @@ final class DirtBikeVisualRig {
                 * (physicsWheelRadius / bike.wheelRadius)
                 * MathUtils.radiansToDegrees;
 
+        float rearOffset = MathUtils.clamp(
+                state.rearSuspensionTravel,
+                -REAR_MAX_EXTENSION,
+                REAR_MAX_COMPRESSION);
         float effectiveRearOffset = swingarm != null ? rearOffset : 0f;
         float rearArmForward = Math.max(0.34f, swingarmPivot.z - bike.rearAxleOffset.z);
         float rearAngleDeg = MathUtils.clamp(
                 effectiveRearOffset / rearArmForward * MathUtils.radiansToDegrees,
                 -13f,
-                20f);
+                22f);
 
         if (swingarm != null) {
             rearSuspensionRoot.set(bikeRoot)
@@ -142,6 +140,10 @@ final class DirtBikeVisualRig {
                 .rotate(bike.steeringAxis, visualSteerDeg);
         bike.steering.transform.set(steeringRoot);
 
+        float frontOffset = MathUtils.clamp(
+                state.frontSuspensionTravel,
+                -FRONT_MAX_EXTENSION,
+                FRONT_MAX_COMPRESSION);
         float effectiveFrontOffset = frontSliders != null ? frontOffset : 0f;
         tempA.set(frontCompressionAxis).scl(effectiveFrontOffset);
         if (frontSliders != null) {
@@ -164,62 +166,6 @@ final class DirtBikeVisualRig {
     void renderShadowExtras(ModelBatch batch) {
         if (swingarm != null) batch.render(swingarm);
         if (frontSliders != null) batch.render(frontSliders);
-    }
-
-    private void updateSuspensionOffsets(Matrix4 bikeRoot,
-                                         GameScene.BikeState state,
-                                         TerrainVisuals terrain) {
-        if (terrain == null || state.crashed) {
-            rearOffset = approachSuspension(rearOffset, 0f, 0.05f);
-            frontOffset = approachSuspension(frontOffset, 0f, 0.05f);
-            return;
-        }
-
-        float rearTarget = suspensionTarget(
-                bikeRoot,
-                bike.rearAxleOffset,
-                rearNeutralGap,
-                state.yaw,
-                terrain,
-                REAR_MAX_EXTENSION,
-                REAR_MAX_COMPRESSION);
-        float frontTarget = suspensionTarget(
-                bikeRoot,
-                bike.frontAxleOffset,
-                frontNeutralGap,
-                state.yaw,
-                terrain,
-                FRONT_MAX_EXTENSION,
-                FRONT_MAX_COMPRESSION);
-
-        float dt = Math.min(Gdx.graphics.getDeltaTime(), 0.05f);
-        rearOffset = approachSuspension(rearOffset, rearTarget, dt);
-        frontOffset = approachSuspension(frontOffset, frontTarget, dt);
-    }
-
-    private float suspensionTarget(Matrix4 bikeRoot,
-                                   Vector3 localAxle,
-                                   float neutralGap,
-                                   float yaw,
-                                   TerrainVisuals terrain,
-                                   float maxExtension,
-                                   float maxCompression) {
-        tempA.set(localAxle).mul(bikeRoot);
-
-        float slopeX = terrain.groundSlopeX(tempA.x, tempA.z);
-        float slopeZ = terrain.groundSlopeZ(tempA.x, tempA.z);
-        float forwardSlope = slopeX * MathUtils.sin(yaw) + slopeZ * MathUtils.cos(yaw);
-        float radiusLift = bike.wheelRadius
-                * (float)Math.sqrt(1f + forwardSlope * forwardSlope);
-        float supportY = terrain.groundHeight(tempA.x, tempA.z) + radiusLift;
-        float dynamicGap = tempA.y - supportY - neutralGap;
-        return MathUtils.clamp(-dynamicGap, -maxExtension, maxCompression);
-    }
-
-    private static float approachSuspension(float current, float target, float dt) {
-        float response = target > current ? 18f : 10f;
-        float blend = 1f - (float)Math.exp(-response * Math.max(0f, dt));
-        return MathUtils.lerp(current, target, blend);
     }
 
     private static float visualSteerDegrees(GameScene.BikeState state) {
