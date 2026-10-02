@@ -49,6 +49,14 @@ jobs:
       - name: Stage CC0 skeleton rider asset
         run: python3 tools/fetch_skeleton_rider.py
 
+      - name: Stage app icons
+        run: |
+          python3 -m venv .icon-venv
+          . .icon-venv/bin/activate
+          python -m pip install --disable-pip-version-check Pillow
+          python tools/stage_app_icons.py
+          test -f app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+
       - name: Set up Java 17
         uses: actions/setup-java@v6
         with:
@@ -106,7 +114,7 @@ jobs:
           . .icon-venv/bin/activate
           python -m pip install --disable-pip-version-check Pillow
           python tools/stage_app_icons.py
-          test -f ios/data/Media.xcassets/AppIcon.appiconset/icon-1024.png
+          test -f ios/data/Icon-60@3x.png
 
       - name: Set up Java 17
         uses: actions/setup-java@v6
@@ -160,9 +168,12 @@ jobs:
 
           APP_PATH="$(find feather-package/Payload -maxdepth 1 -type d -name '*.app' | head -n 1)"
           test -f "$APP_PATH/Info.plist"
+          test -f "$APP_PATH/Icon-60@2x.png"
+          test -f "$APP_PATH/Icon-60@3x.png"
           EXECUTABLE_NAME="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP_PATH/Info.plist")"
           BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Info.plist")"
           BUNDLE_BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_PATH/Info.plist")"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconFiles' "$APP_PATH/Info.plist"
           test -n "$EXECUTABLE_NAME"
           test -n "$BUNDLE_ID"
           test -f "$APP_PATH/$EXECUTABLE_NAME"
