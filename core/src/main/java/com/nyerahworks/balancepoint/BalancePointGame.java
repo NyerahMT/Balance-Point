@@ -36,10 +36,6 @@ public final class BalancePointGame extends ApplicationAdapter {
             * (WHEELBASE - COM_FORWARD) / WHEELBASE;
     private static final float FRONT_STATIC_LOAD = MASS * GRAVITY
             * COM_FORWARD / WHEELBASE;
-    // Maximum fore/aft shift of the combined bike+rider COM from rider body movement.
-    // About 180 mm gives meaningful weight transfer while staying plausible for a rider
-    // moving between the tank and rear of the seat.
-    private static final float RIDER_SHIFT = 0.18f;
 
     // Rear tire longitudinal slip model. Grip is a force ceiling, not a power reducer:
     // surplus engine torque accelerates the wheel and produces visible/audible wheelspin.
@@ -75,6 +71,8 @@ public final class BalancePointGame extends ApplicationAdapter {
             REAR_STATIC_LOAD, FRONT_STATIC_LOAD, MAX_CONTACT_FORCE);
     private final MotorcycleLateralDynamics lateralDynamics = new MotorcycleLateralDynamics(
             MASS, WHEELBASE, COM_FORWARD, GRAVITY);
+    private final MotorcycleRiderDynamics riderDynamics = new MotorcycleRiderDynamics(
+            MASS, GRAVITY);
 
     private GameCamera gameCamera;
     private GameScene scene;
@@ -346,9 +344,6 @@ public final class BalancePointGame extends ApplicationAdapter {
 
         float steerResponse = 5.8f + Math.min(Math.abs(speed) * 0.035f, 1.4f);
         steer += (steerTarget - steer) * Math.min(1f, dt * steerResponse);
-        // Body movement is deliberately slower than handlebar input, but still responsive
-        // enough to preload the bike before a crest or move forward under acceleration.
-        riderLean += (riderLeanTarget - riderLean) * Math.min(1f, dt * 5.2f);
 
         if (!looking) {
             lookYaw *= Math.max(0f, 1f - dt * 1.65f);
@@ -484,16 +479,17 @@ public final class BalancePointGame extends ApplicationAdapter {
             return;
         }
 
+        riderDynamics.step(riderLeanTarget, longitudinalAcceleration, terrainAirborne, dt);
+        riderLean = riderDynamics.pose();
+
         float sinYaw = MathUtils.sin(yaw);
         float cosYaw = MathUtils.cos(yaw);
         float sinPitch = MathUtils.sin(pitch);
         float cosPitch = MathUtils.cos(pitch);
 
-        // Axle locations relative to the CURRENT combined COM. Positive rider lean moves
-        // the mass forward; negative lean moves it rearward. On an uphill, a real rider does
-        // not remain rigidly rotated with the chassis: they naturally keep their torso forward
-        // over the bike. Approximate that posture with a grade-dependent COM shift instead of
-        // letting steep terrain rotate the whole combined mass rearward and create a fake loop.
+        // Axle locations relative to the CURRENT combined COM. The rider model owns the
+        // dynamic fore/aft mass shift; climb posture remains a small automatic assist so steep
+        // grades do not rotate the rider rigidly with the chassis and create a fake loop.
         float climbPostureShift = 0f;
         if (terrainVisuals != null && !terrainAirborne) {
             float centerSlopeX = terrainVisuals.groundSlopeX(bikeX, bikeZ);
@@ -505,7 +501,8 @@ public final class BalancePointGame extends ApplicationAdapter {
             climbPostureShift = climbBlend * 0.14f;
         }
         float effectiveComForward = MathUtils.clamp(
-                COM_FORWARD + riderLean * RIDER_SHIFT + climbPostureShift, 0.48f, 0.96f);
+                COM_FORWARD + riderDynamics.combinedComShift() + climbPostureShift,
+                0.48f, 0.96f);
         float rearForward = -effectiveComForward * cosPitch + COM_HEIGHT * sinPitch;
         float rearVertical = -effectiveComForward * sinPitch - COM_HEIGHT * cosPitch;
         float frontForward = (WHEELBASE - effectiveComForward) * cosPitch + COM_HEIGHT * sinPitch;
@@ -648,11 +645,13 @@ public final class BalancePointGame extends ApplicationAdapter {
 
         float rearForceForward = rearNormalForward + rearTireForward;
         float rearForceUp = rearNormalUp + rearTireUp;
+        float riderPitchTorque = riderDynamics.pitchReactionTorque(terrainAirborne, frontTouching);
         float pitchTorque = rearContactForwardArm * rearForceUp
                 - rearContactVerticalArm * rearForceForward
                 + frontContactForwardArm * frontNormalUp
                 - frontContactVerticalArm * frontNormalForward
-                + wheelReactionTorque;
+                + wheelReactionTorque
+                + riderPitchTorque;
 
         float pitchDamping = frontTouching ? PITCH_DAMPING_GROUNDED
                 : (rearTouching ? PITCH_DAMPING_WHEELIE : PITCH_DAMPING_AIR);
@@ -944,6 +943,7 @@ public final class BalancePointGame extends ApplicationAdapter {
         drivetrain.reset();
         suspension.reset();
         lateralDynamics.reset();
+        riderDynamics.reset();
         frontGrounded = true;
         crashed = false;
         crashSettled = false;
