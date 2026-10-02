@@ -66,9 +66,6 @@ public final class MotorcycleLateralDynamicsTest {
         MotorcycleLateralDynamics dynamics = new MotorcycleLateralDynamics(
                 198f, 1.403232f, 0.636107f, 9.81f);
 
-        // Load the bike to one side, then snap the opposite direction immediately before takeoff.
-        // That creates the exact scrub-like state that used to turn into a barrel roll: meaningful
-        // roll angle, opposite roll rate and a healthy yaw rate at wheel release.
         for (int i = 0; i < 55; i++) {
             dynamics.step(15f, 0.80f, 0f,
                     1050f, 890f, 1f, 1f,
@@ -99,6 +96,44 @@ public final class MotorcycleLateralDynamicsTest {
         assertTrue(Math.abs(dynamics.roll()) < takeoffRoll * 0.35f);
         assertTrue(Math.abs(dynamics.rollRate()) < takeoffRollRate * 0.35f);
         assertTrue(Math.abs(dynamics.yawRate()) > takeoffYawRate * 0.90f);
+    }
+
+    @Test
+    public void airborneSteerActivelyBuildsWhipYawWithoutRollingBike() {
+        MotorcycleLateralDynamics dynamics = new MotorcycleLateralDynamics(
+                198f, 1.403232f, 0.636107f, 9.81f);
+
+        for (int i = 0; i < 60; i++) {
+            dynamics.step(15f, 1f, 0f,
+                    0f, 0f, 1f, 1f,
+                    false, false, DT);
+        }
+
+        assertTrue(dynamics.yawRate() < -0.90f);
+        assertTrue(Math.abs(dynamics.roll()) < 0.02f);
+        assertTrue(Math.abs(dynamics.rollRate()) < 0.02f);
+    }
+
+    @Test
+    public void oppositeAirborneSteerCanUnwindWhip() {
+        MotorcycleLateralDynamics dynamics = new MotorcycleLateralDynamics(
+                198f, 1.403232f, 0.636107f, 9.81f);
+
+        for (int i = 0; i < 70; i++) {
+            dynamics.step(15f, 1f, 0f,
+                    0f, 0f, 1f, 1f,
+                    false, false, DT);
+        }
+        float yawBeforeCorrection = Math.abs(dynamics.yawRate());
+
+        for (int i = 0; i < 70; i++) {
+            dynamics.step(15f, -1f, 0f,
+                    0f, 0f, 1f, 1f,
+                    false, false, DT);
+        }
+
+        assertTrue(yawBeforeCorrection > 1.0f);
+        assertTrue(Math.abs(dynamics.yawRate()) < yawBeforeCorrection * 0.35f);
     }
 
     @Test
