@@ -41,7 +41,7 @@ public final class MotorcycleLateralDynamicsTest {
     }
 
     @Test
-    public void rearDriveForceChangesLateralResponse() {
+    public void rearDriveForceChangesLateralResponseWithoutDeletingRearGrip() {
         MotorcycleLateralDynamics freeRear = new MotorcycleLateralDynamics(
                 198f, 1.403232f, 0.636107f, 9.81f);
         MotorcycleLateralDynamics drivenRear = new MotorcycleLateralDynamics(
@@ -57,6 +57,30 @@ public final class MotorcycleLateralDynamicsTest {
         }
 
         assertTrue(Math.abs(drivenRear.yawRate() - freeRear.yawRate()) > 0.01f);
-        assertTrue(Math.abs(drivenRear.lateralSpeed() - freeRear.lateralSpeed()) > 0.01f);
+        assertTrue(Math.abs(drivenRear.lateralSpeed()) < 2.5f);
+        assertTrue(Math.abs(drivenRear.yawRate()) < 1.5f);
+    }
+
+    @Test
+    public void releasedSteeringRecapturesSidewaysMotionQuickly() {
+        MotorcycleLateralDynamics dynamics = new MotorcycleLateralDynamics(
+                198f, 1.403232f, 0.636107f, 9.81f);
+
+        for (int i = 0; i < 120; i++) {
+            dynamics.step(16f, 0.85f, 950f,
+                    1050f, 890f, 1f, 1f,
+                    true, true, DT);
+        }
+
+        float lateralAtRelease = Math.abs(dynamics.lateralSpeed());
+        for (int i = 0; i < 60; i++) {
+            dynamics.step(16f, 0f, 950f,
+                    1050f, 890f, 1f, 1f,
+                    true, true, DT);
+        }
+
+        assertTrue(lateralAtRelease > 0.20f);
+        assertTrue(Math.abs(dynamics.lateralSpeed()) < lateralAtRelease * 0.35f);
+        assertTrue(Math.abs(dynamics.yawRate()) < 0.25f);
     }
 }
