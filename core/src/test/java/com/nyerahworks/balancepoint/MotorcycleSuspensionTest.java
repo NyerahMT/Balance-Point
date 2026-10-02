@@ -29,6 +29,18 @@ public final class MotorcycleSuspensionTest {
     }
 
     @Test
+    public void frontForkStartsWithMeaningfulRiderSag() {
+        MotorcycleSuspension suspension = new MotorcycleSuspension(
+                REAR_LOAD, FRONT_LOAD, MAX_FORCE);
+
+        assertTrue("front sag should exceed 70 mm",
+                suspension.front().staticCompression() > 0.070f);
+        assertTrue("front sag should leave ample compression travel",
+                suspension.front().staticCompression()
+                        < MotorcycleSuspension.FRONT_TRAVEL * 0.35f);
+    }
+
+    @Test
     public void compressionGeneratesMoreForceThanStaticSag() {
         MotorcycleSuspension suspension = new MotorcycleSuspension(
                 REAR_LOAD, FRONT_LOAD, MAX_FORCE);
