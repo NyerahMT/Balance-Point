@@ -98,6 +98,7 @@ final class GameScene {
     private ModelInstance instrumentButtonRight;
 
     private Motorcycle motorcycle;
+    private SkeletonRider skeletonRider;
 
     GameScene(
             InstrumentDisplay instrumentDisplay,
@@ -323,6 +324,8 @@ final class GameScene {
             motorcycle = null;
             Gdx.app.error("BalancePoint", "Could not load imported dirt bike; using fallback", e);
         }
+
+        skeletonRider = SkeletonRider.load(ownedModels);
     }
 
     private void updateWorldInstances(float centerZ) {
@@ -400,7 +403,9 @@ final class GameScene {
         instrumentButtonRight.transform.set(instrumentPanel.transform)
                 .translate(0.041f, 0.0143f, -0.032f);
 
-        if (motorcycle != null) {
+        if (skeletonRider != null) {
+            skeletonRider.update(bikeRoot, state.riderLean);
+        } else if (motorcycle != null) {
             float riderShift = state.riderLean;
             float riderAbsShift = Math.abs(riderShift);
             setPart(riderTorso, 0f, 0.94f - riderAbsShift * 0.025f,
@@ -467,6 +472,10 @@ final class GameScene {
     }
 
     private void renderRiderShadow() {
+        if (skeletonRider != null) {
+            skeletonRider.renderShadow(shadowBatch);
+            return;
+        }
         shadowBatch.render(riderTorso);
         shadowBatch.render(riderHead);
         shadowBatch.render(riderLegLeft);
@@ -476,6 +485,10 @@ final class GameScene {
     }
 
     private void renderRider() {
+        if (skeletonRider != null) {
+            skeletonRider.render(modelBatch, environment);
+            return;
+        }
         modelBatch.render(riderTorso, environment);
         modelBatch.render(riderHead, environment);
         modelBatch.render(riderLegLeft, environment);
