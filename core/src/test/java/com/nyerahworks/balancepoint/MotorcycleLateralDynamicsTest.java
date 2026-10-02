@@ -62,27 +62,43 @@ public final class MotorcycleLateralDynamicsTest {
     }
 
     @Test
-    public void airborneStatePreservesSideslipAndRollMomentum() {
+    public void airborneScrubKeepsWhipYawButLevelsRoll() {
         MotorcycleLateralDynamics dynamics = new MotorcycleLateralDynamics(
                 198f, 1.403232f, 0.636107f, 9.81f);
 
-        for (int i = 0; i < 70; i++) {
-            dynamics.step(15f, 0.75f, 0f,
+        // Load the bike to one side, then snap the opposite direction immediately before takeoff.
+        // That creates the exact scrub-like state that used to turn into a barrel roll: meaningful
+        // roll angle, opposite roll rate and a healthy yaw rate at wheel release.
+        for (int i = 0; i < 55; i++) {
+            dynamics.step(15f, 0.80f, 0f,
                     1050f, 890f, 1f, 1f,
                     true, true, DT);
         }
-        float takeoffRoll = dynamics.roll();
+        for (int i = 0; i < 18; i++) {
+            dynamics.step(15f, -0.95f, 0f,
+                    1050f, 890f, 1f, 1f,
+                    true, true, DT);
+        }
+
+        float takeoffRoll = Math.abs(dynamics.roll());
+        float takeoffRollRate = Math.abs(dynamics.rollRate());
+        float takeoffYawRate = Math.abs(dynamics.yawRate());
         dynamics.syncAirborneVelocity(1.25f);
 
-        for (int i = 0; i < 30; i++) {
+        for (int i = 0; i < 60; i++) {
             dynamics.step(15f, 0f, 0f,
                     0f, 0f, 1f, 1f,
                     false, false, DT);
             dynamics.syncAirborneVelocity(1.25f);
         }
 
+        assertTrue(takeoffRoll > 0.20f);
+        assertTrue(takeoffRollRate > 0.70f);
+        assertTrue(takeoffYawRate > 0.35f);
         assertEquals(1.25f, dynamics.lateralSpeed(), 0.0001f);
-        assertTrue(Math.abs(dynamics.roll()) > Math.abs(takeoffRoll) * 0.50f);
+        assertTrue(Math.abs(dynamics.roll()) < takeoffRoll * 0.35f);
+        assertTrue(Math.abs(dynamics.rollRate()) < takeoffRollRate * 0.35f);
+        assertTrue(Math.abs(dynamics.yawRate()) > takeoffYawRate * 0.90f);
     }
 
     @Test
