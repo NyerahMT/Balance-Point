@@ -3,12 +3,8 @@ package com.nyerahworks.balancepoint;
 import com.badlogic.gdx.math.MathUtils;
 
 /**
- * Classifies real contact events without inventing a separate "jump mode".
- *
- * A landing begins only after a meaningful no-contact interval. The first wheel strike opens a
- * short landing window so the second wheel slap and a delayed suspension bottom-out are part of
- * the same event. Severity is derived from normal impact speed, suspension state and chassis
- * attitude; it never applies a canned pitch correction.
+ * Tracks real landing events for impact/suspension feedback without deciding whether the rider
+ * crashed. Crash authority belongs to physical motorcycle hard-point contact with terrain.
  */
 final class MotorcycleLandingDynamics {
     private static final float MIN_AIR_TIME = 0.055f;
@@ -81,52 +77,36 @@ final class MotorcycleLandingDynamics {
                 float compressionSpeed = Math.max(0f, Math.max(
                         rearSuspension.velocity(), frontSuspension.velocity()));
 
-                float impactScore = smootherStep(2.1f, 7.8f, eventImpactSpeed);
-                float compressionScore = smootherStep(0.78f, 0.995f, maxCompression);
-                float compressionSpeedScore = smootherStep(0.9f, 5.2f, compressionSpeed);
+                // Severity remains useful for future sound/camera/suspension feedback. The ranges
+                // are intentionally broad because an ugly landing is not itself a crash anymore.
+                float impactScore = smootherStep(2.8f, 10.5f, eventImpactSpeed);
+                float compressionScore = smootherStep(0.84f, 1.00f, maxCompression);
+                float compressionSpeedScore = smootherStep(1.4f, 6.8f, compressionSpeed);
                 float pitchScore = smootherStep(
-                        18f * MathUtils.degreesToRadians,
-                        56f * MathUtils.degreesToRadians,
+                        28f * MathUtils.degreesToRadians,
+                        78f * MathUtils.degreesToRadians,
                         pitchMismatch);
                 float rollScore = smootherStep(
-                        17f * MathUtils.degreesToRadians,
-                        48f * MathUtils.degreesToRadians,
+                        28f * MathUtils.degreesToRadians,
+                        70f * MathUtils.degreesToRadians,
                         rollMagnitude);
-                float pitchRateScore = smootherStep(1.35f, 4.2f, Math.abs(pitchVelocity));
+                float pitchRateScore = smootherStep(2.0f, 5.2f, Math.abs(pitchVelocity));
 
-                float severity = impactScore * 0.45f
+                float severity = impactScore * 0.46f
                         + compressionScore * 0.20f
-                        + compressionSpeedScore * 0.12f
-                        + pitchScore * 0.12f
+                        + compressionSpeedScore * 0.13f
+                        + pitchScore * 0.10f
                         + rollScore * 0.07f
                         + pitchRateScore * 0.04f;
-                if (frontFirst) severity += impactScore * 0.055f;
+                if (frontFirst) severity += impactScore * 0.025f;
                 eventSeverity = MathUtils.clamp(Math.max(eventSeverity, severity), 0f, 1f);
-
-                boolean extremeImpact = eventImpactSpeed > 8.4f;
-                boolean violentFrontStrike = frontFirst
-                        && eventImpactSpeed > 5.4f
-                        && pitchMismatch > 42f * MathUtils.degreesToRadians;
-                boolean sidewaysStrike = eventImpactSpeed > 3.7f
-                        && rollMagnitude > 48f * MathUtils.degreesToRadians;
-                boolean severeBottomOut = maxCompression > 0.992f
-                        && compressionSpeed > 4.7f;
-                boolean accumulatedFailure = eventSeverity > 0.79f
-                        && (eventImpactSpeed > 4.3f || maxCompression > 0.965f);
-
-                result.crashRecommended = extremeImpact
-                        || violentFrontStrike
-                        || sidewaysStrike
-                        || severeBottomOut
-                        || accumulatedFailure;
-            } else {
-                result.crashRecommended = false;
             }
 
             airborneTime = 0f;
         }
 
         result.landedThisStep = landedThisStep;
+        result.crashRecommended = false;
         result.airborneTime = airborneTime;
         result.landingWindowRemaining = landingWindowRemaining;
         result.impactSpeed = eventImpactSpeed;
