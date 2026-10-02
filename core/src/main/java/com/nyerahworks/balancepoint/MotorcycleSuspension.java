@@ -15,22 +15,24 @@ final class MotorcycleSuspension {
     static final float REAR_TRAVEL = 0.300f;
     static final float FRONT_TRAVEL = 0.305f;
 
-    // Wheel rates, not raw shock/fork spring rates. These put the combined bike+rider near
-    // realistic rider sag while keeping the first integration conservative enough to preserve
-    // the existing wheelie tune.
+    // Wheel rates, not raw shock/fork spring rates. The rear tune is already reading correctly
+    // in motion. The front is intentionally softer than the first pass: 18 N/mm only produced
+    // about 49 mm of loaded sag and visually behaved almost like a rigid fork. 11.5 N/mm puts
+    // the current bike+rider load near 77 mm of front sag, leaving useful extension and plenty
+    // of compression travel for bumps, jump faces and landings.
     static final float REAR_WHEEL_RATE = 14_000f;
-    static final float FRONT_WHEEL_RATE = 18_000f;
+    static final float FRONT_WHEEL_RATE = 11_500f;
 
     private static final float REAR_COMPRESSION_DAMPING = 1_650f;
     private static final float REAR_REBOUND_DAMPING = 2_750f;
-    private static final float FRONT_COMPRESSION_DAMPING = 1_500f;
-    private static final float FRONT_REBOUND_DAMPING = 2_450f;
+    private static final float FRONT_COMPRESSION_DAMPING = 1_050f;
+    private static final float FRONT_REBOUND_DAMPING = 1_850f;
     private static final float REAR_HIGH_SPEED_COMPRESSION = 420f;
-    private static final float FRONT_HIGH_SPEED_COMPRESSION = 360f;
+    private static final float FRONT_HIGH_SPEED_COMPRESSION = 280f;
     private static final float REAR_BUMP_START = 0.238f;
-    private static final float FRONT_BUMP_START = 0.242f;
+    private static final float FRONT_BUMP_START = 0.255f;
     private static final float REAR_BUMP_RATE = 82_000f;
-    private static final float FRONT_BUMP_RATE = 76_000f;
+    private static final float FRONT_BUMP_RATE = 72_000f;
 
     private final Unit rear;
     private final Unit front;
