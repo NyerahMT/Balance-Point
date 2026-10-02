@@ -18,11 +18,16 @@ final class MotorcycleRiderDynamics {
     private static final float MAX_INERTIAL_BIAS = 0.070f;
     private static final float INERTIAL_BIAS_PER_G = 0.055f;
     private static final float GROUNDED_MAX_BODY_SPEED = 2.25f;
-    private static final float AIRBORNE_MAX_BODY_SPEED = 4.20f;
+    private static final float AIRBORNE_MAX_BODY_SPEED = 4.80f;
     private static final float GROUNDED_MAX_BODY_ACCELERATION = 20f;
-    private static final float AIRBORNE_MAX_BODY_ACCELERATION = 44f;
+    private static final float AIRBORNE_MAX_BODY_ACCELERATION = 56f;
     private static final float RIDER_FORCE_HEIGHT = 0.56f;
-    private static final float MAX_PITCH_REACTION_TORQUE = 360f;
+    private static final float MAX_GROUNDED_PITCH_REACTION_TORQUE = 360f;
+    private static final float MAX_AIRBORNE_PITCH_REACTION_TORQUE = 920f;
+    // Once the rider is airborne, holding a fore/aft body command still represents active force
+    // through the bars and pegs. Without this term the old model went dead as soon as the rider
+    // mass reached its target because acceleration fell back to zero.
+    private static final float AIRBORNE_BAR_PEG_CONTROL_TORQUE = 520f;
 
     private final float totalMass;
     private final float gravity;
@@ -30,6 +35,7 @@ final class MotorcycleRiderDynamics {
     private float position;
     private float velocity;
     private float acceleration;
+    private float command;
 
     MotorcycleRiderDynamics(float totalMass, float gravity) {
         this.totalMass = totalMass;
@@ -41,6 +47,7 @@ final class MotorcycleRiderDynamics {
               boolean airborne,
               float dt) {
         command = MathUtils.clamp(command, -1f, 1f);
+        this.command = command;
 
         float commandedPosition = command >= 0f
                 ? command * FORWARD_TRAVEL
@@ -59,12 +66,11 @@ final class MotorcycleRiderDynamics {
                 -REARWARD_TRAVEL,
                 FORWARD_TRAVEL);
 
-        // Grounded movement stays planted. With both wheels clear the rider can deliberately
-        // throw their mass much faster, which is the main human pitch-control mechanism on a
-        // real dirt bike. Low airborne damping preserves the response generated during the move
-        // instead of immediately washing it back out.
-        float naturalFrequency = airborne ? 7.6f : 5.4f;
-        float dampingRatio = airborne ? 0.50f : 0.92f;
+        // Grounded movement stays planted. With both wheels clear, the rider needs to feel much
+        // more immediate: body position changes quickly enough to be useful during a normal jump
+        // instead of taking most of the airtime just to reach the requested posture.
+        float naturalFrequency = airborne ? 9.2f : 5.4f;
+        float dampingRatio = airborne ? 0.56f : 0.92f;
         float maxBodyAcceleration = airborne
                 ? AIRBORNE_MAX_BODY_ACCELERATION : GROUNDED_MAX_BODY_ACCELERATION;
         float maxBodySpeed = airborne ? AIRBORNE_MAX_BODY_SPEED : GROUNDED_MAX_BODY_SPEED;
@@ -99,16 +105,29 @@ final class MotorcycleRiderDynamics {
     }
 
     /**
-     * Chassis reaction to accelerating rider mass relative to the motorcycle.
-     * A fast forward body throw nudges the nose down; rearward movement nudges it up.
+     * Chassis reaction to rider movement and, in the air, active bar/peg leverage.
+     * A forward command pitches the nose down; a rearward command pitches it up.
      */
     float pitchReactionTorque(boolean airborne, boolean frontTouching) {
         float coupling = airborne ? 1.00f : (frontTouching ? 0.24f : 0.40f);
         float torque = -RIDER_MASS * acceleration * RIDER_FORCE_HEIGHT * coupling;
+
+        if (airborne) {
+            // Preserve the physically useful impulse from moving rider mass, but do not let the
+            // control disappear after the body reaches its target. A rider can keep loading the
+            // bars/pegs and rotating the bike while holding a posture in the air.
+            float shapedCommand = command * (0.72f + 0.28f * Math.abs(command));
+            torque += -shapedCommand * AIRBORNE_BAR_PEG_CONTROL_TORQUE;
+            return MathUtils.clamp(
+                    torque,
+                    -MAX_AIRBORNE_PITCH_REACTION_TORQUE,
+                    MAX_AIRBORNE_PITCH_REACTION_TORQUE);
+        }
+
         return MathUtils.clamp(
                 torque,
-                -MAX_PITCH_REACTION_TORQUE,
-                MAX_PITCH_REACTION_TORQUE);
+                -MAX_GROUNDED_PITCH_REACTION_TORQUE,
+                MAX_GROUNDED_PITCH_REACTION_TORQUE);
     }
 
     float position() {
@@ -127,5 +146,6 @@ final class MotorcycleRiderDynamics {
         position = 0f;
         velocity = 0f;
         acceleration = 0f;
+        command = 0f;
     }
 }
