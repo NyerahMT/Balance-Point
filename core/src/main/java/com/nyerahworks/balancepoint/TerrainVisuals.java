@@ -4,8 +4,6 @@ import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.GL20;
 import com.badlogic.gdx.graphics.Mesh;
-import com.badlogic.gdx.graphics.Pixmap;
-import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.VertexAttribute;
 import com.badlogic.gdx.graphics.VertexAttributes;
 import com.badlogic.gdx.graphics.g3d.Environment;
@@ -15,7 +13,6 @@ import com.badlogic.gdx.graphics.g3d.ModelBatch;
 import com.badlogic.gdx.graphics.g3d.ModelInstance;
 import com.badlogic.gdx.graphics.g3d.attributes.ColorAttribute;
 import com.badlogic.gdx.graphics.g3d.attributes.IntAttribute;
-import com.badlogic.gdx.graphics.g3d.attributes.TextureAttribute;
 import com.badlogic.gdx.graphics.g3d.utils.ModelBuilder;
 import com.badlogic.gdx.math.MathUtils;
 import com.badlogic.gdx.utils.Array;
@@ -27,36 +24,30 @@ import java.io.IOException;
 import java.util.ArrayList;
 
 /**
- * Streamed terrain renderer backed by an offline-eroded 16-bit heightfield.
+ * Streamed terrain backed by the same offline-eroded heightfield used by motorcycle collision.
  *
- * Rendering and motorcycle collision both sample the exact same triangulated surface. Near
- * terrain follows the source heightmap's 1.5 m grid; farther terrain progressively coarsens in
- * X while retaining continuous heights/normals.
- *
- * Presentation deliberately separates two spatial scales. Vertex color carries broad material
- * identity (healthy/dry grass, packed dirt, rock, worn riding lines and macro variation), while
- * a small repeatable neutral ground texture supplies close gravel/soil breakup. This prevents a
- * single world-sized texture from turning into blurry green paint at motorcycle distance.
+ * Visual material work intentionally does not use mesh UVs. The ground mesh carries only world
+ * position and geometric normal; ProfessionalTerrainShader performs scanned grass/dirt/rock
+ * blending in world space. That avoids UV stretching on hills and prevents terrain grid rows from
+ * becoming visible as texture bands at shallow camera angles.
  */
 final class TerrainVisuals {
     static final float FLAT_CORRIDOR_HALF_WIDTH = 27f;
 
     private static final String HEIGHT_PATH = "terrain/world.bpheight";
-    private static final int HEIGHT_MAGIC = 0x42504854; // BPHT
-
+    private static final int HEIGHT_MAGIC = 0x42504854;
     private static final float ROAD_EDGE = 4.22f;
     private static final float SEGMENT_LENGTH = 24f;
-    private static final int Z_CELLS = 16; // 1.5 m longitudinal mesh spacing
+    private static final int Z_CELLS = 16;
     private static final int SEGMENTS = 24;
     private static final int TREES_PER_SEGMENT = 8;
-    private static final float DETAIL_REPEAT_METERS = 5.4f;
     private static final float SUPERCROSS_CENTER_X = 7.5f;
     private static final float SUPERCROSS_Z_START = 18f;
     private static final float SUPERCROSS_Z_END = 270f;
+    private static final float TERRAIN_Y_OFFSET = -0.028f;
     private static final float[] X_SAMPLES = buildXSamples();
 
-    private final Model[] terrainModels = new Model[SEGMENTS];
-    private final ModelInstance[] terrainInstances = new ModelInstance[SEGMENTS];
+    private final Mesh[] terrainMeshes = new Mesh[SEGMENTS];
     private final Model[] groundDetailModels = new Model[SEGMENTS];
     private final ModelInstance[] groundDetailInstances = new ModelInstance[SEGMENTS];
     private final int[] terrainWorldIndex = new int[SEGMENTS];
@@ -64,6 +55,17 @@ final class TerrainVisuals {
     private final ModelInstance[] trunks = new ModelInstance[SEGMENTS * TREES_PER_SEGMENT * 2];
     private final boolean[] treeActive = new boolean[SEGMENTS * TREES_PER_SEGMENT * 2];
     private final float[] treeWorldZ = new float[SEGMENTS * TREES_PER_SEGMENT * 2];
+
+    private final ProfessionalTerrainShader terrainShader;
+    private final Material groundDetailMaterial;
+    private final Color colorScratch = new Color();
+    private final SurfaceSample surfaceScratch = new SurfaceSample();
+    private final CellSample cellScratch = new CellSample();
+
+    private final FastNoiseLite materialNoise = createNoise(4502157, 0.035f, 4, 0.48f);
+    private final FastNoiseLite macroNoise = createNoise(4502281, 0.0065f, 4, 0.52f);
+    private final FastNoiseLite dryNoise = createNoise(4502399, 0.014f, 3, 0.55f);
+    private final FastNoiseLite scatterNoise = createNoise(4502603, 0.055f, 3, 0.50f);
 
     private int mapWidth;
     private int mapHeight;
@@ -74,29 +76,9 @@ final class TerrainVisuals {
     private float encodedMax;
     private short[] heightSamples;
 
-    private final Texture terrainTexture;
-    private final Material terrainMaterial;
-    private final Material groundDetailMaterial;
-    private final Color colorScratch = new Color();
-    private final SurfaceSample surfaceScratch = new SurfaceSample();
-
-    // Multiple independent scales stop the terrain from advertising one procedural frequency.
-    private final FastNoiseLite surfaceNoise = createNoise(4502157, 0.035f, 4, 0.48f);
-    private final FastNoiseLite macroNoise = createNoise(4502281, 0.0065f, 4, 0.52f);
-    private final FastNoiseLite dryNoise = createNoise(4502399, 0.014f, 3, 0.55f);
-    private final FastNoiseLite fineNoise = createNoise(4502477, 0.135f, 3, 0.46f);
-
     TerrainVisuals(Array<Model> ownedModels) {
         loadHeightfield();
-
-        terrainTexture = createGroundDetailTexture();
-        terrainTexture.setFilter(Texture.TextureFilter.MipMapLinearLinear,
-                Texture.TextureFilter.Linear);
-        terrainTexture.setWrap(Texture.TextureWrap.Repeat, Texture.TextureWrap.Repeat);
-        terrainMaterial = new Material(
-                TextureAttribute.createDiffuse(terrainTexture),
-                ColorAttribute.createDiffuse(Color.WHITE),
-                IntAttribute.createCullFace(GL20.GL_NONE));
+        terrainShader = new ProfessionalTerrainShader();
         groundDetailMaterial = new Material(
                 ColorAttribute.createDiffuse(Color.WHITE),
                 IntAttribute.createCullFace(GL20.GL_NONE));
@@ -105,12 +87,12 @@ final class TerrainVisuals {
             terrainWorldIndex[i] = Integer.MIN_VALUE;
         }
 
-        ModelBuilder b = new ModelBuilder();
+        ModelBuilder builder = new ModelBuilder();
         Material foliage = material(0.105f, 0.235f, 0.095f);
         Material trunk = material(0.25f, 0.17f, 0.09f);
-        Model canopy = b.createCone(2f, 4.8f, 2f, 8, foliage,
+        Model canopy = builder.createCone(2f, 4.8f, 2f, 8, foliage,
                 VertexAttributes.Usage.Position | VertexAttributes.Usage.Normal);
-        Model trunkModel = b.createCylinder(0.38f, 2.7f, 0.38f, 7, trunk,
+        Model trunkModel = builder.createCylinder(0.38f, 2.7f, 0.38f, 7, trunk,
                 VertexAttributes.Usage.Position | VertexAttributes.Usage.Normal);
         ownedModels.add(canopy);
         ownedModels.add(trunkModel);
@@ -123,27 +105,31 @@ final class TerrainVisuals {
     }
 
     private void loadHeightfield() {
-        try (DataInputStream in = new DataInputStream(new BufferedInputStream(
+        try (DataInputStream input = new DataInputStream(new BufferedInputStream(
                 Gdx.files.internal(HEIGHT_PATH).read(), 1 << 20))) {
-            if (in.readInt() != HEIGHT_MAGIC) {
+            if (input.readInt() != HEIGHT_MAGIC) {
                 throw new GdxRuntimeException("Invalid Balance Point terrain heightfield");
             }
-            int version = in.readInt();
-            if (version != 1) throw new GdxRuntimeException("Unsupported terrain version " + version);
+            int version = input.readInt();
+            if (version != 1) {
+                throw new GdxRuntimeException("Unsupported terrain version " + version);
+            }
 
-            mapWidth = in.readInt();
-            mapHeight = in.readInt();
-            sampleSpacing = in.readFloat();
-            originX = in.readFloat();
-            originZ = in.readFloat();
-            encodedMin = in.readFloat();
-            encodedMax = in.readFloat();
-
+            mapWidth = input.readInt();
+            mapHeight = input.readInt();
+            sampleSpacing = input.readFloat();
+            originX = input.readFloat();
+            originZ = input.readFloat();
+            encodedMin = input.readFloat();
+            encodedMax = input.readFloat();
             if (mapWidth < 2 || mapHeight < 2 || sampleSpacing <= 0f) {
                 throw new GdxRuntimeException("Invalid terrain dimensions");
             }
+
             heightSamples = new short[mapWidth * mapHeight];
-            for (int i = 0; i < heightSamples.length; i++) heightSamples[i] = in.readShort();
+            for (int i = 0; i < heightSamples.length; i++) {
+                heightSamples[i] = input.readShort();
+            }
         } catch (IOException e) {
             throw new GdxRuntimeException("Could not load " + HEIGHT_PATH, e);
         }
@@ -154,81 +140,34 @@ final class TerrainVisuals {
     }
 
     private static FastNoiseLite createNoise(int seed, float frequency, int octaves, float gain) {
-        FastNoiseLite n = new FastNoiseLite(seed);
-        n.SetNoiseType(FastNoiseLite.NoiseType.Perlin);
-        n.SetFractalType(FastNoiseLite.FractalType.FBm);
-        n.SetFrequency(frequency);
-        n.SetFractalOctaves(octaves);
-        n.SetFractalGain(gain);
-        n.SetFractalLacunarity(2.0f);
-        return n;
-    }
-
-    private Texture createGroundDetailTexture() {
-        final int size = 256;
-        Pixmap pixmap = new Pixmap(size, size, Pixmap.Format.RGB888);
-        for (int y = 0; y < size; y++) {
-            float v = MathUtils.PI2 * y / size;
-            for (int x = 0; x < size; x++) {
-                float u = MathUtils.PI2 * x / size;
-                float wave = MathUtils.sin(u * 3f + v * 2f + 0.7f) * 0.13f
-                        + MathUtils.sin(u * 7f - v * 5f + 2.1f) * 0.09f
-                        + MathUtils.cos(u * 13f + v * 11f + 1.4f) * 0.055f
-                        + MathUtils.sin(u * 29f - v * 23f + 0.2f) * 0.030f;
-                float grit = hash01(x * 313 + y * 911, 733) - 0.5f;
-                float value = MathUtils.clamp(0.86f + wave + grit * 0.11f, 0.58f, 1f);
-                float warm = MathUtils.sin(u * 17f + 0.4f) * 0.010f;
-                pixmap.setColor(
-                        MathUtils.clamp(value + warm, 0f, 1f),
-                        MathUtils.clamp(value - 0.010f, 0f, 1f),
-                        MathUtils.clamp(value - 0.025f - warm * 0.3f, 0f, 1f),
-                        1f);
-                pixmap.drawPixel(x, y);
-            }
-        }
-
-        // Tiny aggregate marks are wrapped manually at texture edges. They are intentionally
-        // neutral: macro terrain color decides whether the same physical grain reads as dirt,
-        // stone or vegetation shadow instead of stamping one photo tile everywhere.
-        for (int i = 0; i < 900; i++) {
-            int cx = (int) (hash01(i, 811) * size) % size;
-            int cy = (int) (hash01(i, 823) * size) % size;
-            int radius = hash01(i, 829) > 0.72f ? 2 : 1;
-            float light = hash01(i, 839) > 0.76f ? 0.96f : 0.64f;
-            for (int dy = -radius; dy <= radius; dy++) {
-                for (int dx = -radius; dx <= radius; dx++) {
-                    if (dx * dx + dy * dy > radius * radius) continue;
-                    int px = (cx + dx + size) % size;
-                    int py = (cy + dy + size) % size;
-                    pixmap.setColor(light, light * 0.98f, light * 0.93f, 1f);
-                    pixmap.drawPixel(px, py);
-                }
-            }
-        }
-
-        Texture texture = new Texture(pixmap, true);
-        pixmap.dispose();
-        return texture;
+        FastNoiseLite noise = new FastNoiseLite(seed);
+        noise.SetNoiseType(FastNoiseLite.NoiseType.Perlin);
+        noise.SetFractalType(FastNoiseLite.FractalType.FBm);
+        noise.SetFrequency(frequency);
+        noise.SetFractalOctaves(octaves);
+        noise.SetFractalGain(gain);
+        noise.SetFractalLacunarity(2.0f);
+        return noise;
     }
 
     /** Longitudinal tire friction coefficient at a world point. */
     float tractionCoefficient(float x, float z) {
         if (Math.abs(x) <= ROAD_EDGE) return 1.00f;
 
-        float h = groundHeight(x, z);
+        float height = groundHeight(x, z);
         float sx = groundSlopeX(x, z);
         float sz = groundSlopeZ(x, z);
         float slope = (float) Math.sqrt(sx * sx + sz * sz);
-        SurfaceSample s = classifySurface(x, z, h, slope, surfaceScratch);
-
-        // Dry MX-knobby peak grip. Loose surfaces still fall off through the slip curve.
-        return MathUtils.clamp(s.grass * 0.94f + s.dirt * 0.98f + s.rock * 0.90f,
-                0.88f, 0.985f);
+        SurfaceSample surface = classifySurface(x, z, height, slope, surfaceScratch);
+        return MathUtils.clamp(
+                surface.grass * 0.94f + surface.dirt * 0.98f + surface.rock * 0.90f,
+                0.88f,
+                0.985f);
     }
 
     private SurfaceSample classifySurface(float x, float z, float height, float slope,
                                           SurfaceSample out) {
-        float patch = noise01(surfaceNoise, x, z);
+        float patch = noise01(materialNoise, x, z);
         float macro = noise01(macroNoise, x, z);
         float wear = rideWear(x, z);
 
@@ -267,57 +206,7 @@ final class TerrainVisuals {
         float laneX = 1f - smootherStep(1.45f, 3.45f, Math.abs(x - SUPERCROSS_CENTER_X));
         float enter = smootherStep(SUPERCROSS_Z_START, SUPERCROSS_Z_START + 10f, z);
         float leave = 1f - smootherStep(SUPERCROSS_Z_END - 12f, SUPERCROSS_Z_END, z);
-        float track = laneX * Math.min(enter, leave);
-        return MathUtils.clamp(Math.max(shoulder, track), 0f, 1f);
-    }
-
-    private float terrainColorBits(float x, float z, float height, float slope) {
-        SurfaceSample s = classifySurface(x, z, height, slope, surfaceScratch);
-        float macro = macroNoise.GetNoise(x, z);
-        float dryField = noise01(dryNoise, x, z);
-        float fine = fineNoise.GetNoise(x, z);
-
-        float dryness = MathUtils.clamp(
-                dryField * 0.78f + smootherStep(35f, 92f, height) * 0.24f,
-                0f, 1f);
-
-        float grassR = MathUtils.lerp(0.155f, 0.385f, dryness);
-        float grassG = MathUtils.lerp(0.305f, 0.340f, dryness);
-        float grassB = MathUtils.lerp(0.075f, 0.155f, dryness);
-
-        float dirtDark = s.wear * (0.30f + 0.20f * noise01(fineNoise, x * 1.8f, z * 1.8f));
-        float dirtR = MathUtils.lerp(0.38f, 0.285f, dirtDark);
-        float dirtG = MathUtils.lerp(0.235f, 0.165f, dirtDark);
-        float dirtB = MathUtils.lerp(0.105f, 0.065f, dirtDark);
-
-        float rockR = 0.315f;
-        float rockG = 0.305f;
-        float rockB = 0.275f;
-
-        float r = grassR * s.grass + dirtR * s.dirt + rockR * s.rock;
-        float g = grassG * s.grass + dirtG * s.dirt + rockG * s.rock;
-        float b = grassB * s.grass + dirtB * s.dirt + rockB * s.rock;
-
-        // Broad tonal breakup plus small local variation. Fine texture still supplies the true
-        // close-frequency detail, so this never turns into visible procedural TV static.
-        float brightness = 0.94f + macro * 0.085f + fine * 0.050f;
-
-        // Cheap terrain AO from local concavity. It darkens drainage folds and the bases of
-        // rough shapes without painting shadows in one fixed sun direction.
-        float probe = sampleSpacing * 1.5f;
-        float center = sourceHeight(x, z);
-        float neighborhood = (sourceHeight(x + probe, z) + sourceHeight(x - probe, z)
-                + sourceHeight(x, z + probe) + sourceHeight(x, z - probe)) * 0.25f;
-        float concavity = MathUtils.clamp((neighborhood - center) * 0.30f, -0.08f, 0.16f);
-        if (concavity > 0f) brightness *= 1f - concavity * 0.75f;
-        else brightness *= 1f - concavity * 0.22f;
-
-        colorScratch.set(
-                MathUtils.clamp(r * brightness, 0.035f, 0.72f),
-                MathUtils.clamp(g * brightness, 0.030f, 0.70f),
-                MathUtils.clamp(b * brightness, 0.025f, 0.58f),
-                1f);
-        return colorScratch.toFloatBits();
+        return MathUtils.clamp(Math.max(shoulder, laneX * Math.min(enter, leave)), 0f, 1f);
     }
 
     private static float noise01(FastNoiseLite noise, float x, float z) {
@@ -328,8 +217,6 @@ final class TerrainVisuals {
         float t = MathUtils.clamp((x - edge0) / (edge1 - edge0), 0f, 1f);
         return t * t * t * (t * (t * 6f - 15f) + 10f);
     }
-
-    private static final float TERRAIN_Y_OFFSET = -0.028f;
 
     float groundHeight(float x, float z) {
         if (Math.abs(x) <= ROAD_EDGE) return 0f;
@@ -351,20 +238,19 @@ final class TerrainVisuals {
         if (fx + fz <= 1f) {
             return h00 + fx * (h10 - h00) + fz * (h01 - h00);
         }
-        return h11 + (1f - fx) * (h01 - h11)
-                + (1f - fz) * (h10 - h11);
+        return h11 + (1f - fx) * (h01 - h11) + (1f - fz) * (h10 - h11);
     }
 
     float groundSlopeX(float x, float z) {
         if (Math.abs(x) <= ROAD_EDGE) return 0f;
-        float r = sampleSpacing * 2f;
-        return (groundHeight(x + r, z) - groundHeight(x - r, z)) / (2f * r);
+        float radius = sampleSpacing * 2f;
+        return (groundHeight(x + radius, z) - groundHeight(x - radius, z)) / (2f * radius);
     }
 
     float groundSlopeZ(float x, float z) {
         if (Math.abs(x) <= ROAD_EDGE) return 0f;
-        float r = sampleSpacing * 2f;
-        return (groundHeight(x, z + r) - groundHeight(x, z - r)) / (2f * r);
+        float radius = sampleSpacing * 2f;
+        return (groundHeight(x, z + radius) - groundHeight(x, z - radius)) / (2f * radius);
     }
 
     private float meshVertexHeight(float x, float z) {
@@ -373,19 +259,18 @@ final class TerrainVisuals {
     }
 
     private float sourceHeight(float x, float z) {
-        CellSample c = sourceCell(x, z);
-        if (c.fx + c.fz <= 1f) {
-            return c.h00 + c.fx * (c.h10 - c.h00) + c.fz * (c.h01 - c.h00);
+        CellSample cell = sourceCell(x, z);
+        if (cell.fx + cell.fz <= 1f) {
+            return cell.h00 + cell.fx * (cell.h10 - cell.h00) + cell.fz * (cell.h01 - cell.h00);
         }
-        return c.h11 + (1f - c.fx) * (c.h01 - c.h11)
-                + (1f - c.fz) * (c.h10 - c.h11);
+        return cell.h11 + (1f - cell.fx) * (cell.h01 - cell.h11)
+                + (1f - cell.fz) * (cell.h10 - cell.h11);
     }
 
     private int renderXCell(float x) {
         if (x <= X_SAMPLES[0]) return 0;
         int last = X_SAMPLES.length - 1;
         if (x >= X_SAMPLES[last]) return last - 1;
-
         int lo = 0;
         int hi = last;
         while (hi - lo > 1) {
@@ -401,17 +286,14 @@ final class TerrainVisuals {
         float gz = MathUtils.clamp((z - originZ) / sampleSpacing, 0f, mapHeight - 1.001f);
         int ix = MathUtils.floor(gx);
         int iz = MathUtils.floor(gz);
-        CellSample c = cellScratch;
-        c.fx = gx - ix;
-        c.fz = gz - iz;
-        c.h00 = decoded(ix, iz);
-        c.h10 = decoded(ix + 1, iz);
-        c.h01 = decoded(ix, iz + 1);
-        c.h11 = decoded(ix + 1, iz + 1);
-        return c;
+        cellScratch.fx = gx - ix;
+        cellScratch.fz = gz - iz;
+        cellScratch.h00 = decoded(ix, iz);
+        cellScratch.h10 = decoded(ix + 1, iz);
+        cellScratch.h01 = decoded(ix, iz + 1);
+        cellScratch.h11 = decoded(ix + 1, iz + 1);
+        return cellScratch;
     }
-
-    private final CellSample cellScratch = new CellSample();
 
     private float decoded(int x, int z) {
         int q = heightSamples[z * mapWidth + x] & 0xffff;
@@ -429,10 +311,9 @@ final class TerrainVisuals {
     }
 
     private void rebuildSegment(int slot, int worldIndex) {
-        if (terrainModels[slot] != null) {
-            terrainModels[slot].dispose();
-            terrainModels[slot] = null;
-            terrainInstances[slot] = null;
+        if (terrainMeshes[slot] != null) {
+            terrainMeshes[slot].dispose();
+            terrainMeshes[slot] = null;
         }
         if (groundDetailModels[slot] != null) {
             groundDetailModels[slot].dispose();
@@ -440,26 +321,22 @@ final class TerrainVisuals {
             groundDetailInstances[slot] = null;
         }
 
-        Model model = buildSegmentModel(worldIndex);
-        terrainModels[slot] = model;
-        terrainInstances[slot] = new ModelInstance(model);
-
+        terrainMeshes[slot] = buildSegmentMesh(worldIndex);
         Model details = buildGroundDetailModel(worldIndex);
         groundDetailModels[slot] = details;
         groundDetailInstances[slot] = details == null ? null : new ModelInstance(details);
-
         terrainWorldIndex[slot] = worldIndex;
         placeTreesForSegment(slot, worldIndex);
     }
 
-    private Model buildSegmentModel(int worldIndex) {
+    private Mesh buildSegmentMesh(int worldIndex) {
         float zStart = worldIndex * SEGMENT_LENGTH;
         float zStep = SEGMENT_LENGTH / Z_CELLS;
         int xCount = X_SAMPLES.length;
         int zCount = Z_CELLS + 1;
         int vertexCount = xCount * zCount;
         int indexCount = (xCount - 1) * Z_CELLS * 6;
-        float[] vertices = new float[vertexCount * 9]; // pos3 + normal3 + packedColor1 + uv2
+        float[] vertices = new float[vertexCount * 6];
         short[] indices = new short[indexCount];
 
         int vo = 0;
@@ -469,23 +346,13 @@ final class TerrainVisuals {
                 float y = meshVertexHeight(x, z);
                 float sx = groundSlopeX(x, z);
                 float sz = groundSlopeZ(x, z);
-                float slope = (float) Math.sqrt(sx * sx + sz * sz);
                 float inv = 1f / (float) Math.sqrt(1f + sx * sx + sz * sz);
-
                 vertices[vo++] = x;
                 vertices[vo++] = y;
                 vertices[vo++] = z;
                 vertices[vo++] = -sx * inv;
                 vertices[vo++] = inv;
                 vertices[vo++] = -sz * inv;
-                vertices[vo++] = terrainColorBits(x, z, y - TERRAIN_Y_OFFSET, slope);
-
-                // Slightly warp UV phase with macro fields so the neutral micro texture does not
-                // line up as an obvious world grid even though the texture itself tiles cleanly.
-                float warpU = macroNoise.GetNoise(x * 0.45f + 91f, z * 0.45f) * 0.52f;
-                float warpV = surfaceNoise.GetNoise(x * 0.50f, z * 0.50f - 117f) * 0.52f;
-                vertices[vo++] = (x + warpU) / DETAIL_REPEAT_METERS;
-                vertices[vo++] = (z + warpV) / DETAIL_REPEAT_METERS;
             }
         }
 
@@ -508,26 +375,21 @@ final class TerrainVisuals {
         }
 
         Mesh mesh = new Mesh(true, vertexCount, indexCount,
-                VertexAttribute.Position(), VertexAttribute.Normal(),
-                VertexAttribute.ColorPacked(), VertexAttribute.TexCoords(0));
+                VertexAttribute.Position(), VertexAttribute.Normal());
         mesh.setVertices(vertices);
         mesh.setIndices(indices);
-
-        ModelBuilder builder = new ModelBuilder();
-        builder.begin();
-        builder.part("eroded_terrain", mesh, GL20.GL_TRIANGLES, terrainMaterial);
-        return builder.end();
+        return mesh;
     }
 
     private Model buildGroundDetailModel(int worldIndex) {
-        DetailMeshBuilder out = new DetailMeshBuilder(2600, 5400);
+        DetailMeshBuilder output = new DetailMeshBuilder(5200, 9000);
         float zStart = worldIndex * SEGMENT_LENGTH;
 
-        for (int i = 0; i < 116; i++) {
-            float x = MathUtils.lerp(-52f, 52f, hash01(worldIndex * 409 + i, 901));
+        for (int i = 0; i < 176; i++) {
+            float x = MathUtils.lerp(-54f, 54f, hash01(worldIndex * 409 + i, 901));
             float z = zStart + 0.35f
                     + hash01(worldIndex * 421 + i, 919) * (SEGMENT_LENGTH - 0.70f);
-            if (Math.abs(x) <= ROAD_EDGE + 0.85f) continue;
+            if (Math.abs(x) <= ROAD_EDGE + 0.90f) continue;
 
             float y = groundHeight(x, z);
             float sx = groundSlopeX(x, z);
@@ -535,22 +397,26 @@ final class TerrainVisuals {
             float slope = (float) Math.sqrt(sx * sx + sz * sz);
             if (slope > 0.90f) continue;
 
-            SurfaceSample s = classifySurface(x, z, y, slope, surfaceScratch);
+            SurfaceSample surface = classifySurface(x, z, y, slope, surfaceScratch);
+            float cluster = noise01(scatterNoise, x, z);
             float spawn = hash01(worldIndex * 433 + i, 937);
+            float grassChance = (0.18f + surface.grass * 0.55f) * MathUtils.lerp(0.55f, 1.25f, cluster);
 
-            if (s.wear < 0.32f && s.grass > 0.30f
-                    && spawn < 0.24f + s.grass * 0.58f) {
-                addGrassClump(out, x, y + 0.012f, z, worldIndex, i);
-            } else if (spawn > 0.83f && (s.rock > 0.16f || s.dirt > 0.48f)) {
-                addRock(out, x, y + 0.008f, z, worldIndex, i, s.rock);
+            if (surface.wear < 0.30f && surface.grass > 0.30f && spawn < grassChance) {
+                addGrassClump(output, x, y + 0.012f, z, worldIndex, i);
+            } else if (spawn > 0.88f && (surface.rock > 0.15f || surface.dirt > 0.48f)) {
+                addRock(output, x, y + 0.008f, z, worldIndex, i, surface.rock);
             }
         }
 
-        if (out.vertexCount == 0) return null;
-        Mesh mesh = new Mesh(true, out.vertexCount, out.indexCount,
+        if (output.vertexCount == 0) return null;
+        Mesh mesh = new Mesh(true, output.vertexCount, output.indexCount,
                 VertexAttribute.Position(), VertexAttribute.Normal(), VertexAttribute.ColorPacked());
-        mesh.setVertices(out.vertices, 0, out.vertexCount * DetailMeshBuilder.FLOATS_PER_VERTEX);
-        mesh.setIndices(out.indices, 0, out.indexCount);
+        mesh.setVertices(
+                output.vertices,
+                0,
+                output.vertexCount * DetailMeshBuilder.FLOATS_PER_VERTEX);
+        mesh.setIndices(output.indices, 0, output.indexCount);
 
         ModelBuilder builder = new ModelBuilder();
         builder.begin();
@@ -558,115 +424,147 @@ final class TerrainVisuals {
         return builder.end();
     }
 
-    private void addGrassClump(DetailMeshBuilder out, float x, float y, float z,
+    private void addGrassClump(DetailMeshBuilder output, float x, float y, float z,
                                int worldIndex, int item) {
-        int blades = 3 + (int) (hash01(worldIndex * 457 + item, 953) * 3f);
+        int blades = 4 + (int) (hash01(worldIndex * 457 + item, 953) * 4f);
         float dry = noise01(dryNoise, x, z);
-        for (int b = 0; b < blades; b++) {
-            float rnd = hash01(item * 17 + b, worldIndex * 31 + 971);
-            float angle = rnd * MathUtils.PI2 + b * 1.71f;
+        for (int blade = 0; blade < blades; blade++) {
+            float angle = hash01(item * 17 + blade, worldIndex * 31 + 971) * MathUtils.PI2;
             float rightX = MathUtils.cos(angle);
             float rightZ = MathUtils.sin(angle);
-            float normalX = -rightZ;
-            float normalZ = rightX;
-            float width = MathUtils.lerp(0.018f, 0.050f,
-                    hash01(item * 23 + b, worldIndex * 43 + 977));
-            float height = MathUtils.lerp(0.12f, 0.34f,
-                    hash01(item * 29 + b, worldIndex * 47 + 983));
-            float jitterX = (hash01(item * 37 + b, 991) - 0.5f) * 0.32f;
-            float jitterZ = (hash01(item * 41 + b, 997) - 0.5f) * 0.32f;
-            float lean = (hash01(item * 53 + b, 1009) - 0.5f) * height * 0.25f;
+            float width = MathUtils.lerp(
+                    0.016f,
+                    0.040f,
+                    hash01(item * 23 + blade, worldIndex * 43 + 977));
+            float height = MathUtils.lerp(
+                    0.13f,
+                    0.35f,
+                    hash01(item * 29 + blade, worldIndex * 47 + 983));
+            float jitterX = (hash01(item * 37 + blade, 991) - 0.5f) * 0.38f;
+            float jitterZ = (hash01(item * 41 + blade, 997) - 0.5f) * 0.38f;
+            float leanX = (hash01(item * 53 + blade, 1009) - 0.5f) * height * 0.22f;
+            float leanZ = (hash01(item * 61 + blade, 1013) - 0.5f) * height * 0.22f;
 
-            float baseR = MathUtils.lerp(0.12f, 0.42f, dry);
-            float baseG = MathUtils.lerp(0.31f, 0.36f, dry);
-            float baseB = MathUtils.lerp(0.055f, 0.13f, dry);
-            float shade = MathUtils.lerp(0.82f, 1.10f,
-                    hash01(item * 59 + b, worldIndex * 61 + 1013));
+            float baseR = MathUtils.lerp(0.13f, 0.39f, dry);
+            float baseG = MathUtils.lerp(0.31f, 0.35f, dry);
+            float baseB = MathUtils.lerp(0.06f, 0.12f, dry);
+            float shade = MathUtils.lerp(
+                    0.94f,
+                    1.12f,
+                    hash01(item * 67 + blade, worldIndex * 71 + 1019));
             colorScratch.set(baseR * shade, baseG * shade, baseB * shade, 1f);
             float color = colorScratch.toFloatBits();
 
             float cx = x + jitterX;
             float cz = z + jitterZ;
-            short a = out.vertex(cx - rightX * width, y, cz - rightZ * width,
-                    normalX, 0.20f, normalZ, color);
-            short c = out.vertex(cx + rightX * width, y, cz + rightZ * width,
-                    normalX, 0.20f, normalZ, color);
-            short tip = out.vertex(cx + normalX * lean, y + height, cz + normalZ * lean,
-                    normalX, 0.20f, normalZ, color);
-            out.triangle(a, c, tip);
+            float topX = cx + leanX;
+            float topZ = cz + leanZ;
+            short a = output.vertex(
+                    cx - rightX * width,
+                    y,
+                    cz - rightZ * width,
+                    0f,
+                    0.82f,
+                    0f,
+                    color);
+            short b = output.vertex(
+                    cx + rightX * width,
+                    y,
+                    cz + rightZ * width,
+                    0f,
+                    0.82f,
+                    0f,
+                    color);
+            short c = output.vertex(
+                    topX + rightX * width * 0.18f,
+                    y + height,
+                    topZ + rightZ * width * 0.18f,
+                    0f,
+                    0.82f,
+                    0f,
+                    color);
+            short d = output.vertex(
+                    topX - rightX * width * 0.18f,
+                    y + height,
+                    topZ - rightZ * width * 0.18f,
+                    0f,
+                    0.82f,
+                    0f,
+                    color);
+            output.triangle(a, b, c);
+            output.triangle(a, c, d);
         }
     }
 
-    private void addRock(DetailMeshBuilder out, float x, float y, float z,
+    private void addRock(DetailMeshBuilder output, float x, float y, float z,
                          int worldIndex, int item, float rockiness) {
-        float radius = MathUtils.lerp(0.055f, 0.18f,
-                hash01(worldIndex * 71 + item, 1031));
+        float radius = MathUtils.lerp(0.055f, 0.18f, hash01(worldIndex * 71 + item, 1031));
         float height = radius * MathUtils.lerp(0.45f, 1.05f,
                 hash01(worldIndex * 73 + item, 1033));
-        float gray = MathUtils.lerp(0.25f, 0.39f,
-                hash01(worldIndex * 79 + item, 1039));
+        float gray = MathUtils.lerp(0.26f, 0.40f, hash01(worldIndex * 79 + item, 1039));
         float dirtTint = 1f - rockiness;
         colorScratch.set(
-                gray + dirtTint * 0.055f,
-                gray * 0.95f + dirtTint * 0.018f,
+                gray + dirtTint * 0.045f,
+                gray * 0.95f + dirtTint * 0.016f,
                 gray * 0.85f,
                 1f);
         float color = colorScratch.toFloatBits();
 
-        short a = out.vertex(x - radius, y, z - radius * 0.72f, 0f, 1f, 0f, color);
-        short b = out.vertex(x + radius, y, z - radius * 0.72f, 0f, 1f, 0f, color);
-        short c = out.vertex(x + radius * 0.74f, y, z + radius, 0f, 1f, 0f, color);
-        short d = out.vertex(x - radius * 0.78f, y, z + radius * 0.86f, 0f, 1f, 0f, color);
-        short top = out.vertex(
+        short a = output.vertex(x - radius, y, z - radius * 0.72f, 0f, 0.72f, 0f, color);
+        short b = output.vertex(x + radius, y, z - radius * 0.72f, 0f, 0.72f, 0f, color);
+        short c = output.vertex(x + radius * 0.74f, y, z + radius, 0f, 0.72f, 0f, color);
+        short d = output.vertex(x - radius * 0.78f, y, z + radius * 0.86f, 0f, 0.72f, 0f, color);
+        short top = output.vertex(
                 x + (hash01(item, 1049) - 0.5f) * radius * 0.45f,
                 y + height,
                 z + (hash01(item, 1051) - 0.5f) * radius * 0.45f,
-                0f, 1f, 0f, color);
-        out.triangle(a, b, top);
-        out.triangle(b, c, top);
-        out.triangle(c, d, top);
-        out.triangle(d, a, top);
-        out.triangle(a, d, c);
-        out.triangle(a, c, b);
+                0f,
+                1f,
+                0f,
+                color);
+        output.triangle(a, b, top);
+        output.triangle(b, c, top);
+        output.triangle(c, d, top);
+        output.triangle(d, a, top);
+        output.triangle(a, d, c);
+        output.triangle(a, c, b);
     }
 
     private static float[] buildXSamples() {
-        ArrayList<Float> xs = new ArrayList<>();
-        for (float x = -375f; x <= -244.5f + 0.01f; x += 9f) xs.add(x);
-        for (float x = -240f; x <= -100.5f + 0.01f; x += 4.5f) xs.add(x);
-        for (float x = -96f; x <= -6f + 0.01f; x += 1.5f) xs.add(x);
-        xs.add(-ROAD_EDGE);
-        xs.add(ROAD_EDGE);
-        for (float x = 6f; x <= 96f + 0.01f; x += 1.5f) xs.add(x);
-        for (float x = 100.5f; x <= 240f + 0.01f; x += 4.5f) xs.add(x);
-        for (float x = 244.5f; x <= 375f + 0.01f; x += 9f) xs.add(x);
-        float[] result = new float[xs.size()];
-        for (int i = 0; i < result.length; i++) result[i] = xs.get(i);
+        ArrayList<Float> samples = new ArrayList<>();
+        for (float x = -375f; x <= -244.5f + 0.01f; x += 9f) samples.add(x);
+        for (float x = -240f; x <= -100.5f + 0.01f; x += 4.5f) samples.add(x);
+        for (float x = -96f; x <= -6f + 0.01f; x += 1.5f) samples.add(x);
+        samples.add(-ROAD_EDGE);
+        samples.add(ROAD_EDGE);
+        for (float x = 6f; x <= 96f + 0.01f; x += 1.5f) samples.add(x);
+        for (float x = 100.5f; x <= 240f + 0.01f; x += 4.5f) samples.add(x);
+        for (float x = 244.5f; x <= 375f + 0.01f; x += 9f) samples.add(x);
+        float[] result = new float[samples.size()];
+        for (int i = 0; i < result.length; i++) result[i] = samples.get(i);
         return result;
     }
 
     private void placeTreesForSegment(int slot, int worldIndex) {
         float zStart = worldIndex * SEGMENT_LENGTH;
         int base = slot * TREES_PER_SEGMENT * 2;
-        for (int t = 0; t < TREES_PER_SEGMENT; t++) {
-            placeTree(base + t * 2, -1f, worldIndex, t, zStart);
-            placeTree(base + t * 2 + 1, 1f, worldIndex, t, zStart);
+        for (int tree = 0; tree < TREES_PER_SEGMENT; tree++) {
+            placeTree(base + tree * 2, -1f, worldIndex, tree, zStart);
+            placeTree(base + tree * 2 + 1, 1f, worldIndex, tree, zStart);
         }
     }
 
-    private void placeTree(int index, float side, int worldIndex, int t, float zStart) {
+    private void placeTree(int index, float side, int worldIndex, int tree, float zStart) {
         int salt = side < 0f ? 211 : 223;
-        float keep = hash01(worldIndex * 43 + t, salt);
-        if (keep < 0.22f) {
+        if (hash01(worldIndex * 43 + tree, salt) < 0.22f) {
             hideTree(index);
             return;
         }
 
-        float treeZ = zStart + 0.8f + hash01(worldIndex * 53 + t, salt + 5)
+        float treeZ = zStart + 0.8f + hash01(worldIndex * 53 + tree, salt + 5)
                 * (SEGMENT_LENGTH - 1.6f);
-        float radial = hash01(worldIndex * 61 + t, salt + 9);
-        float ax = MathUtils.lerp(11f, 128f, radial * radial);
-        float x = side * ax;
+        float radial = hash01(worldIndex * 61 + tree, salt + 9);
+        float x = side * MathUtils.lerp(11f, 128f, radial * radial);
         float slopeX = groundSlopeX(x, treeZ);
         float slopeZ = groundSlopeZ(x, treeZ);
         float slope = (float) Math.sqrt(slopeX * slopeX + slopeZ * slopeZ);
@@ -675,7 +573,7 @@ final class TerrainVisuals {
             return;
         }
 
-        float scale = 0.70f + hash01(worldIndex * 67 + t, salt + 13) * 0.72f;
+        float scale = 0.70f + hash01(worldIndex * 67 + tree, salt + 13) * 0.72f;
         float ground = groundHeight(x, treeZ);
         trunks[index].transform.setToTranslation(x, ground + 1.22f * scale, treeZ)
                 .scale(scale, scale, scale);
@@ -701,19 +599,23 @@ final class TerrainVisuals {
     }
 
     void render(ModelBatch batch, Environment environment, float centerZ, boolean highQuality) {
-        for (ModelInstance instance : terrainInstances) {
-            if (instance != null) batch.render(instance, environment);
+        // Terrain uses a purpose-built material shader. Flush the regular batch before touching
+        // its shared RenderContext, then hand control back for vegetation/road/bike rendering.
+        batch.flush();
+        terrainShader.begin(batch.getCamera(), batch.getRenderContext(), environment);
+        for (Mesh mesh : terrainMeshes) {
+            if (mesh != null) terrainShader.render(mesh);
         }
+        terrainShader.end();
 
-        // Dense geometry detail exists only near the player and only in high quality. Each 24 m
-        // segment is one mesh/draw call, so this remains dramatically cheaper than hundreds of
-        // individual grass sprites or ModelInstances.
         if (highQuality) {
             for (int i = 0; i < groundDetailInstances.length; i++) {
                 ModelInstance instance = groundDetailInstances[i];
                 if (instance == null || terrainWorldIndex[i] == Integer.MIN_VALUE) continue;
                 float segmentCenter = terrainWorldIndex[i] * SEGMENT_LENGTH + SEGMENT_LENGTH * 0.5f;
-                if (Math.abs(segmentCenter - centerZ) <= 132f) {
+                // Tiny geometry aliases into black specks at long range. Professionals LOD it out
+                // instead of drawing individual blades until they are sub-pixel.
+                if (Math.abs(segmentCenter - centerZ) <= 84f) {
                     batch.render(instance, environment);
                 }
             }
@@ -734,11 +636,10 @@ final class TerrainVisuals {
     }
 
     void dispose() {
-        for (int i = 0; i < terrainModels.length; i++) {
-            if (terrainModels[i] != null) {
-                terrainModels[i].dispose();
-                terrainModels[i] = null;
-                terrainInstances[i] = null;
+        for (int i = 0; i < terrainMeshes.length; i++) {
+            if (terrainMeshes[i] != null) {
+                terrainMeshes[i].dispose();
+                terrainMeshes[i] = null;
             }
             if (groundDetailModels[i] != null) {
                 groundDetailModels[i].dispose();
@@ -746,7 +647,7 @@ final class TerrainVisuals {
                 groundDetailInstances[i] = null;
             }
         }
-        terrainTexture.dispose();
+        terrainShader.dispose();
     }
 
     private static final class CellSample {
@@ -779,17 +680,18 @@ final class TerrainVisuals {
 
         short vertex(float x, float y, float z,
                      float nx, float ny, float nz, float color) {
-            if (vertexCount >= Short.MAX_VALUE || (vertexCount + 1) * FLOATS_PER_VERTEX > vertices.length) {
+            if (vertexCount >= Short.MAX_VALUE
+                    || (vertexCount + 1) * FLOATS_PER_VERTEX > vertices.length) {
                 throw new GdxRuntimeException("Ground detail vertex budget exceeded");
             }
-            int o = vertexCount * FLOATS_PER_VERTEX;
-            vertices[o] = x;
-            vertices[o + 1] = y;
-            vertices[o + 2] = z;
-            vertices[o + 3] = nx;
-            vertices[o + 4] = ny;
-            vertices[o + 5] = nz;
-            vertices[o + 6] = color;
+            int offset = vertexCount * FLOATS_PER_VERTEX;
+            vertices[offset] = x;
+            vertices[offset + 1] = y;
+            vertices[offset + 2] = z;
+            vertices[offset + 3] = nx;
+            vertices[offset + 4] = ny;
+            vertices[offset + 5] = nz;
+            vertices[offset + 6] = color;
             return (short) vertexCount++;
         }
 
