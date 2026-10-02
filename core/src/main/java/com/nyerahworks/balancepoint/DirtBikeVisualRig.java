@@ -142,9 +142,10 @@ final class DirtBikeVisualRig {
         float visualResponse = state.frontGrounded ? 11.5f : 8.0f;
         visualSteerDegrees += (targetVisualSteer - visualSteerDegrees)
                 * Math.min(1f, Gdx.graphics.getDeltaTime() * visualResponse);
+        float visualSteerDeg = visualSteerDegrees;
         steeringRoot.set(bikeRoot)
                 .translate(bike.steeringHead)
-                .rotate(bike.steeringAxis, visualSteerDegrees);
+                .rotate(bike.steeringAxis, visualSteerDeg);
         bike.steering.transform.set(steeringRoot);
 
         float frontOffset = MathUtils.clamp(
