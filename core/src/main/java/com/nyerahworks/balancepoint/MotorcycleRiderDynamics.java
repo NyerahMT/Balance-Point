@@ -17,8 +17,10 @@ final class MotorcycleRiderDynamics {
     private static final float REARWARD_TRAVEL = 0.34f;
     private static final float MAX_INERTIAL_BIAS = 0.070f;
     private static final float INERTIAL_BIAS_PER_G = 0.055f;
-    private static final float MAX_BODY_SPEED = 2.25f;
-    private static final float MAX_BODY_ACCELERATION = 20f;
+    private static final float GROUNDED_MAX_BODY_SPEED = 2.25f;
+    private static final float AIRBORNE_MAX_BODY_SPEED = 3.10f;
+    private static final float GROUNDED_MAX_BODY_ACCELERATION = 20f;
+    private static final float AIRBORNE_MAX_BODY_ACCELERATION = 30f;
     private static final float RIDER_FORCE_HEIGHT = 0.56f;
     private static final float MAX_PITCH_REACTION_TORQUE = 180f;
 
@@ -57,16 +59,23 @@ final class MotorcycleRiderDynamics {
                 -REARWARD_TRAVEL,
                 FORWARD_TRAVEL);
 
-        float naturalFrequency = airborne ? 3.8f : 5.4f;
-        float dampingRatio = airborne ? 0.76f : 0.92f;
+        // Grounded movement stays deliberately planted. Once both wheels are clear, the rider
+        // can throw their body much more quickly because tire contacts are no longer fighting the
+        // motion. The lower damping is intentional: air corrections should feel immediate, but
+        // they still come from accelerating rider mass rather than directly rotating the chassis.
+        float naturalFrequency = airborne ? 5.0f : 5.4f;
+        float dampingRatio = airborne ? 0.60f : 0.92f;
+        float maxBodyAcceleration = airborne
+                ? AIRBORNE_MAX_BODY_ACCELERATION : GROUNDED_MAX_BODY_ACCELERATION;
+        float maxBodySpeed = airborne ? AIRBORNE_MAX_BODY_SPEED : GROUNDED_MAX_BODY_SPEED;
         float rawAcceleration = (target - position) * naturalFrequency * naturalFrequency
                 - 2f * dampingRatio * naturalFrequency * velocity;
         acceleration = MathUtils.clamp(
                 rawAcceleration,
-                -MAX_BODY_ACCELERATION,
-                MAX_BODY_ACCELERATION);
+                -maxBodyAcceleration,
+                maxBodyAcceleration);
         velocity += acceleration * dt;
-        velocity = MathUtils.clamp(velocity, -MAX_BODY_SPEED, MAX_BODY_SPEED);
+        velocity = MathUtils.clamp(velocity, -maxBodySpeed, maxBodySpeed);
         position += velocity * dt;
 
         if (position < -REARWARD_TRAVEL) {
@@ -99,7 +108,7 @@ final class MotorcycleRiderDynamics {
      * as much of the reaction, but it remains intentionally weaker than brake-tap/throttle air control.
      */
     float pitchReactionTorque(boolean airborne, boolean frontTouching) {
-        float coupling = airborne ? 0.62f : (frontTouching ? 0.24f : 0.40f);
+        float coupling = airborne ? 0.76f : (frontTouching ? 0.24f : 0.40f);
         float torque = -RIDER_MASS * acceleration * RIDER_FORCE_HEIGHT * coupling;
         return MathUtils.clamp(
                 torque,
