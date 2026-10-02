@@ -1,0 +1,16 @@
+Balance Point uses downsampled derivatives of the following Poly Haven texture assets in mobile builds:
+
+- Sparse Grass — https://polyhaven.com/a/sparse_grass
+  Author: Amal Kumar
+- Dirt — https://polyhaven.com/a/dirt
+  Author: Charlotte Baglioni
+- Rocks Ground 05 — https://polyhaven.com/a/rocks_ground_05
+  Author: Rob Tuytel
+
+The build stages 1K diffuse maps for all three materials and the OpenGL normal map from Dirt, then downsamples them for mobile use.
+
+Poly Haven publishes these assets under CC0 1.0 Universal / public domain dedication:
+https://creativecommons.org/publicdomain/zero/1.0/
+https://polyhaven.com/license
+
+No attribution is legally required under CC0. This file is retained for source provenance and maintenance.
