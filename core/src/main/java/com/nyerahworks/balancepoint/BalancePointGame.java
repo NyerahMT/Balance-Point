@@ -16,17 +16,11 @@ public final class BalancePointGame extends ApplicationAdapter {
     private static final float GRAVITY = 9.81f;
     private static final float PITCH_INERTIA = 168f;
     private static final float MAX_CONTACT_FORCE = MASS * GRAVITY * 5f;
-    // Angular damping is contact-dependent. With both tires loaded the chassis should
-    // absorb short terrain impulses instead of carrying the rotation; a rear-only wheelie
-    // stays freer, and true flight remains freer still so brake-tap/throttle control works.
     private static final float PITCH_DAMPING_GROUNDED = 2.85f;
     private static final float PITCH_DAMPING_WHEELIE = 1.20f;
     private static final float PITCH_DAMPING_AIR = 0.38f;
     private static final float TERRAIN_ROLL_NATURAL_FREQUENCY = 5.5f;
     private static final float TERRAIN_ROLL_DAMPING_RATIO = 1.15f;
-    // Neutral combined bike+rider COM. 0.36 m above the axles plus the 0.337 m tire
-    // radius puts the system COM about 0.70 m above level ground. 0.67 m forward of the
-    // rear axle yields a believable ~55/45 rear/front static load split.
     private static final float COM_FORWARD = 0.636107f;
     private static final float AIRBORNE_COM_FORWARD = 1.00f;
     private static final float AIRBORNE_COM_SHIFT_START = 25f * MathUtils.degreesToRadians;
@@ -36,9 +30,6 @@ public final class BalancePointGame extends ApplicationAdapter {
             * (WHEELBASE - COM_FORWARD) / WHEELBASE;
     private static final float FRONT_STATIC_LOAD = MASS * GRAVITY
             * COM_FORWARD / WHEELBASE;
-
-    // Rear tire longitudinal slip model. Grip is a force ceiling, not a power reducer:
-    // surplus engine torque accelerates the wheel and produces visible/audible wheelspin.
     private static final float TIRE_SLIP_SPEED_AT_PEAK = 0.65f;
     private static final float TIRE_HIGH_SLIP_START = 3.0f;
     private static final float TIRE_HIGH_SLIP_FULL = 10.0f;
@@ -47,11 +38,8 @@ public final class BalancePointGame extends ApplicationAdapter {
     private static final float MAX_REAR_BRAKE_FORCE = 3800f;
     private static final float ROLLING_RESISTANCE = 0.017f;
     private static final float AERO_DRAG = 0.34f;
-
     private static final float PITCH_DAMPING = 30f;
     private static final float MAX_PITCH_RATE = 5.4f;
-    // Free-flight pitch comes from launch angular momentum plus rear-wheel reaction torque.
-    // Throttle accelerates the rear wheel and raises the nose; a rear-brake tap lowers it.
     private static final float REAR_WHEEL_INERTIA = 1.05f;
     private static final float AIR_WHEEL_DRIVE_ACCEL = 115f;
     private static final float AIR_WHEEL_BRAKE_ACCEL = 220f;
@@ -79,15 +67,12 @@ public final class BalancePointGame extends ApplicationAdapter {
     private GameHud hud;
     private InstrumentDisplay instrumentDisplay;
     private EngineAudio engineAudio;
-    // Shared with GameScene so physics and rendered terrain use the same surface instance.
     private TerrainVisuals terrainVisuals;
 
     private float speed;
     private float lateralSpeed;
     private float bikeZ;
     private float bikeX;
-    // Rear axle world height. Unlike the old root-height snap, this carries vertical
-    // momentum across crests when both wheels leave the terrain.
     private float bikeY = WHEEL_RADIUS;
     private float chassisY = WHEEL_RADIUS + COM_HEIGHT;
     private float effectiveComForward = COM_FORWARD;
@@ -99,8 +84,6 @@ public final class BalancePointGame extends ApplicationAdapter {
     private float rollVelocity;
     private float yaw;
     private float yawVelocity;
-    // Sidehill bank is visual/support attitude, but it is rate-damped just like the chassis
-    // instead of snapping to each newly sampled terrain normal.
     private float terrainRoll;
     private float terrainRollVelocity;
     private float wheelSpin;
@@ -129,9 +112,8 @@ public final class BalancePointGame extends ApplicationAdapter {
     private boolean shiftDownHeld;
     private boolean shiftUpHeld;
     private boolean frontGrounded = true;
-    // The pointer that initially grabs the rider pad owns it until finger-up. This lets the
-    // player drag outside the visual rectangle without losing steering/lean mid-maneuver.
     private int riderControlPointer = -1;
+    private int throttleControlPointer = -1;
 
     private boolean crashed;
     private boolean crashSettled;
@@ -164,9 +146,6 @@ public final class BalancePointGame extends ApplicationAdapter {
 
     private final WheelContact rearContactState = new WheelContact();
     private final WheelContact frontContactState = new WheelContact();
-    // Scratch contacts used by the post-step bottom-out constraint. Keeping the same
-    // finite-radius terrain query in both the force solve and correction prevents the two
-    // stages from disagreeing about where the tire actually touches the heightfield.
     private final WheelContact rearPostContact = new WheelContact();
     private final WheelContact frontPostContact = new WheelContact();
 
@@ -236,17 +215,22 @@ public final class BalancePointGame extends ApplicationAdapter {
 
         if (gameState == GameState.MAIN_MENU) {
             riderControlPointer = -1;
+            throttleControlPointer = -1;
             readMainMenuInput(w, h);
             return;
         }
         if (gameState == GameState.PAUSED) {
             riderControlPointer = -1;
+            throttleControlPointer = -1;
             readPauseMenuInput(w, h);
             return;
         }
 
         if (riderControlPointer >= 0 && !Gdx.input.isTouched(riderControlPointer)) {
             riderControlPointer = -1;
+        }
+        if (throttleControlPointer >= 0 && !Gdx.input.isTouched(throttleControlPointer)) {
+            throttleControlPointer = -1;
         }
 
         boolean pauseTouch = false;
@@ -275,6 +259,11 @@ public final class BalancePointGame extends ApplicationAdapter {
                 requestedLean = RiderControlPad.lean(y);
                 continue;
             }
+            if (pointer == throttleControlPointer) {
+                throttleTouch = true;
+                requestedThrottle = ThrottleControl.value(y);
+                continue;
+            }
 
             if (x < 0.14f && y < 0.16f) {
                 pauseTouch = true;
@@ -284,10 +273,10 @@ public final class BalancePointGame extends ApplicationAdapter {
                 cameraTouch = true;
                 continue;
             }
-            if (x > 0.82f && y > 0.46f && y < 0.90f) {
+            if (throttleControlPointer < 0 && ThrottleControl.contains(x, y)) {
+                throttleControlPointer = pointer;
                 throttleTouch = true;
-                requestedThrottle = Math.max(requestedThrottle,
-                        MathUtils.clamp((0.88f - y) / 0.40f, 0f, 1f));
+                requestedThrottle = ThrottleControl.value(y);
                 continue;
             }
             if (x >= 0.70f && x <= 0.82f && y > 0.70f) {
@@ -296,8 +285,6 @@ public final class BalancePointGame extends ApplicationAdapter {
                 requestedBrake = Math.max(requestedBrake, brake);
                 continue;
             }
-            // A finger acquires the rider pad only when it begins inside the visual area.
-            // After acquisition the branch above keeps ownership even outside the rectangle.
             if (riderControlPointer < 0 && RiderControlPad.contains(x, y)) {
                 riderControlPointer = pointer;
                 controlBoxTouch = true;
@@ -455,6 +442,7 @@ public final class BalancePointGame extends ApplicationAdapter {
         if (gameState != GameState.PLAYING) return;
         gameState = GameState.PAUSED;
         riderControlPointer = -1;
+        throttleControlPointer = -1;
         throttleTarget = 0f;
         rearBrakeTarget = 0f;
         steerTarget = 0f;
@@ -466,6 +454,7 @@ public final class BalancePointGame extends ApplicationAdapter {
     private void enterMainMenu() {
         gameState = GameState.MAIN_MENU;
         riderControlPointer = -1;
+        throttleControlPointer = -1;
         physicsAccumulator = 0.0;
         pauseTouchHeld = false;
         cameraTouchHeld = false;
@@ -492,9 +481,6 @@ public final class BalancePointGame extends ApplicationAdapter {
         float sinPitch = MathUtils.sin(pitch);
         float cosPitch = MathUtils.cos(pitch);
 
-        // Axle locations relative to the CURRENT combined COM. The rider model owns the
-        // dynamic fore/aft mass shift; climb posture remains a small automatic assist so steep
-        // grades do not rotate the rider rigidly with the chassis and create a fake loop.
         float climbPostureShift = 0f;
         if (terrainVisuals != null && !terrainAirborne) {
             float centerSlopeX = terrainVisuals.groundSlopeX(bikeX, bikeZ);
@@ -520,8 +506,6 @@ public final class BalancePointGame extends ApplicationAdapter {
         float rearY = chassisY + rearVertical;
         float frontY = chassisY + frontVertical;
 
-        // Point velocity = COM translation + angular velocity x radius. Suspension shaft speed
-        // is the negative normal velocity of the chassis hardpoint relative to the terrain.
         float rearForwardVelocity = speed - pitchVelocity * rearVertical;
         float rearVerticalVelocity = verticalVelocity + pitchVelocity * rearForward;
         float frontForwardVelocity = speed - pitchVelocity * frontVertical;
@@ -543,19 +527,12 @@ public final class BalancePointGame extends ApplicationAdapter {
         frontNormalLoad = frontContactState.normalForce;
 
         float absSpeed = Math.abs(speed);
-
-        // Surface tangent is perpendicular to the solved terrain normal in the forward/up
-        // plane. The rear wheel is an independent rotating body now: ground speed and tire
-        // surface speed are allowed to diverge, and THAT slip creates longitudinal tire force.
         float rearTangentForward = rearContactState.normalUp;
         float rearTangentUp = -rearContactState.normalForward;
         float tangentGroundSpeed = speed * rearTangentForward
                 + verticalVelocity * rearTangentUp;
         float wheelLinearSpeed = rearWheelAngularSpeed * WHEEL_RADIUS;
 
-        // Engine output stays available even after the tire exceeds available grip. The
-        // drivetrain follows driven-wheel speed, so breaking traction makes RPM flare instead
-        // of silently deleting horsepower at a friction clamp.
         float drivetrainForce = MathUtils.clamp(
                 drivetrain.update(wheelLinearSpeed, throttle, dt), 0f, MAX_ENGINE_FORCE);
         float rearSurfaceMu = terrainVisuals != null
@@ -568,8 +545,6 @@ public final class BalancePointGame extends ApplicationAdapter {
         if (rearTouching && rearTractionLimit > 0f) {
             float absSlip = Math.abs(slipSpeed);
             float forceBuild = MathUtils.clamp(absSlip / TIRE_SLIP_SPEED_AT_PEAK, 0f, 1f);
-            // Once the tire is properly spinning, available longitudinal force falls a little
-            // below peak static grip instead of unrealistically staying glued at mu*N.
             float highSlipBlend = MathUtils.clamp((absSlip - TIRE_HIGH_SLIP_START)
                     / (TIRE_HIGH_SLIP_FULL - TIRE_HIGH_SLIP_START), 0f, 1f);
             float highSlipFactor = MathUtils.lerp(1f, TIRE_HIGH_SLIP_GRIP, highSlipBlend);
@@ -579,7 +554,6 @@ public final class BalancePointGame extends ApplicationAdapter {
 
         float rearTireForward = rearTireForce * rearTangentForward;
         float rearTireUp = rearTireForce * rearTangentUp;
-
         float rearNormalForward = rearContactState.normalForce * rearContactState.normalForward;
         float rearNormalUp = rearContactState.normalForce * rearContactState.normalUp;
         float frontNormalForward = frontContactState.normalForce * frontContactState.normalForward;
@@ -590,8 +564,6 @@ public final class BalancePointGame extends ApplicationAdapter {
         float rollingForce = absSpeed > 0.05f ? Math.signum(speed) * rollingMagnitude : 0f;
         float aero = AERO_DRAG * speed * absSpeed;
 
-        // Do not fake loose terrain with a generic speed-dependent power drain. Surface
-        // differences now come from actual tire slip/grip instead.
         float totalForwardForce = rearNormalForward + frontNormalForward + rearTireForward
                 - rollingForce - aero;
         float totalVerticalForce = rearNormalUp + frontNormalUp + rearTireUp - MASS * GRAVITY;
@@ -601,9 +573,6 @@ public final class BalancePointGame extends ApplicationAdapter {
         speed = MathUtils.clamp(speed, -10f, 48f);
         verticalVelocity += totalVerticalForce / MASS * dt;
 
-        // Integrate the driven rear wheel from engine torque, tire reaction torque and rear
-        // brake torque. This is the core distinction between traction and a power restriction:
-        // torque that cannot reach the ground remains in the wheel as angular acceleration.
         float previousWheelAngularSpeed = rearWheelAngularSpeed;
         float engineWheelTorque = drivetrainForce * WHEEL_RADIUS;
         float tireReactionTorque = rearTireForce * WHEEL_RADIUS;
@@ -612,7 +581,6 @@ public final class BalancePointGame extends ApplicationAdapter {
 
         if (rearBrake > 0f && Math.abs(rearWheelAngularSpeed) < 1.0f
                 && maxBrakeTorque >= Math.abs(wheelTorqueBeforeBrake)) {
-            // Brake can statically hold the wheel at zero instead of numerically reversing it.
             rearWheelAngularSpeed = 0f;
         } else {
             float brakeDirection = Math.abs(rearWheelAngularSpeed) > 0.25f
@@ -622,7 +590,6 @@ public final class BalancePointGame extends ApplicationAdapter {
             float wheelAngularAcceleration = netWheelTorque / REAR_WHEEL_INERTIA
                     - rearWheelAngularSpeed * AIR_WHEEL_DRAG;
             rearWheelAngularSpeed += wheelAngularAcceleration * dt;
-            // A braking step may stop the wheel, but should not drive it backwards.
             if (rearBrake > 0f && previousWheelAngularSpeed * rearWheelAngularSpeed < 0f) {
                 rearWheelAngularSpeed = 0f;
             }
@@ -634,9 +601,6 @@ public final class BalancePointGame extends ApplicationAdapter {
         float wheelReactionTorque = rearTouching ? 0f
                 : actualAngularAcceleration * REAR_WHEEL_INERTIA;
 
-        // Apply contact forces at the actual tire contact patches and integrate the resulting
-        // moment about the already-shifted COM. Suspension compression moves the axle/contact
-        // point vertically relative to the chassis, so it also changes the pitch lever arm.
         float rearContactForwardArm = rearForward
                 - WHEEL_RADIUS * rearContactState.normalForward;
         float rearContactVerticalArm = rearVertical
@@ -666,15 +630,10 @@ public final class BalancePointGame extends ApplicationAdapter {
         pitchVelocity = MathUtils.clamp(pitchVelocity, -MAX_PITCH_RATE, MAX_PITCH_RATE);
         pitch += pitchVelocity * dt;
 
-        // Semi-implicit translation after force/torque integration. Lateral tire slip now
-        // creates actual sideways velocity instead of the bike being welded to its heading.
         bikeX += (sinYaw * speed + cosYaw * lateralSpeed) * dt;
         bikeZ += (cosYaw * speed - sinYaw * lateralSpeed) * dt;
         chassisY += verticalVelocity * dt;
 
-        // Position-level bottom-out constraint. Negative geometric gap is now valid suspension
-        // compression; correction begins only after the demanded stroke exceeds mechanical
-        // travel (plus a small tire/solver tolerance), so this no longer locks the suspension.
         sinPitch = MathUtils.sin(pitch);
         cosPitch = MathUtils.cos(pitch);
         float rearForwardPost = -effectiveComForward * cosPitch + COM_HEIGHT * sinPitch;
@@ -685,20 +644,10 @@ public final class BalancePointGame extends ApplicationAdapter {
         float rearPostZ = bikeZ + cosYaw * rearForwardPost;
         float frontPostX = bikeX + sinYaw * frontForwardPost;
         float frontPostZ = bikeZ + cosYaw * frontForwardPost;
-        sampleWheelSurface(
-                rearPostContact,
-                rearPostX,
-                chassisY + rearVerticalPost,
-                rearPostZ,
-                sinYaw,
-                cosYaw);
-        sampleWheelSurface(
-                frontPostContact,
-                frontPostX,
-                chassisY + frontVerticalPost,
-                frontPostZ,
-                sinYaw,
-                cosYaw);
+        sampleWheelSurface(rearPostContact, rearPostX, chassisY + rearVerticalPost,
+                rearPostZ, sinYaw, cosYaw);
+        sampleWheelSurface(frontPostContact, frontPostX, chassisY + frontVerticalPost,
+                frontPostZ, sinYaw, cosYaw);
         float rearOverTravel = Math.max(0f,
                 suspension.rear().staticCompression() - rearPostContact.gap
                         - suspension.rear().travel());
@@ -715,8 +664,6 @@ public final class BalancePointGame extends ApplicationAdapter {
             }
         }
 
-        // Derived rear-axle hardpoint height retained for camera/UI code. The rendered wheel
-        // moves relative to this point through the suspension rig.
         rearVertical = -effectiveComForward * sinPitch - COM_HEIGHT * cosPitch;
         bikeY = chassisY + rearVertical;
 
@@ -742,9 +689,6 @@ public final class BalancePointGame extends ApplicationAdapter {
         if (yaw > MathUtils.PI) yaw -= MathUtils.PI2;
         if (yaw < -MathUtils.PI) yaw += MathUtils.PI2;
 
-        // The old renderer snapped directly to the local side-slope normal, which made the bike
-        // visibly twitch sideways on every irregular triangle. Filter that support bank with a
-        // second-order damper at the fixed physics rate.
         float terrainRollTarget = 0f;
         if (!terrainAirborne && terrainVisuals != null) {
             float slopeX = terrainVisuals.groundSlopeX(bikeX, bikeZ);
@@ -760,8 +704,6 @@ public final class BalancePointGame extends ApplicationAdapter {
         terrainRollVelocity = MathUtils.clamp(terrainRollVelocity, -2.5f, 2.5f);
         terrainRoll += terrainRollVelocity * dt;
 
-        // A wheelie is now just rear contact with an unloaded front tire. No wheelie-specific
-        // force model is entered.
         if (rearTouching && !frontTouching && speed > 3f) {
             wheelieTime += dt;
             bestWheelieTime = Math.max(bestWheelieTime, wheelieTime);
@@ -777,14 +719,6 @@ public final class BalancePointGame extends ApplicationAdapter {
         }
     }
 
-    /**
-     * Finds the closest terrain plane under the lower arc of a finite-radius motorcycle tire.
-     * The old solver sampled only the height directly below the axle and then added R, which is
-     * geometrically valid only on level ground. A circle tangent to a slope needs its center
-     * farther above the vertical height sample, and on a crest the contact point can sit ahead
-     * or behind the axle. Sampling seven tangent planes across the lower tire footprint fixes
-     * both cases while still colliding against the exact baked heightfield.
-     */
     private void sampleWheelSurface(WheelContact out, float worldX, float wheelY, float worldZ,
                                     float sinYaw, float cosYaw) {
         final float[] offsets = {-0.90f, -0.60f, -0.30f, 0f, 0.30f, 0.60f, 0.90f};
@@ -800,9 +734,6 @@ public final class BalancePointGame extends ApplicationAdapter {
             float sampleZ = worldZ + cosYaw * offset;
             float ground = terrainVisuals != null
                     ? terrainVisuals.groundHeight(sampleX, sampleZ) : 0f;
-
-            // Probe the exact height surface in the wheel's rolling direction rather than
-            // using the deliberately smoothed 6 m render/contact normal.
             float ahead = terrainVisuals != null
                     ? terrainVisuals.groundHeight(sampleX + sinYaw * slopeProbe,
                     sampleZ + cosYaw * slopeProbe) : 0f;
@@ -865,6 +796,7 @@ public final class BalancePointGame extends ApplicationAdapter {
         crashPitchRate = MathUtils.clamp(pitchVelocity + 0.75f, -1.2f, 3.2f);
         crashRollRate = crashSide * (1.4f + MathUtils.clamp(speed * 0.045f, 0f, 1.5f));
         crashYawRate = -steer * (0.4f + MathUtils.clamp(speed * 0.025f, 0f, 0.8f));
+        throttleControlPointer = -1;
         throttleTarget = 0f;
         rearBrakeTarget = 0f;
         steerTarget = 0f;
@@ -944,6 +876,7 @@ public final class BalancePointGame extends ApplicationAdapter {
         steer = steerTarget = 0f;
         riderLean = riderLeanTarget = 0f;
         riderControlPointer = -1;
+        throttleControlPointer = -1;
         lookYaw = lookPitch = 0f;
         if (gameCamera != null) gameCamera.resetRide();
         shiftDownHeld = shiftUpHeld = false;
