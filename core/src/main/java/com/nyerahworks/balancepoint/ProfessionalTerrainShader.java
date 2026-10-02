@@ -41,7 +41,11 @@ final class ProfessionalTerrainShader implements Disposable {
 
     private static final String FRAGMENT_SHADER =
             "#ifdef GL_ES\n"
+                    + "#ifdef GL_FRAGMENT_PRECISION_HIGH\n"
+                    + "precision highp float;\n"
+                    + "#else\n"
                     + "precision mediump float;\n"
+                    + "#endif\n"
                     + "#endif\n"
                     + "uniform sampler2D u_grassTex;\n"
                     + "uniform sampler2D u_dirtTex;\n"
@@ -118,6 +122,7 @@ final class ProfessionalTerrainShader implements Disposable {
                     + "  dirt *= mix(vec3(1.04, 0.98, 0.92), vec3(0.78, 0.70, 0.61), wear * 0.58);\n"
                     + "  rock *= mix(vec3(0.94, 0.92, 0.88), vec3(1.05, 0.98, 0.87), macro.b);\n"
                     + "  vec3 albedo = grass * grassW + dirt * dirtW + rock * rockW;\n"
+                    + "  albedo *= albedo;\n"
                     + "  vec3 detailN = texture2D(u_detailNormalTex, rotateUv(p, 0.9848, 0.1736) / 1.75).rgb\n"
                     + "      * 2.0 - 1.0;\n"
                     + "  float normalStrength = (grassW * 0.18 + dirtW * 0.33 + rockW * 0.10)\n"
@@ -130,6 +135,7 @@ final class ProfessionalTerrainShader implements Disposable {
                     + "  vec3 sunColor = vec3(1.00, 0.92, 0.79);\n"
                     + "  vec3 lit = albedo * (hemi + sunColor * ndl * 0.63 * shadow);\n"
                     + "  lit *= mix(0.88, 1.10, macro.a);\n"
+                    + "  lit = sqrt(max(lit, vec3(0.0)));\n"
                     + "  float distanceToCamera = length(v_worldPos - u_cameraPos);\n"
                     + "  float fog = smoother(180.0, 690.0, distanceToCamera) * 0.70;\n"
                     + "  vec3 sky = vec3(0.58, 0.72, 0.80);\n"
@@ -145,15 +151,24 @@ final class ProfessionalTerrainShader implements Disposable {
     private final Matrix4 noShadow = new Matrix4();
 
     ProfessionalTerrainShader() {
-        grassTexture = loadScannedTexture("sparse_grass_diff.jpg", new Color(0.24f, 0.34f, 0.12f, 1f));
-        dirtTexture = loadScannedTexture("dirt_diff.jpg", new Color(0.34f, 0.22f, 0.12f, 1f));
-        rockTexture = loadScannedTexture("rocks_ground_05_diff.jpg", new Color(0.32f, 0.30f, 0.26f, 1f));
-        detailNormalTexture = loadScannedTexture("dirt_nor_gl.jpg", new Color(0.50f, 0.50f, 1f, 1f));
+        grassTexture = loadScannedTexture(
+                "sparse_grass_diff.jpg",
+                new Color(0.24f, 0.34f, 0.12f, 1f));
+        dirtTexture = loadScannedTexture(
+                "dirt_diff.jpg",
+                new Color(0.34f, 0.22f, 0.12f, 1f));
+        rockTexture = loadScannedTexture(
+                "rocks_ground_05_diff.jpg",
+                new Color(0.32f, 0.30f, 0.26f, 1f));
+        detailNormalTexture = loadScannedTexture(
+                "dirt_nor_gl.jpg",
+                new Color(0.50f, 0.50f, 1f, 1f));
         macroTexture = createMacroTexture();
 
         program = new ShaderProgram(VERTEX_SHADER, FRAGMENT_SHADER);
         if (!program.isCompiled()) {
-            throw new GdxRuntimeException("Professional terrain shader failed to compile: " + program.getLog());
+            throw new GdxRuntimeException(
+                    "Professional terrain shader failed to compile: " + program.getLog());
         }
     }
 
@@ -225,11 +240,12 @@ final class ProfessionalTerrainShader implements Disposable {
         program.bind();
         program.setUniformMatrix("u_projViewTrans", camera.combined);
         program.setUniformf("u_cameraPos", camera.position);
-
         program.setUniformi("u_grassTex", context.textureBinder.bind(grassTexture));
         program.setUniformi("u_dirtTex", context.textureBinder.bind(dirtTexture));
         program.setUniformi("u_rockTex", context.textureBinder.bind(rockTexture));
-        program.setUniformi("u_detailNormalTex", context.textureBinder.bind(detailNormalTexture));
+        program.setUniformi(
+                "u_detailNormalTex",
+                context.textureBinder.bind(detailNormalTexture));
         program.setUniformi("u_macroTex", context.textureBinder.bind(macroTexture));
 
         ShadowMap shadowMap = environment == null ? null : environment.shadowMap;
@@ -249,7 +265,7 @@ final class ProfessionalTerrainShader implements Disposable {
     }
 
     void end() {
-        // ShaderProgram has no paired end call; ModelBatch's next shader bind takes ownership.
+        // ShaderProgram has no paired end call; the next ModelBatch shader bind takes ownership.
     }
 
     @Override
