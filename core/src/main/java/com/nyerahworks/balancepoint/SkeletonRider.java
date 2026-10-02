@@ -37,10 +37,6 @@ final class SkeletonRider {
         this.model = model;
         this.instance = new ModelInstance(model);
 
-        // Apply presentation material to the instance materials themselves. ModelInstance may
-        // own copies of the source materials, so mutating only model.materials is not reliable.
-        // Disable culling as well: this tiny low-poly OBJ is cheap to draw two-sided and doing so
-        // avoids winding/culling differences between mobile GL backends making bones disappear.
         Color bone = new Color(0.94f, 0.90f, 0.74f, 1f);
         for (Material material : instance.materials) {
             material.set(ColorAttribute.createDiffuse(bone));
@@ -74,9 +70,6 @@ final class SkeletonRider {
                 .rotate(Vector3.X, -7f - shift * 7f)
                 .scale(SCALE_X, SCALE_Y, SCALE_Z);
 
-        // Kenney's source groups use absolute vertex coordinates. Rotate each group around an
-        // anatomical pivot by expressing T(p) * R * T(-p) as node translation + rotation.
-        // Using node TRS rather than writing localTransform directly survives calculateTransforms.
         poseNode("torso", 0f, 0.27f, 0f, -20f - shift * 7f);
         poseNode("head", 0f, 0.45f, 0f, -8f - shift * 4f);
         poseNode("arm-left", 0.18f, 0.42f, 0f, -64f - shift * 5f);
@@ -92,7 +85,8 @@ final class SkeletonRider {
 
         poseRotation.set(Vector3.X, degrees);
         posePivot.set(px, py, pz);
-        rotatedPivot.set(posePivot).rot(poseRotation);
+        rotatedPivot.set(posePivot);
+        poseRotation.transform(rotatedPivot);
         node.translation.set(posePivot).sub(rotatedPivot);
         node.rotation.set(poseRotation);
         node.scale.set(1f, 1f, 1f);
