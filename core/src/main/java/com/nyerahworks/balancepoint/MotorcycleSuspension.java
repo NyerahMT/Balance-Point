@@ -84,6 +84,7 @@ final class MotorcycleSuspension {
         private final float maxForce;
 
         private float compression;
+        private float presentationCompression;
         private float velocity;
         private float force;
 
@@ -124,6 +125,7 @@ final class MotorcycleSuspension {
             float overTravel = Math.max(0f, demandedCompression - travel);
             compression = MathUtils.clamp(demandedCompression, 0f, travel);
             velocity = compressionVelocity;
+            updatePresentationCompression(dt);
 
             if (demandedCompression <= 0f) {
                 force = 0f;
@@ -150,8 +152,16 @@ final class MotorcycleSuspension {
             return force;
         }
 
+        private void updatePresentationCompression(float dt) {
+            float maxRate = compression >= presentationCompression ? 4.0f : 1.25f;
+            float maxStep = maxRate * Math.max(0f, dt);
+            float delta = compression - presentationCompression;
+            presentationCompression += MathUtils.clamp(delta, -maxStep, maxStep);
+        }
+
         void reset() {
             compression = staticCompression;
+            presentationCompression = staticCompression;
             velocity = 0f;
             force = springRate * staticCompression;
         }
@@ -176,9 +186,14 @@ final class MotorcycleSuspension {
             return staticCompression;
         }
 
-        /** Signed wheel travel relative to the normal loaded ride position. */
-        float rideOffset() {
+        /** Signed physical travel relative to the normal loaded ride position. */
+        float physicalRideOffset() {
             return compression - staticCompression;
+        }
+
+        /** Signed display travel; extension is rate-limited after the tire leaves the ground. */
+        float rideOffset() {
+            return presentationCompression - staticCompression;
         }
 
         float normalizedCompression() {
