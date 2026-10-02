@@ -36,7 +36,7 @@ public final class MotorcycleRiderDynamicsTest {
             airborne.step(1f, 0f, true, DT);
         }
 
-        assertTrue(airborne.position() > grounded.position() * 1.20f);
+        assertTrue(airborne.position() > grounded.position() * 1.30f);
         assertTrue(airborne.velocity() > grounded.velocity());
     }
 
@@ -53,20 +53,32 @@ public final class MotorcycleRiderDynamicsTest {
     }
 
     @Test
-    public void bodyThrowCreatesBoundedPitchReaction() {
+    public void airborneBodyThrowCreatesStrongBoundedPitchReaction() {
         MotorcycleRiderDynamics rider = new MotorcycleRiderDynamics(198f, 9.81f);
 
         rider.step(1f, 0f, true, DT);
         float torque = rider.pitchReactionTorque(true, false);
 
         assertTrue(torque < 0f);
-        assertTrue(Math.abs(torque) <= 360f);
-        assertTrue(Math.abs(torque) >= 300f);
+        assertTrue(Math.abs(torque) <= 920f);
+        assertTrue(Math.abs(torque) >= 800f);
+    }
+
+    @Test
+    public void heldAirborneLeanKeepsUsefulPitchAuthority() {
+        MotorcycleRiderDynamics rider = new MotorcycleRiderDynamics(198f, 9.81f);
 
         for (int i = 0; i < 360; i++) {
             rider.step(1f, 0f, true, DT);
         }
-        assertTrue(Math.abs(rider.pitchReactionTorque(true, false)) < 20f);
+        float forwardTorque = rider.pitchReactionTorque(true, false);
+        assertTrue(forwardTorque < -450f);
+
+        for (int i = 0; i < 180; i++) {
+            rider.step(-1f, 0f, true, DT);
+        }
+        float rearwardTorque = rider.pitchReactionTorque(true, false);
+        assertTrue(rearwardTorque > 450f);
     }
 
     @Test
@@ -80,5 +92,6 @@ public final class MotorcycleRiderDynamicsTest {
         assertEquals(0f, rider.velocity(), 0.0001f);
         assertEquals(0f, rider.acceleration(), 0.0001f);
         assertEquals(0f, rider.combinedComShift(), 0.0001f);
+        assertEquals(0f, rider.pitchReactionTorque(true, false), 0.0001f);
     }
 }
