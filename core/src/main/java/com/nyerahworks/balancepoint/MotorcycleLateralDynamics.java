@@ -18,9 +18,6 @@ final class MotorcycleLateralDynamics {
     private static final float MAX_LATERAL_SPEED = 3.0f;
     private static final float MAX_ROLL = 58f * MathUtils.degreesToRadians;
 
-    // Balance Point is aiming for believable, controllable bike behavior rather than a tire
-    // engineering simulator. Longitudinal drive can loosen the rear, but it must not erase
-    // essentially all lateral authority the instant the tire reaches its drive-force limit.
     private static final float REAR_LONGITUDINAL_GRIP_COST = 0.32f;
     private static final float REAR_MIN_LATERAL_GRIP_FRACTION = 0.72f;
 
@@ -62,13 +59,12 @@ final class MotorcycleLateralDynamics {
         float motionBlend = smooth(MathUtils.clamp(absSpeed / 2.5f, 0f, 1f));
         float speedBlend = smooth(MathUtils.clamp(absSpeed / 22f, 0f, 1f));
 
-        // At parking-lot speed the bars can visibly steer. At riding speed the same pad travel
-        // commands a much smaller front-wheel angle, which avoids the old twitchy snap-turn feel.
         float maxSteer = MathUtils.lerp(29f, 5.5f, speedBlend)
                 * MathUtils.degreesToRadians;
         steeringAngle = -steerCommand * maxSteer;
 
-        if (rearTouching || frontTouching) {
+        boolean touching = rearTouching || frontTouching;
+        if (touching) {
             float referenceSpeed = Math.max(absSpeed, 2.0f);
             float frontPointLateral = lateralSpeed + yawRate * frontArm;
             float rearPointLateral = lateralSpeed - yawRate * rearArm;
@@ -81,10 +77,6 @@ final class MotorcycleLateralDynamics {
 
             float frontLimit = Math.max(0f, frontMu * frontNormalLoad);
             float rearCircle = Math.max(0f, rearMu * rearNormalLoad);
-
-            // Drive force reduces rear cornering authority, but only partially. The previous
-            // full friction-circle subtraction could drive rear lateral grip nearly to zero at
-            // full throttle, which made power-on turns feel like the rear tire was on ice.
             float rearDriveUse = rearCircle > 0.001f
                     ? MathUtils.clamp(Math.abs(rearLongitudinalForce) / rearCircle, 0f, 1f)
                     : 0f;
@@ -106,17 +98,13 @@ final class MotorcycleLateralDynamics {
             float bodyLateralAcceleration = lateralAcceleration - speed * yawRate;
             lateralSpeed += bodyLateralAcceleration * dt;
 
-            // Motorcycle sideslip should be something the player can catch, not momentum that
-            // persists for half the track. When both tires are planted they rapidly recapture
-            // the chassis velocity, especially as the rider releases steering input. Rear-only
-            // contact keeps much less of this assistance so wheelies can still move around.
             float steerMagnitude = MathUtils.clamp(Math.abs(steerCommand), 0f, 1f);
-            float lateralCapture = 0f;
+            float lateralCapture;
             if (frontTouching && rearTouching) {
                 lateralCapture = MathUtils.lerp(5.0f, 3.1f, steerMagnitude);
             } else if (rearTouching) {
                 lateralCapture = 1.25f;
-            } else if (frontTouching) {
+            } else {
                 lateralCapture = 2.4f;
             }
             lateralSpeed *= Math.max(0f, 1f - dt * lateralCapture);
@@ -125,45 +113,54 @@ final class MotorcycleLateralDynamics {
 
             float yawTorque = frontArm * frontLateralForce - rearArm * rearLateralForce;
             float yawAcceleration = yawTorque / YAW_INERTIA - yawRate * YAW_DAMPING;
-
-            // With the front wheel in the air there is no front contact patch to steer with.
-            // A modest rear-only authority keeps wheelies controllable without reverting to a
-            // canned yaw-rate target.
             if (rearTouching && !frontTouching) {
                 float wheelieAuthority = MathUtils.lerp(2.0f, 0.72f, speedBlend);
                 yawAcceleration += -steerCommand * wheelieAuthority * motionBlend;
             }
-
             yawRate += yawAcceleration * dt;
         } else {
+            // In flight there is no tire force available to bend the trajectory or recapture
+            // sideslip. World-space velocity is owned by BalancePointGame while this class keeps
+            // the motorcycle's attitude dynamics. Preserve yaw angular momentum with only light
+            // aerodynamic damping rather than forcing the bike to point down its flight path.
             lateralAcceleration = 0f;
-            lateralSpeed *= Math.max(0f, 1f - dt * 0.08f);
-            yawRate *= Math.max(0f, 1f - dt * 0.34f);
+            yawRate *= Math.max(0f, 1f - dt * 0.08f);
         }
 
         yawRate = MathUtils.clamp(yawRate, -MAX_YAW_RATE, MAX_YAW_RATE);
 
-        // Tire force supplies the steady-state lean. A smaller rider-intent term leads it during
-        // turn-in so the bike feels willing to change direction instead of waiting for yaw first.
-        float forceRoll = -(float) Math.atan2(lateralAcceleration, gravity);
-        float leanSpeedBlend = smooth(MathUtils.clamp((absSpeed - 1.0f) / 12f, 0f, 1f));
-        float intentLimit = MathUtils.lerp(10f, 50f, leanSpeedBlend)
-                * MathUtils.degreesToRadians;
-        float intentRoll = steerCommand * intentLimit;
-        float intentWeight = frontTouching ? 0.30f : (rearTouching ? 0.20f : 0.08f);
-        float rollTarget = MathUtils.clamp(
-                forceRoll * (1f - intentWeight) + intentRoll * intentWeight,
-                -MAX_ROLL,
-                MAX_ROLL);
+        if (touching) {
+            float forceRoll = -(float) Math.atan2(lateralAcceleration, gravity);
+            float leanSpeedBlend = smooth(MathUtils.clamp((absSpeed - 1.0f) / 12f, 0f, 1f));
+            float intentLimit = MathUtils.lerp(10f, 50f, leanSpeedBlend)
+                    * MathUtils.degreesToRadians;
+            float intentRoll = steerCommand * intentLimit;
+            float intentWeight = frontTouching ? 0.30f : 0.20f;
+            float rollTarget = MathUtils.clamp(
+                    forceRoll * (1f - intentWeight) + intentRoll * intentWeight,
+                    -MAX_ROLL,
+                    MAX_ROLL);
 
-        float rollFrequency = frontTouching ? 5.3f : (rearTouching ? 4.2f : 2.7f);
-        float rollDamping = frontTouching ? 0.86f : (rearTouching ? 0.80f : 0.68f);
-        float rollAcceleration = (rollTarget - roll) * rollFrequency * rollFrequency
-                - 2f * rollDamping * rollFrequency * rollRate;
-        rollRate += rollAcceleration * dt;
+            float rollFrequency = frontTouching ? 5.3f : 4.2f;
+            float rollDamping = frontTouching ? 0.86f : 0.80f;
+            float rollAcceleration = (rollTarget - roll) * rollFrequency * rollFrequency
+                    - 2f * rollDamping * rollFrequency * rollRate;
+            rollRate += rollAcceleration * dt;
+        } else {
+            // Do not spring the bike upright in mid-air. Carry takeoff roll angular momentum and
+            // allow a modest rider/steer input to roll the chassis without inventing tire forces.
+            float airborneRollAcceleration = steerCommand * 1.85f - rollRate * 0.12f;
+            rollRate += airborneRollAcceleration * dt;
+        }
+
         rollRate = MathUtils.clamp(rollRate, -4.3f, 4.3f);
         roll += rollRate * dt;
         roll = MathUtils.clamp(roll, -MAX_ROLL, MAX_ROLL);
+    }
+
+    /** Synchronizes body-frame sideslip with the ballistic world-space velocity while airborne. */
+    void syncAirborneVelocity(float bodyLateralSpeed) {
+        lateralSpeed = MathUtils.clamp(bodyLateralSpeed, -MAX_LATERAL_SPEED, MAX_LATERAL_SPEED);
     }
 
     void reset() {
