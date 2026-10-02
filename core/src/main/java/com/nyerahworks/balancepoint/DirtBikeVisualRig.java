@@ -82,9 +82,11 @@ final class DirtBikeVisualRig {
             frontSliders = null;
         }
 
-        frontCompressionAxis.set(bike.steeringHead)
-                .sub(bike.frontAxleOffset)
-                .nor();
+        // SteeringAxis is the fitted fork/rake axis. steeringHead is merely one point on that
+        // line chosen near the front axle so steering rotation remains exact; subtracting the
+        // axle from that point produces an almost-zero vector and previously made fork travel
+        // effectively directionless. Compression must translate along the actual fork axis.
+        frontCompressionAxis.set(bike.steeringAxis).nor();
 
         Gdx.app.log("BalancePoint", "Visual suspension rig: swingarmParts="
                 + swingarmIds.size + " lowerForkParts=" + sliderIds.size
