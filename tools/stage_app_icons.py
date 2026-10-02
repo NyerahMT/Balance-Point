@@ -6,6 +6,8 @@ from pathlib import Path
 
 from PIL import Image
 
+from stage_terrain_materials import stage_terrain_materials
+
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "tools" / "branding" / "62C6ECA5-5CF8-4A35-8BCD-3BCFEF430967.png"
 EXPECTED_GIT_BLOB_SHA1 = "48fe1ad7654f62d5c1117e8f9f4db0bc01de8dd2"
@@ -95,6 +97,7 @@ def main() -> None:
         source = image.convert("RGB")
         stage_ios(source)
         stage_android(source)
+    stage_terrain_materials()
     print(f"Staged Balance Point app icons from {SOURCE.relative_to(ROOT)}")
 
 
