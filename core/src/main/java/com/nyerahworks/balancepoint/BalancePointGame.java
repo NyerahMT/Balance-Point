@@ -90,6 +90,7 @@ public final class BalancePointGame extends ApplicationAdapter {
     // momentum across crests when both wheels leave the terrain.
     private float bikeY = WHEEL_RADIUS;
     private float chassisY = WHEEL_RADIUS + COM_HEIGHT;
+    private float effectiveComForward = COM_FORWARD;
     private float verticalVelocity;
     private boolean terrainAirborne;
     private float pitch;
@@ -500,7 +501,7 @@ public final class BalancePointGame extends ApplicationAdapter {
                     / (40f * MathUtils.degreesToRadians), 0f, 1f);
             climbPostureShift = climbBlend * 0.14f;
         }
-        float effectiveComForward = MathUtils.clamp(
+        effectiveComForward = MathUtils.clamp(
                 COM_FORWARD + riderDynamics.combinedComShift() + climbPostureShift,
                 0.48f, 0.96f);
         float rearForward = -effectiveComForward * cosPitch + COM_HEIGHT * sinPitch;
@@ -712,7 +713,7 @@ public final class BalancePointGame extends ApplicationAdapter {
 
         // Derived rear-axle hardpoint height retained for camera/UI code. The rendered wheel
         // moves relative to this point through the suspension rig.
-        rearVertical = -COM_FORWARD * sinPitch - COM_HEIGHT * cosPitch;
+        rearVertical = -effectiveComForward * sinPitch - COM_HEIGHT * cosPitch;
         bikeY = chassisY + rearVertical;
 
         wheelSpin += rearWheelAngularSpeed * dt;
@@ -916,6 +917,7 @@ public final class BalancePointGame extends ApplicationAdapter {
         bikeX = 0f;
         chassisY = WHEEL_RADIUS + COM_HEIGHT;
         bikeY = WHEEL_RADIUS;
+        effectiveComForward = COM_FORWARD;
         verticalVelocity = 0f;
         terrainAirborne = false;
         pitch = 0f;
@@ -959,6 +961,7 @@ public final class BalancePointGame extends ApplicationAdapter {
         state.bikeX = bikeX;
         state.bikeZ = bikeZ;
         state.chassisY = chassisY;
+        state.effectiveComForward = effectiveComForward;
         state.pitch = pitch;
         state.roll = roll;
         state.yaw = yaw;
