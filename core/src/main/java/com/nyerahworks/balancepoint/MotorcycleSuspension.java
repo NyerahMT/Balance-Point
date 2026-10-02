@@ -5,11 +5,10 @@ import com.badlogic.gdx.math.MathUtils;
 /**
  * Front/rear motorcycle suspension model in physical units.
  *
- * Each end now owns a persistent wheel/suspension degree of freedom. The terrain no longer
- * teleports compression directly to the geometric demand every fixed step: contact is mediated
- * by a short-travel radial tire spring, while the wheel state accelerates between tire force and
- * spring/damper force. That lets the wheel extend across crests, reach droop in the air and
- * re-compress progressively on landing.
+ * Each end owns a persistent wheel/suspension degree of freedom. Terrain contact is mediated by
+ * a short-travel radial tire spring, while the wheel state accelerates between tire force and
+ * spring/damper force. The terrain therefore no longer teleports the fork/shock directly to a
+ * demanded compression every fixed step.
  */
 final class MotorcycleSuspension {
     static final float REAR_TRAVEL = 0.300f;
@@ -29,15 +28,14 @@ final class MotorcycleSuspension {
     private static final float REAR_BUMP_RATE = 82_000f;
     private static final float FRONT_BUMP_RATE = 72_000f;
 
-    // Effective unsprung masses. These are not literal scale weights for every rotating part;
-    // they are the vertical inertia seen at the axle after the swingarm/fork geometry is folded
-    // into one suspension-axis degree of freedom.
+    // Effective vertical inertia at each axle after fork/swingarm geometry is collapsed into
+    // one degree of freedom. These are intentionally modest rather than literal assembly masses.
     private static final float REAR_UNSPRUNG_MASS = 15.5f;
     private static final float FRONT_UNSPRUNG_MASS = 13.5f;
 
-    // Low-pressure knobby tires provide the first few centimetres of landing/chatter compliance
-    // before the fork/shock has to move. Geometry treats zero gap as the normal loaded radius,
-    // so static tire compression is baked into each Unit from its static wheel load.
+    // Low-pressure knobby tires supply the first layer of compliance before the suspension has
+    // to move. Zero terrain gap represents the normal loaded radius, so static tire squash is
+    // derived from the ordinary wheel load and recovered as load falls away.
     private static final float REAR_TIRE_RATE = 128_000f;
     private static final float FRONT_TIRE_RATE = 116_000f;
     private static final float REAR_TIRE_DAMPING = 720f;
@@ -144,16 +142,30 @@ final class MotorcycleSuspension {
         }
 
         /**
-         * Persistent wheel/contact solve used by the live bike.
+         * Live persistent wheel/contact solve.
          *
-         * nominalGap is the terrain gap at the axle's normal loaded position. Positive physical
-         * ride offset moves the wheel upward with additional suspension compression; negative
-         * offset moves it down as the fork/shock extends. Tire force then accelerates the wheel
-         * state against the suspension force instead of directly assigning a new compression.
-         *
-         * This intentionally remains a compact semi-unsprung model: the chassis still receives
-         * the net terrain force as one rigid body, while this DOF supplies realistic contact
-         * continuity without requiring a full articulated multibody motorcycle.
+         * The existing chassis contact solver gives us demandedCompression = staticSag - gap and
+         * compressionVelocity = -hardpointNormalVelocity. Recovering those quantities here lets
+         * this new unsprung state slot into the current game without a second contact pipeline.
+         */
+        float solve(float demandedCompression,
+                    float compressionVelocity,
+                    float effectiveMass,
+                    float dt) {
+            float nominalGap = staticCompression - demandedCompression;
+            float hardpointNormalVelocity = -compressionVelocity;
+            return stepContact(
+                    nominalGap,
+                    1f,
+                    hardpointNormalVelocity,
+                    effectiveMass,
+                    dt);
+        }
+
+        /**
+         * Persistent wheel/contact solve with an explicit surface-normal vertical component.
+         * This overload is ready for the game loop to use directly when we fold slope orientation
+         * into unsprung motion in the next refinement.
          */
         float stepContact(float nominalGap,
                           float surfaceNormalUp,
@@ -163,11 +175,13 @@ final class MotorcycleSuspension {
             float normalUp = MathUtils.clamp(surfaceNormalUp, 0.15f, 1f);
             float safeDt = Math.max(dt, 0.0001f);
 
+            // Additional suspension compression moves the axle upward relative to the chassis;
+            // extension moves it downward and lets the wheel follow a falling surface.
             actualGap = nominalGap + physicalRideOffset() * normalUp;
             float wheelNormalVelocity = hardpointNormalVelocity + velocity * normalUp;
 
-            // Zero geometric gap is the ordinary loaded tire radius. As load comes off, the
-            // tire first recovers its static squash before a true air gap opens.
+            // At zero geometric gap the loaded tire is already statically squashed. As load
+            // disappears it recovers that squash before the wheel truly separates from terrain.
             tireCompression = Math.max(0f, staticTireCompression - actualGap);
             float tireCompressionVelocity = -wheelNormalVelocity;
             float tireForce = 0f;
@@ -180,8 +194,9 @@ final class MotorcycleSuspension {
             suspensionForce = calculateSuspensionForce(
                     compression, velocity, effectiveMass, safeDt, 0f);
 
-            // Positive compression velocity moves the axle upward relative to the chassis.
-            // The ground pushes it up; spring/damper force pushes it back toward droop.
+            // Compact semi-unsprung model: tire contact pushes the axle toward compression,
+            // while spring/damper force pushes it back toward droop. The chassis still receives
+            // the net terrain force as one rigid body, avoiding a disruptive multibody rewrite.
             float unsprungAcceleration = (tireForce * normalUp - suspensionForce)
                     / unsprungMass;
             velocity += unsprungAcceleration * safeDt;
@@ -196,36 +211,26 @@ final class MotorcycleSuspension {
                 if (velocity > 0f) velocity = 0f;
             }
 
-            // The state itself now has inertia, so the old artificial visual extension limiter
-            // is no longer needed for live contact. Render the actual physical wheel travel.
+            // Persistent inertia now supplies the visual smoothing naturally.
             presentationCompression = compression;
             force = tireForce;
             return force;
         }
 
-        /**
-         * Direct force solve retained for deterministic unit tests and tuning probes. The live
-         * motorcycle uses stepContact so compression has persistent inertia.
-         */
-        float solve(float demandedCompression,
-                    float compressionVelocity,
-                    float effectiveMass,
-                    float dt) {
+        /** Direct spring/damper probe for deterministic tuning tests. */
+        float probeForce(float demandedCompression,
+                         float compressionVelocity,
+                         float effectiveMass,
+                         float dt) {
             float overTravel = Math.max(0f, demandedCompression - travel);
-            compression = MathUtils.clamp(demandedCompression, 0f, travel);
-            velocity = compressionVelocity;
-            updatePresentationCompression(dt);
-
-            if (demandedCompression <= 0f) {
-                force = 0f;
-                suspensionForce = 0f;
-                return force;
-            }
-
-            suspensionForce = calculateSuspensionForce(
-                    compression, compressionVelocity, effectiveMass, dt, overTravel);
-            force = suspensionForce;
-            return force;
+            float probeCompression = MathUtils.clamp(demandedCompression, 0f, travel);
+            if (demandedCompression <= 0f) return 0f;
+            return calculateSuspensionForce(
+                    probeCompression,
+                    compressionVelocity,
+                    effectiveMass,
+                    dt,
+                    overTravel);
         }
 
         private float calculateSuspensionForce(float compression,
@@ -251,13 +256,6 @@ final class MotorcycleSuspension {
                 solvedForce += bumpRate * bumpTravel * (1f + bumpTravel * 5f);
             }
             return MathUtils.clamp(solvedForce, 0f, maxForce);
-        }
-
-        private void updatePresentationCompression(float dt) {
-            float maxRate = compression >= presentationCompression ? 4.0f : 1.25f;
-            float maxStep = maxRate * Math.max(0f, dt);
-            float delta = compression - presentationCompression;
-            presentationCompression += MathUtils.clamp(delta, -maxStep, maxStep);
         }
 
         void reset() {
