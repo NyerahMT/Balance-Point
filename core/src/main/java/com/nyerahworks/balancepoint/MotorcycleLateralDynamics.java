@@ -14,10 +14,16 @@ final class MotorcycleLateralDynamics {
     private static final float REAR_CORNERING_GAIN = 7.6f;
     private static final float YAW_INERTIA = 82f;
     private static final float YAW_DAMPING = 1.02f;
-    private static final float MAX_YAW_RATE = 1.75f;
+    private static final float MAX_GROUNDED_YAW_RATE = 1.75f;
+    private static final float MAX_AIRBORNE_YAW_RATE = 2.65f;
     private static final float MAX_LATERAL_SPEED = 3.0f;
     private static final float MAX_RIDE_ROLL = 58f * MathUtils.degreesToRadians;
     private static final float MAX_PHYSICAL_ROLL = 175f * MathUtils.degreesToRadians;
+
+    // Airborne rider input should create a whip around the vertical axis without bending the
+    // ballistic flight path. This is active body/peg/handlebar authority, not a tire force.
+    private static final float AIR_YAW_CONTROL_ACCELERATION = 2.55f;
+    private static final float AIR_YAW_DAMPING = 0.10f;
 
     // Once airborne, yaw is intentionally left free so a scrub can become a whip. Roll is
     // different: the rider/bike system should work the wheels back underneath itself instead of
@@ -127,15 +133,18 @@ final class MotorcycleLateralDynamics {
             }
             yawRate += yawAcceleration * dt;
         } else {
-            // In flight there is no tire force available to bend the trajectory or recapture
-            // sideslip. World-space velocity is owned by BalancePointGame while this class keeps
-            // the motorcycle's attitude dynamics. Preserve yaw angular momentum with only light
-            // aerodynamic damping so a scrub/whip keeps rotating around the vertical axis.
+            // With both tires clear, left/right input now actively yaws the bike so the rider can
+            // initiate or unwind a whip after takeoff. World-space velocity remains untouched,
+            // so this rotates only the motorcycle attitude, never the ballistic trajectory.
             lateralAcceleration = 0f;
-            yawRate *= Math.max(0f, 1f - dt * 0.08f);
+            float shapedSteer = steerCommand * (0.70f + 0.30f * Math.abs(steerCommand));
+            float yawAcceleration = -shapedSteer * AIR_YAW_CONTROL_ACCELERATION
+                    - yawRate * AIR_YAW_DAMPING;
+            yawRate += yawAcceleration * dt;
         }
 
-        yawRate = MathUtils.clamp(yawRate, -MAX_YAW_RATE, MAX_YAW_RATE);
+        float maxYawRate = touching ? MAX_GROUNDED_YAW_RATE : MAX_AIRBORNE_YAW_RATE;
+        yawRate = MathUtils.clamp(yawRate, -maxYawRate, maxYawRate);
 
         if (touching) {
             float forceRoll = -(float) Math.atan2(lateralAcceleration, gravity);
@@ -157,8 +166,8 @@ final class MotorcycleLateralDynamics {
         } else {
             // A real scrub can leave the lip with both roll angle and roll rate, but the rider is
             // actively trying to get the wheels back underneath the bike for landing. Drive roll
-            // toward upright while leaving yaw alone. This turns the same left-right takeoff move
-            // into a whip instead of a barrel roll.
+            // toward upright while leaving yaw independently controllable. This turns the same
+            // left-right takeoff move into a whip instead of a barrel roll.
             float airborneRollAcceleration = -roll
                     * AIR_ROLL_LEVEL_FREQUENCY * AIR_ROLL_LEVEL_FREQUENCY
                     - 2f * AIR_ROLL_LEVEL_DAMPING * AIR_ROLL_LEVEL_FREQUENCY * rollRate;
