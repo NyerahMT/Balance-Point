@@ -9,7 +9,7 @@ This document defines the exact condition under which Balance Point may begin th
 
 No runtime Physics V2 code should replace the current plant until this checklist reaches **OPEN**.
 
-Raw measurement and identification artifacts required by this gate must follow `docs/PHYSICS_V2_CALIBRATION_DATASET_SPEC.md`. Research Pass 07 converts the remaining blockers into a concrete calibration campaign and records the current public-data boundary.
+Raw measurement and identification artifacts required by this gate must follow `docs/PHYSICS_V2_CALIBRATION_DATASET_SPEC.md`. Research Pass 07 converts the remaining blockers into a concrete calibration campaign; Research Pass 08 corrects the longitudinal-CG derivation to a single consistent Honda configuration and narrows rear-wheel geometry using Honda's unchanged 585.2 mm swingarm statement.
 
 ---
 
@@ -61,7 +61,7 @@ Current reference nominal values are documented in Research Pass 06.
 - [x] rake;
 - [x] trail;
 - [x] front/rear nominal travel;
-- [x] swingarm length manufacturer prior;
+- [x] swingarm length manufacturer prior (**585.2 mm; Honda states 25YM swingarm is unchanged**);
 - [x] front triple-clamp offset high-confidence secondary bound;
 - [ ] exact chassis-reference coordinates for steering axis, swingarm pivot, front axle/fork relation, footpegs and handlebar sufficient for force application;
 
@@ -69,6 +69,7 @@ Current reference nominal values are documented in Research Pass 06.
 
 - [x] total nominal wet mass;
 - [x] same-generation longitudinal static-load/CG prior;
+- [x] internally consistent European 25YM longitudinal-CG derivation retained as prior (`x_CG = 0.722221 m` from rear contact for the 113 kg / 1.483 m / 48.7:51.3 configuration);
 - [ ] bike-only CG height;
 - [ ] roll inertia or full inertia tensor about bike CG;
 - [ ] pitch inertia or full inertia tensor about bike CG;
@@ -100,6 +101,7 @@ Gate A is READY when:
 - [x] fork type;
 - [x] fork travel;
 - [x] stock spring rate per leg;
+- [x] fork spring free-length secondary measurement (500 mm);
 - [x] bare parallel coil rate derived;
 - [x] 2025 friction/damping redesign confirmed;
 - [ ] absolute compression force-vs-velocity law;
@@ -112,8 +114,10 @@ Gate A is READY when:
 
 - [x] stock shock spring rate;
 - [x] free/installed spring-length distinction documented;
-- [x] shock shaft/main-piston envelope;
+- [x] rear spring free-length secondary measurement (240 mm);
+- [x] shock shaft/main-piston envelope (16 mm / 50 mm secondary data);
 - [x] 2025-specific linkage identity and pullrod measurement;
+- [x] rigid swingarm arc constrained by manufacturer 585.2 mm swingarm length;
 - [ ] local axle-travel-to-shock-travel motion-ratio curve;
 - [ ] compression force-vs-shock-velocity law;
 - [ ] rebound force-vs-shock-velocity law;
@@ -144,6 +148,7 @@ Gate B is READY when:
 - [x] peak dyno power;
 - [x] peak dyno torque;
 - [x] coarse full dyno trace for research;
+- [x] same-generation 2025/2026 dyno comparison recorded as a few-percent empirical repeatability/configuration bound, not a calibration replacement;
 - [x] clutch architecture and plate/spring count;
 - [x] hard lower bound on fully engaged clutch torque capacity;
 - [x] engine-inertia differential identification method defined.
@@ -287,12 +292,12 @@ Only after that plant passes validation may the virtual rider and gameplay assis
 
 **CODING GATE: CLOSED.**
 
-The remaining blockers are not architectural uncertainty. They are specific high-sensitivity calibration datasets:
+The remaining blockers are now clearly external calibration/identification datasets, not missing model architecture or broad literature research:
 
-- CRF CG/inertia;
+- CRF CG height/inertias;
 - 2025 Pro-Link motion ratio;
 - stock Showa force laws;
 - MX33 hardpack tire force/transient data;
 - engine inertia/braking and clutch slip law.
 
-Research Pass 07 and `PHYSICS_V2_CALIBRATION_DATASET_SPEC.md` now define exactly what raw observations are required to close those blockers. This checklist remains the definition used to decide when the project transitions from research into the Physics V2 runtime rewrite.
+Research Pass 08 records the current public-data ceiling and corrects the swingarm/CG source handling. The project should now prioritize executing the measurement/identification plan rather than accumulating more adjacent-bike constants.
