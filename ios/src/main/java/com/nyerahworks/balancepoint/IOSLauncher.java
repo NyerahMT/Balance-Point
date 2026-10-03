@@ -13,6 +13,7 @@ public final class IOSLauncher extends IOSApplication.Delegate {
         IOSApplicationConfiguration config = new IOSApplicationConfiguration();
         config.orientationLandscape = true;
         config.orientationPortrait = false;
+        config.useGL30 = true;
         return new IOSApplication(new BalancePointGame(), config);
     }
 

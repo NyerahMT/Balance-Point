@@ -67,6 +67,7 @@ final class GameScene {
     private final Environment environment = new Environment();
     private final DirectionalShadowLight shadowLight;
     private final ModelBatch shadowBatch;
+    private final ScreenSpaceAmbientOcclusion ssao;
 
     private TerrainVisuals terrainVisuals;
     private ModelInstance[] roadSegments;
@@ -112,15 +113,17 @@ final class GameScene {
         this.comForward = comForward;
         this.comHeight = comHeight;
 
+        // A much lower ambient floor leaves room for the key light and SSAO to describe form.
         environment.set(
-                new ColorAttribute(ColorAttribute.AmbientLight, 0.62f, 0.65f, 0.63f, 1f));
+                new ColorAttribute(ColorAttribute.AmbientLight, 0.30f, 0.34f, 0.38f, 1f));
         shadowLight = new DirectionalShadowLight(1024, 1024, 28f, 28f, 0.5f, 70f);
-        shadowLight.set(0.95f, 0.88f, 0.76f, -0.45f, -1f, -0.28f);
+        shadowLight.set(1.05f, 0.94f, 0.82f, -0.45f, -1f, -0.28f);
         shadowLight.getDepthMap().minFilter = Texture.TextureFilter.Linear;
         shadowLight.getDepthMap().magFilter = Texture.TextureFilter.Linear;
         environment.add(shadowLight);
         environment.shadowMap = null;
         shadowBatch = new ModelBatch(new DepthShaderProvider());
+        ssao = new ScreenSpaceAmbientOcclusion();
 
         createWorldModels();
         createBikeModels();
@@ -186,10 +189,14 @@ final class GameScene {
         for (ModelInstance model : laneDashes) modelBatch.render(model, environment);
         if (showBike) renderBike();
         modelBatch.end();
+
+        // Screen-space AO runs before the HUD so only world geometry is shaded.
+        ssao.apply(camera, highQuality);
     }
 
     void dispose() {
         terrainVisuals.dispose();
+        ssao.dispose();
         shadowBatch.dispose();
         shadowLight.dispose();
         modelBatch.dispose();

@@ -13,6 +13,7 @@ public final class MainActivity extends AndroidApplication {
         AndroidApplicationConfiguration config = new AndroidApplicationConfiguration();
         config.useImmersiveMode = true;
         config.useWakelock = true;
+        config.useGL30 = true;
         config.useAccelerometer = false;
         config.useCompass = false;
         config.useGyroscope = false;
