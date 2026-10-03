@@ -9,6 +9,8 @@ This document defines the exact condition under which Balance Point may begin th
 
 No runtime Physics V2 code should replace the current plant until this checklist reaches **OPEN**.
 
+Raw measurement and identification artifacts required by this gate must follow `docs/PHYSICS_V2_CALIBRATION_DATASET_SPEC.md`. Research Pass 07 converts the remaining blockers into a concrete calibration campaign and records the current public-data boundary.
+
 ---
 
 ## 1. Allowed parameter states
@@ -293,4 +295,4 @@ The remaining blockers are not architectural uncertainty. They are specific high
 - MX33 hardpack tire force/transient data;
 - engine inertia/braking and clutch slip law.
 
-This checklist is the definition used to decide when the project transitions from research into the Physics V2 runtime rewrite.
+Research Pass 07 and `PHYSICS_V2_CALIBRATION_DATASET_SPEC.md` now define exactly what raw observations are required to close those blockers. This checklist remains the definition used to decide when the project transitions from research into the Physics V2 runtime rewrite.
