@@ -2,6 +2,7 @@ package com.nyerahworks.balancepoint;
 
 import com.badlogic.gdx.ApplicationAdapter;
 import com.badlogic.gdx.Gdx;
+import com.badlogic.gdx.graphics.PerspectiveCamera;
 import com.badlogic.gdx.math.MathUtils;
 
 /**
@@ -194,10 +195,6 @@ public final class BalancePointGame extends ApplicationAdapter {
             }
             if (steps == 8) physicsAccumulator = 0.0;
 
-            if (engineAudio != null) {
-                engineAudio.update(drivetrain.getRpm(), throttle,
-                        drivetrain.isShifting(), crashed);
-            }
         } else {
             physicsAccumulator = 0.0;
         }
@@ -207,6 +204,9 @@ public final class BalancePointGame extends ApplicationAdapter {
             instrumentDisplay.update(speed, drivetrain);
         }
         updateCamera(frameDt);
+        if (gameState == GameState.PLAYING && engineAudio != null) {
+            updateEngineAudio();
+        }
 
         float worldCenterZ = gameCamera.worldCenterZ(bikeZ);
         scene.updateWorld(worldCenterZ);
@@ -471,6 +471,58 @@ public final class BalancePointGame extends ApplicationAdapter {
         cameraTouchHeld = false;
         if (gameCamera != null) gameCamera.enterMainMenu();
         if (engineAudio != null) engineAudio.setActive(false);
+    }
+
+
+    /**
+     * Exhaust sits behind the swingarm. Pan, distance and rear radiation drive the outdoor
+     * stage; closing speed is the bike velocity toward the listener for doppler.
+     */
+    private void updateEngineAudio() {
+        PerspectiveCamera cam = gameCamera.camera();
+        float sin = MathUtils.sin(yaw);
+        float cos = MathUtils.cos(yaw);
+        float exhaustX = bikeX - sin * 0.92f;
+        float exhaustY = bikeY + 0.42f;
+        float exhaustZ = bikeZ - cos * 0.92f;
+        float dx = exhaustX - cam.position.x;
+        float dy = exhaustY - cam.position.y;
+        float dz = exhaustZ - cam.position.z;
+        float dist = (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
+        dist = Math.max(dist, 0.35f);
+        float inv = 1f / dist;
+        float lx = dx * inv;
+        float ly = dy * inv;
+        float lz = dz * inv;
+
+        float fx = cam.direction.x;
+        float fy = cam.direction.y;
+        float fz = cam.direction.z;
+        float ux = cam.up.x;
+        float uy = cam.up.y;
+        float uz = cam.up.z;
+        float rx = fy * uz - fz * uy;
+        float ry = fz * ux - fx * uz;
+        float rz = fx * uy - fy * ux;
+        float rlen = (float) Math.sqrt(rx * rx + ry * ry + rz * rz);
+        if (rlen > 0.0001f) {
+            rx /= rlen;
+            ry /= rlen;
+            rz /= rlen;
+        }
+        float pan = MathUtils.clamp(lx * rx + ly * ry + lz * rz, -1f, 1f);
+
+        // Outlet points rearward. rearRadiation is how directly the listener sits behind it.
+        float toListenerX = -lx;
+        float toListenerZ = -lz;
+        float rear = MathUtils.clamp(toListenerX * -sin + toListenerZ * -cos, 0f, 1f);
+
+        float bikeVx = sin * speed;
+        float bikeVy = verticalVelocity;
+        float bikeVz = cos * speed;
+        float closing = bikeVx * toListenerX + bikeVy * (-ly) + bikeVz * toListenerZ;
+        engineAudio.update(drivetrain.getRpm(), throttle, drivetrain.isShifting(), crashed,
+                pan, dist, rear, closing);
     }
 
     private static float approach(float value, float target, float amount) {
