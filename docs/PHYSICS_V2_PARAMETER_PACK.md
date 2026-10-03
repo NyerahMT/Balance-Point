@@ -10,7 +10,9 @@ The purpose of this document is to keep Physics V2 auditable. A number is not al
 - **ASSIST** — deliberately nonphysical game-control authority, kept outside the physical plant and named as an assist.
 - **UNKNOWN** — not yet justified. UNKNOWN values are blockers, not invitations to guess.
 
-Reference motorcycle for the first Physics V2 implementation: **2025 Honda CRF450R**.
+Reference motorcycle for the first Physics V2 implementation: **late-2025 US Honda CRF450R production-spec configuration**.
+
+Important source-handling note from Research Pass 08: Honda Europe publishes a same-generation 25YM 48.7/51.3 front/rear static load split and 1.483 m wheelbase. Those values form one internally consistent European configuration. They must not be silently mixed with the frozen US geometry when deriving exact runtime CG coordinates.
 
 ---
 
@@ -78,532 +80,421 @@ https://www.sciencedirect.com/science/article/pii/S0888327020306142
 | Parameter | Physics V2 value | Provenance | Status |
 |---|---:|---|---|
 | Reference model | 2025 Honda CRF450R | Honda | PUBLISHED |
-| Wet motorcycle mass | 113 kg | Honda Europe 25YM release | PUBLISHED |
-| US curb-weight cross-check | 249 lb | Honda US specifications | PUBLISHED |
-| Wheelbase | 1.482 m US manual / 1.483 m EU release | Honda | PUBLISHED |
-| Caster/rake | 27 deg 19 min | Honda owner manual | PUBLISHED |
-| Trail | 0.115 m | Honda owner manual | PUBLISHED |
-| Ground clearance | 0.333 m | Honda | PUBLISHED |
-| Swingarm length | 0.5852 m | Honda Europe 25YM release | PUBLISHED |
-| Wet static weight distribution | 48.7% front / 51.3% rear | Honda Europe 25YM release | PUBLISHED |
-| Bike-only longitudinal CG from rear axle | about 0.722 m | 0.487 x 1.483 m | DERIVED |
-| Bike-only front static load | about 540 N | 113 kg x g x 0.487 | DERIVED |
-| Bike-only rear static load | about 569 N | 113 kg x g x 0.513 | DERIVED |
-| Bike-only CG height | unknown | Requires measurement/source | UNKNOWN |
-| Chassis/whole-bike inertia tensor | unknown | Requires measurement/source | UNKNOWN |
-| Steering assembly mass/inertia | unknown | Requires measurement/source | UNKNOWN |
-| Front unsprung mass | unknown | Requires measurement/source | UNKNOWN |
-| Rear unsprung mass | unknown | Requires measurement/source | UNKNOWN |
-| Front wheel rotational inertia | unknown | Requires measurement/source | UNKNOWN |
-| Rear wheel rotational inertia | unknown | Requires measurement/source | UNKNOWN |
+| Runtime reference revision | late-2025 US production spec | Honda Powersports 2025 brochure/current spec | PUBLISHED |
+| Nominal curb mass | 249 lb / 112.94 kg | Honda Powersports 2025 production spec | PUBLISHED |
+| Wheelbase | 58.3 in / 1.48082 m | Honda Powersports | PUBLISHED |
+| Rake | 27.3 deg | Honda Powersports | PUBLISHED |
+| Trail | 4.5 in / 114.3 mm | Honda Powersports | PUBLISHED |
+| Front travel | 12.2 in / 309.9 mm | Honda Powersports | PUBLISHED |
+| Rear travel | 12.2 in / 309.9 mm | Honda Powersports | PUBLISHED |
+| Swingarm length | 585.2 mm | Honda Europe 25YM technical release | PUBLISHED |
+| Triple-clamp offset | 22 mm | secondary/direct-fit cross-checks | BOUNDED / high-confidence secondary |
+| Bike-only CG X | US exact: unresolved | must not silently transport EU load split | UNKNOWN |
+| Bike-only CG Z | — | ISO-style identification required | UNKNOWN |
+| Inertia tensor | — | ISO-style identification required | UNKNOWN |
 
-Honda sources:
+Reference source:
+https://powersports.honda.com/-/media/products/family/crf450r/brochure/2025/2025-crf450r-brochure.pdf
 
-- 2025 owner manual, official Honda PDF: https://cdn.powersports.honda.com/documentum/MWOM/ml.remawmom.amker2525omen.pdf
-- 25YM Honda Europe technical release: https://hondanews.eu/eu/fi/motorcycles/media/pressreleases/475110/25ym-honda-crf450r-1
-- Honda US specifications: https://powersports.honda.com/api/custom/downloads/specs?category=motocross&segment=motorcycle&trim=CRF450RS&year=2025
+### 2.1.1 Same-generation OEM longitudinal-CG prior
 
-### 2.2 Tires and wheels
+Honda Europe publishes one internally consistent 25YM configuration:
 
-| Parameter | Physics V2 value | Provenance | Status |
-|---|---:|---|---|
-| Front tire | Dunlop MX33F 80/100-21 51M | Honda owner manual | PUBLISHED |
-| Rear tire | Dunlop MX33 120/80-19 63M | Honda owner manual | PUBLISHED |
-| Construction | bias-ply, tube | Honda owner manual | PUBLISHED |
-| Cold pressure front | 100 kPa / 15 psi | Honda owner manual | PUBLISHED |
-| Cold pressure rear | 100 kPa / 15 psi | Honda owner manual | PUBLISHED |
-| Unloaded rolling radius | unknown as an exact physical parameter | Tire geometry/measurement required | UNKNOWN |
-| Vertical stiffness vs load | unknown | Test/data required | UNKNOWN |
-| Vertical damping | unknown | Test/data required | UNKNOWN |
-| Longitudinal force vs slip/load/surface | unknown | Off-road identification required | UNKNOWN |
-| Lateral force vs slip angle/load/camber/surface | unknown | Off-road identification required | UNKNOWN |
-| Camber thrust/moment behavior | unknown | Tire data/identification required | UNKNOWN |
-| Combined-slip coupling | model form required; coefficients unknown | Literature + identification | UNKNOWN |
-| Relaxation length/time constants | unknown | Literature + identification | UNKNOWN |
+- wet mass: 113 kg;
+- wheelbase: 1.483 m;
+- static front/rear load split: 48.7 / 51.3 percent.
 
-**Important:** road-motorcycle Pacejka coefficients are not acceptable substitutes for MX33-on-dirt data. The off-road literature explicitly notes that road-tire models with known road/tire interaction do not transfer cleanly to motocross because the surface changes, pitch/suspension motion is large and wheels detach frequently.
+From static equilibrium:
 
-Off-road force-estimation reference:
-https://www.sciencedirect.com/science/article/pii/S0888327020306142
+`x_CG = front_load_fraction * wheelbase`
 
-Motorcycle tire-model reference for carcass/contact geometry and transient behavior:
-https://doi.org/10.1023/B%3AMECC.0000022842.12077.5C
+therefore:
 
-### 2.3 Front suspension
+- `x_CG = 0.487 * 1.483 = 0.722221 m` from the rear contact patch;
+- front static load ≈ 539.67 N;
+- rear static load ≈ 568.48 N.
 
-| Parameter | Physics V2 value | Provenance | Status |
-|---|---:|---|---|
-| Fork type | Showa 49 mm USD coil spring | Honda | PUBLISHED |
-| Wheel/fork travel | 310 mm nominal EU / 12.2 in US | Honda | PUBLISHED |
-| Standard fork spring | 5.0 N/mm | 2025 competition handbook data; OEM parts cross-check | PUBLISHED |
-| Optional softer spring | 4.8 N/mm | 2025 competition handbook data | PUBLISHED |
-| Optional stiffer spring | 5.2 N/mm | 2025 competition handbook data | PUBLISHED |
-| Base fork oil quantity | 310 cc reported for standard 2025 setup | Dirt Rider technical test | PUBLISHED/SECONDARY |
-| Fork-axis geometry | rake known; triple/offset details still needed for exact kinematics | Honda + measurement | PARTIAL |
-| Compression force-vs-velocity curve | unknown | Damper dyno/source required | UNKNOWN |
-| Rebound force-vs-velocity curve | unknown | Damper dyno/source required | UNKNOWN |
-| Coulomb/seal friction | 2025 changed materially, exact force unknown | Honda says friction changed; value absent | UNKNOWN |
-| End-stop/bottoming curve | unknown | Test/measurement required | UNKNOWN |
-| Exact unsprung mass and fork moving mass | unknown | Measurement required | UNKNOWN |
+Classification: **DERIVED from same-configuration manufacturer data**.
 
-2025 suspension references:
+This is a same-generation prior/cross-check, not an exact US-runtime measurement.
 
-- Honda technical release: https://hondanews.eu/eu/fi/motorcycles/media/pressreleases/475110/25ym-honda-crf450r-1
-- 2025 CRF450R test: https://www.dirtrider.com/tests/honda-crf450r-review/
-- OEM fork parts cross-check: https://us.fowlersparts.co.uk/parts/6837517/crf450r/front-forks
+Honda Europe source:
+https://hondanews.eu/eu/fi/motorcycles/media/pressreleases/475110/25ym-honda-crf450r-1
 
-### 2.4 Rear suspension
+### 2.2 Tire geometry
 
-| Parameter | Physics V2 value | Provenance | Status |
-|---|---:|---|---|
-| Architecture | Pro-Link / Showa shock | Honda | PUBLISHED |
-| Rear wheel travel | about 310 mm / 12.2 in | Honda | PUBLISHED |
-| Swingarm length | 585.2 mm | Honda | PUBLISHED |
-| Standard shock spring | 52 N/mm | 2025 competition-handbook data | PUBLISHED |
-| Standard spring installed length | 232.2 mm | 2025 competition-handbook data | PUBLISHED |
-| Spring preload change per adjuster turn | 1.5 mm; 84 N for standard CRF450R spring | competition-handbook data | PUBLISHED |
-| Recommended/nominal race sag target | roughly 100-110 mm depending source/setup; do not use as kinematic geometry | setup references | REFERENCE ONLY |
-| Pro-Link axle-to-shock motion-ratio curve | unknown | Critical geometry required | UNKNOWN |
-| Link/pullrod/pivot hard-point coordinates | unknown | Critical geometry required | UNKNOWN |
-| Compression force-vs-shock-velocity curve | unknown | Damper dyno/source required | UNKNOWN |
-| Rebound force-vs-shock-velocity curve | unknown | Damper dyno/source required | UNKNOWN |
-| Bump-stop/end-stop curve | unknown | Test/measurement required | UNKNOWN |
-| Swingarm/linkage mass and inertia | unknown | Measurement/source required | UNKNOWN |
+Honda specifies:
 
-Honda states that the 2025 Pro-Link structure was revised and that its ratio and axle travel were optimized. Therefore an older-year linkage curve must not be silently reused as a 2025 curve.
+- front: Dunlop Geomax MX33 80/100-21, tube type;
+- rear: Dunlop Geomax MX33 120/80-19, tube type.
 
-Competition-handbook transcription/search reference:
-https://www.manuals.co.uk/honda/crf450r-2025/manual?p=115
+Direct Dunlop front data and later cross-checks put the unloaded front radius in approximately the 0.3526-0.3550 m catalog band. Rear unloaded/effective radius remains IDENTIFY.
 
-### 2.5 Drivetrain and engine
+Physics V2 uses separate values for:
 
-| Parameter | Physics V2 value | Provenance | Status |
-|---|---:|---|---|
-| Engine | 449.77 cc single-cylinder four-stroke | Honda | PUBLISHED |
-| Bore x stroke | 96.000 x 62.138 mm | Honda owner manual | PUBLISHED |
-| Compression ratio | 13.5:1 | Honda | PUBLISHED |
-| Idle | 2,000 +/- 100 rpm | Honda owner manual | PUBLISHED |
-| Primary reduction | 2.357 | Honda owner manual | PUBLISHED |
-| Gear 1 | 2.133 | Honda owner manual | PUBLISHED |
-| Gear 2 | 1.705 | Honda owner manual | PUBLISHED |
-| Gear 3 | 1.421 | Honda owner manual | PUBLISHED |
-| Gear 4 | 1.210 | Honda owner manual | PUBLISHED |
-| Gear 5 | 1.043 | Honda owner manual | PUBLISHED |
-| Final reduction | 3.769 / 13T:49T | Honda | PUBLISHED |
-| Overall ratios 1-5 | 18.949, 15.146, 12.624, 10.749, 9.266 | primary x gear x final | DERIVED |
-| Peak rear-wheel dyno power | 51.1 hp at 9,600 rpm | Dirt Rider dyno | PUBLISHED/MEASURED |
-| Peak rear-wheel dyno torque | 32.9 lb-ft / about 44.6 N m at 6,900 rpm | Dirt Rider dyno | PUBLISHED/MEASURED |
-| Full torque curve | chart exists but not yet digitized/validated into data points | Dirt Rider | UNKNOWN DATASET |
-| Engine equivalent rotational inertia | unknown | Identification/measurement required | UNKNOWN |
-| Clutch torque-capacity vs engagement | unknown | Identification/measurement required | UNKNOWN |
-| Clutch rotating inertia | unknown | Identification/measurement required | UNKNOWN |
-| Engine-braking map | unknown | Identification required | UNKNOWN |
-| Drivetrain efficiency/loss map | unknown | Identification required | UNKNOWN |
+- geometric/profile radius;
+- loaded radius;
+- effective rolling radius.
 
-Official 2025 Honda drivetrain ratios are in the owner manual linked above. Dyno source:
+One global wheel radius is prohibited.
+
+### 2.3 Mass-property identification
+
+Exact 2025 CRF450R CG height and principal inertias have not been recovered publicly.
+
+Identification route:
+
+- CG: ISO 9130-style static/tilt measurement;
+- whole-bike inertia: ISO 9129-style measurement;
+- complete wheel inertia: pendulum/trifilar or known-torque angular acceleration;
+- steering assembly inertia: pendulum or component reconstruction;
+- swingarm/linkage inertia: pendulum or CAD/scale reconstruction.
+
+Same-class literature values may define safe search bounds only and must not be mislabeled as CRF measurements.
+
+---
+
+## 3. Suspension register
+
+### 3.1 Front fork
+
+Stock 2025 CRF450R:
+
+- Showa 49 mm USD coil fork;
+- 5.0 N/mm spring per leg;
+- two legs in parallel -> bare fork-axis coil contribution of 10.0 N/mm = 10,000 N/m;
+- fork spring free length approximately 500 mm from specialist same-model data;
+- revised 2025 oil/valving/seals and deliberately material friction behavior.
+
+The final force law must support:
+
+`F_fork = F_coil(x) + F_air/endstroke(x) + F_comp(v,x) + F_rebound(v,x) + F_friction(v,x)`
+
+Unknown:
+
+- absolute compression force-vs-velocity curve;
+- absolute rebound force-vs-velocity curve;
+- friction-force magnitude;
+- end-stop/air-spring curve.
+
+### 3.2 Rear suspension
+
+Known:
+
+- Pro-Link system;
+- stock shock spring 52 N/mm;
+- stock rear spring free length approximately 240 mm from same-model specialist data;
+- installed/preloaded spring length approximately 232.2 mm from Honda setup data;
+- 16 mm shock shaft / 50 mm main piston secondary same-model hardware data;
+- stock pullrod center-to-center approximately 147.8 mm from specialist measurement;
+- compatible replacement shock envelope approximately 452 mm eye-to-eye / 133 mm stroke;
+- manufacturer swingarm length 585.2 mm.
+
+### 3.2.1 2025 swingarm/linkage distinction
+
+Honda Europe explicitly states the 585.2 mm aluminum swingarm is unchanged for 25YM while the Pro-Link structure and leverage ratio are revised.
+
+Therefore:
+
+- the rear axle path may be parameterized as a rigid swingarm arc using the manufacturer-backed 0.5852 m swingarm length once pivot/reference attitude is fixed;
+- prior-generation **linkage** hardpoints/motion-ratio curves may not be used as final 2025 data;
+- a changed parts-assembly number alone is not evidence that the swingarm kinematic length changed.
+
+Still required:
+
+- local axle-travel/shock-travel motion-ratio curve or complete 2025 linkage hardpoints;
+- rear compression/rebound force-vs-velocity curves;
+- end-stop law;
+- moving/unsprung mass and generalized inertia partition.
+
+---
+
+## 4. Tire/contact model gate
+
+### 4.1 Locked architecture
+
+For each tire the model accepts at least:
+
+- normal/load state;
+- longitudinal slip ratio `kappa`;
+- lateral slip angle `alpha`;
+- camber `gamma`;
+- contact-frame velocity;
+- wheel angular speed;
+- surface state.
+
+It returns at least:
+
+- normal force `Fz`;
+- longitudinal force `Fx`;
+- lateral force `Fy`;
+- aligning/contact moment `Mz` required by the selected formulation.
+
+Required behavior:
+
+- rounded motorcycle contact geometry;
+- load sensitivity;
+- camber force;
+- coherent combined slip;
+- transient/relaxation states;
+- continuity across zero slip and drive/coast/brake transitions.
+
+### 4.2 Hardpack baseline
+
+V2.0 uses an identified effective hardpack tire model rather than full deformable-soil terramechanics.
+
+The runtime fit may be a constrained spline/table or another nonlinear identified representation. Raw measurements stay separate from the fitted representation.
+
+Exact public MX33 hardpack force/slip data remain unavailable. The required fallback is instrumented-riding system identification using the observation schema in `docs/PHYSICS_V2_CALIBRATION_DATASET_SPEC.md`.
+
+### 4.3 Vertical behavior
+
+Same-size motocross tire research supports load-dependent vertical stiffness. It does not provide exact MX33 absolute stiffness.
+
+Direct loaded-radius/load-deflection measurements at the reference pressure are therefore still required to calibrate `Fz(delta)`.
+
+---
+
+## 5. Drivetrain register
+
+Official 2025 ratios:
+
+- primary: 2.357;
+- 1st: 2.133;
+- 2nd: 1.705;
+- 3rd: 1.421;
+- 4th: 1.210;
+- 5th: 1.043;
+- final: 49/13 = 3.76923.
+
+Derived overall reductions:
+
+- 1st: 18.9486;
+- 2nd: 15.1464;
+- 3rd: 12.6235;
+- 4th: 10.7491;
+- 5th: 9.2655.
+
+Measured 2025 rear-wheel dyno anchors:
+
+- 51.1 hp at 9,600 rpm;
+- 32.9 lb-ft / 44.61 N m at 6,900 rpm.
+
+Dirt Rider source:
 https://www.dirtrider.com/tests/honda-crf450r-dyno-test-2025/
 
-### 2.6 Brakes
-
-| Parameter | Physics V2 value | Provenance | Status |
-|---|---:|---|---|
-| Front rotor | 260 mm | Honda | PUBLISHED |
-| Rear rotor | 240 mm | Honda | PUBLISHED |
-| Master-cylinder/caliper hydraulic gain | unknown | Component/service data or identification | UNKNOWN |
-| Pad friction/effective radius | unknown | Component data or identification | UNKNOWN |
-| Maximum wheel brake torque | unknown | Derived only after hydraulic/friction data or measured decel | UNKNOWN |
-
-Brakes will act as wheel torques. A rear-wheel lock is an outcome of brake torque exceeding the tire's available longitudinal force, not a special lockup mode.
-
-### 2.7 Chain/suspension interaction
-
-The drive chain will be modeled geometrically from countershaft, swingarm pivot, rear-axle and sprocket pitch radii. Chain tension creates forces/moments on the swingarm and therefore contributes to squat/anti-squat.
-
-| Parameter | Status |
-|---|---|
-| 13T front / 49T rear tooth counts | PUBLISHED |
-| Rear sprocket pitch radius | DERIVABLE once chain pitch geometry is fixed |
-| Countershaft center relative to swingarm pivot | UNKNOWN |
-| Swingarm pivot relative to chassis CG | UNKNOWN |
-| Rear axle path | PARTIAL: swingarm length known; hardpoint geometry still required |
-
-Until those hardpoints are known, acceleration-induced suspension behavior is not allowed to be represented by an arbitrary anti-squat multiplier.
-
----
-
-## 3. Rider model parameter register
-
-Motocross riding is dominated by a standing rider whose arms and legs isolate and actively couple the rider to the motorcycle. The rider will therefore not be collapsed into a fixed CG offset.
-
-### 3.1 Reduced rider model
-
-The reduced rider has three relative translational coordinates:
-
-- fore/aft
-- vertical
-- lateral
-
-Forces are transmitted through explicit footpeg and handlebar attachment points. Internal rider motion produces equal-and-opposite reaction on the motorcycle. Rider steering input is expressed as handlebar/steering torque.
-
-The reduced model is intentionally less detailed than a full biomechanical human because the game cannot identify dozens of human joint parameters reliably. It retains the mechanisms that matter to motocross vehicle dynamics.
-
-Primary off-road rider reference:
-https://www.sciencedirect.com/science/article/pii/S0888327020306142
-
-### 3.2 Rider parameters
-
-| Parameter | Status |
-|---|---|
-| Reference rider mass | DESIGN VARIABLE; not a motorcycle constant |
-| Rider CG in neutral standing posture | UNKNOWN/needs anthropometric or measured reference |
-| Footpeg coordinates | PARTIAL: Honda publishes footpeg height; fore/aft coordinates still needed |
-| Handlebar coordinates | UNKNOWN |
-| Maximum fore/aft body travel | IDENTIFICATION REQUIRED |
-| Maximum vertical body travel | IDENTIFICATION REQUIRED |
-| Maximum lateral body travel | IDENTIFICATION REQUIRED |
-| Effective leg stiffness/damping | IDENTIFICATION REQUIRED |
-| Effective arm stiffness/damping | IDENTIFICATION REQUIRED |
-| Active control bandwidth/latency | IDENTIFICATION REQUIRED |
-| Maximum steering torque envelope | IDENTIFICATION REQUIRED |
-
-Any control augmentation beyond forces achievable by this model is labeled ASSIST.
-
----
-
-## 4. Tire model scope and gate
-
-### 4.1 Required structure
-
-For each wheel, the tire model must receive at least:
-
-- contact position and normal
-- wheel-center velocity
-- wheel angular velocity
-- wheel orientation / camber
-- vertical load
-- longitudinal slip ratio
-- lateral slip angle
-- surface class/state
-- tire transient state
-
-It must return at least:
-
-- normal force `Fz`
-- longitudinal force `Fx`
-- lateral force `Fy`
-- self-aligning/contact moments required by the chosen motorcycle tire formulation
-
-Combined slip is mandatory: acceleration/braking must reduce available lateral capacity and lateral demand must reduce available longitudinal capacity through one coherent force law.
-
-### 4.2 Model family
-
-The implementation should be capable of representing a motorcycle-specific nonlinear force surface similar in structure to the Cossalter/Lot motorcycle tire work or an appropriately identified combined-slip formula. The contact point must follow the rounded tire/camber geometry rather than treating the tire as an upright car wheel.
-
-A transient relaxation/carcass state is required so lateral force does not appear instantaneously after steering input.
-
-### 4.3 What is not permitted
-
-- no constant `mu * Fz` as the complete tire model
-- no separate unrelated longitudinal and lateral clamps
-- no arbitrary fixed percentage of lateral grip retained under power
-- no road-racing tire coefficients presented as MX33 dirt coefficients
-- no surface-name multipliers with no identified physical meaning
-
-### 4.4 V2.0 dirt scope
-
-Physics V2.0 will **not** solve full deformable soil. Full terramechanics would add sinkage, compaction, shear deformation, bulldozing and evolving rut geometry before the core motorcycle has been validated.
-
-V2.0 uses the existing terrain geometry with **identified effective tire-force parameter sets** for a small number of surface classes. Their uncertainty must be recorded. Deformable-soil physics is a later research stage.
-
----
-
-## 5. Mass-property identification gate
-
-The physical plant cannot use arbitrary scalar pitch/yaw inertias.
-
-Two established standards define the relevant measurement problem:
-
-- ISO 9130:2005 — motorcycle and motorcycle/rider center-of-gravity location: https://www.iso.org/standard/33494.html
-- ISO 9129:2008 — motorcycle and motorcycle/rider moments of inertia: https://www.iso.org/standard/42939.html
-
-### Required before chassis solver calibration is called validated
-
-- bike-only CG: x, y, z
-- whole-bike principal moments or full inertia tensor about CG
-- front steering assembly inertia about steer axis
-- front and rear wheel rotational inertia
-- rear swingarm/linkage inertia or justified reduced equivalent
-- rider neutral CG and mass
-
-The published 48.7/51.3 static split gives us the bike-only longitudinal CG location but **not CG height or the inertia tensor**.
-
----
-
-## 6. Suspension identification gate
-
-### Front
-
-READY for geometry skeleton only when fork axis and travel are set from Honda dimensions. **Not ready for final force calibration** until a force law is sourced/identified.
-
-Required force law:
-
-`F_fork = F_spring(x) + F_compression(v,x) + F_rebound(v,x) + F_friction(v,x) + F_endstop(x,v)`
-
-A single linear damping coefficient is not considered sufficient final calibration.
-
-### Rear
-
-The rear solve must transform swingarm angle into shock displacement/velocity through a measured/derived **Pro-Link motion-ratio curve**. Shock force is then transformed back to wheel/swingarm generalized force.
-
-Required before rear suspension is called validated:
-
-- pivot coordinates
-- pullrod/link coordinates
-- shock mount coordinates
-- shock length at reference position
-- axle-to-shock displacement map over full travel
-- compression force-vs-velocity data
-- rebound force-vs-velocity data
-- end-stop behavior
-
-The published 52 N/mm shock spring by itself is not the rear wheel rate.
-
----
-
-## 7. Powertrain model gate
-
-Physics V2 replaces RPM-target interpolation with rotational dynamics:
-
-`I_e * d(omega_e)/dt = T_engine - T_clutch - T_engine_loss`
-
-The clutch transmits a bounded torque based on relative angular speed and player/automatic clutch command. Gearbox ratios map clutch/transmission torque to the rear wheel. Rear wheel speed feeds back through the same kinematic chain.
-
-### Ready now
-
-- primary ratio
-- all five gear ratios
-- final ratio
-- idle RPM
-- peak dyno power and torque anchors
-
-### Blockers for calibrated model
-
-- digitized full torque/power curve
-- engine equivalent rotational inertia
-- engine-braking/loss torque curve
-- clutch torque-capacity/engagement behavior
-
-The existing hand-shaped torque curve is not accepted as Physics V2 source data.
-
----
-
-## 8. Free-steering and virtual-rider controller scope
-
-The physical steering system receives torque. It does not receive a target steering angle.
-
-The virtual rider is a controller above the plant and may use:
-
-- desired curvature/turn command from the touch stick
-- motorcycle roll/roll rate
-- yaw rate
-- steering angle/rate
-- speed
-- tire contact state
-
-Its outputs are physically applied steering torque and rider-body targets.
-
-This lets the phone controls remain intuitive without replacing countersteering/self-steering physics with a direct steering-angle command.
-
-Controller gains are not motorcycle constants. They are tuning/assist parameters and must remain separately visible.
-
----
-
-## 9. Validation suite required before game-feel tuning
-
-Physics V2 must have deterministic validation cases before intentional assists are added.
-
-### Static
-
-- total mass and gravity balance
-- front/rear static axle load
-- static fork/shock sag
-- steering geometry/trail sanity
-
-### Straight-line
-
-- clutch launch
-- engine RPM/wheel-speed coupling by gear
-- acceleration curve
-- coast-down
-- rear-wheel spin buildup/recovery
-- rear-brake lock and recovery
-- front/rear braking load transfer
-
-### Suspension
-
-- single bump response
-- drop/landing response
-- bottoming/end-stop response
-- whoop sequence response
-- powered vs coasted rear-suspension response to expose chain-force effects
-
-### Lateral
-
-- free-steer release behavior
-- small steering-torque step
-- steady-radius corner
-- slalom
-- combined braking/turning
-- throttle-on corner exit and rear slip
-
-### Airborne
-
-- ballistic path independent of chassis yaw command
-- angular momentum conservation with controls neutral
-- rear-wheel acceleration reaction
-- rear-wheel braking reaction
-- rider fore/aft movement reaction
-- rider lateral movement reaction
-- no spontaneous roll/yaw leveling with assists disabled
-
-### Transitions
-
-- front-wheel lift emerges continuously from load transfer/contact
-- front wheel reacquisition after wheelie
-- ramp takeoff emerges when normal force reaches zero
-- landing force comes from tire/suspension/chassis dynamics
-- one-wheel-to-two-wheel transitions are continuous
-
-### Numerical
-
-- repeatability at fixed 120 Hz
-- bounded energy error in no-damping/no-contact tests
-- no NaN/Inf propagation
-- force/moment balance instrumentation per step
-
----
-
-## 10. Explicit list of current concepts to remove from the physical plant
-
-These may have been useful prototype controls, but Physics V2 must not preserve them as hidden physical laws:
-
-- speed-commanded steering angle
-- direct roll target spring as motorcycle lean physics
-- direct airborne yaw acceleration
-- airborne roll-leveling spring
-- wheelie-specific yaw authority
-- separate grounded/wheelie/air pitch-damping regimes used to force attitude behavior
-- throttle-snap pitch impulse
-- lift-seed pitch-rate helper
-- takeoff pitch-rate overwrite/blend
-- arbitrary airborne rear-wheel reaction gain above physical angular-momentum exchange
-- persistent airborne bar/peg pitch torque after rider relative motion ceases, unless reintroduced explicitly as ASSIST
-- arbitrary longitudinal-grip-cost percentage in the lateral solver
-- target-RPM engine model and speed-based pseudo-clutch as final drivetrain physics
-
-Current source files containing these prototype mechanisms include `BalancePointGame.java`, `MotorcycleLateralDynamics.java`, `MotorcycleRiderDynamics.java`, and `MotorcycleDrivetrain.java`.
-
----
-
-## 11. Implementation gates
-
-### Gate A — reference geometry and mass properties
-
-**Current status: NOT READY**
-
-Available:
-- mass
-- wheelbase
-- rake
-- trail
-- wet front/rear weight distribution
-- swingarm length
-- basic tire sizes
+Dirt Rider's 2026 test of the essentially unchanged CRF450R reports 52.6 hp and 33.7 lb-ft. The approximately 2-3 percent peak difference is retained as evidence that the engine calibration should carry realistic measurement/bike/environment uncertainty rather than being overfit to one chart.
 
 Still required:
-- CG height
-- inertia tensor
-- steering/wheel/swingarm inertias
-- exact steering/fork offsets/hardpoints
 
-### Gate B — suspension kinematics and force laws
+- dense validated full-throttle curve;
+- equivalent engine rotational inertia;
+- closed-throttle loss/engine-braking map;
+- clutch torque/slip law and clutch inertia;
+- drivetrain loss characterization.
 
-**Current status: NOT READY**
+The engine state obeys:
 
-Available:
-- travel
-- spring rates
-- swingarm length
-- high-level Pro-Link architecture
+`I_engine * omegaDot = combustion_torque - load_torque - loss_torque`.
+
+RPM is not allowed to follow a hand-smoothed target.
+
+---
+
+## 6. Chain drive
+
+Honda specifies a #520 chain and 13/49 sprockets.
+
+For chain pitch 15.875 mm, pitch radius:
+
+`r = p / (2 sin(pi/N))`.
+
+Derived:
+
+- 13T countershaft radius ≈ 0.03317 m;
+- 49T rear sprocket radius ≈ 0.12389 m.
+
+Baseline chain model: quasi-static geometric chain tension applied along the real chain line. Anti-squat/pro-squat emerges from countershaft/swingarm/axle/sprocket geometry; it is not an arbitrary multiplier.
+
+Chain elasticity/backlash is deferred until measurable parameters exist.
+
+---
+
+## 7. Rider and control separation
+
+Physical rider layer:
+
+- rider mass/distribution;
+- relative body coordinates/limits;
+- forces through pegs/bars;
+- steering torque into the free steering DOF;
+- equal-and-opposite motorcycle reactions.
+
+Virtual-rider/controller layer:
+
+- converts player intent into physical steering torque/body targets;
+- may use roll/yaw/steer feedback;
+- has bandwidth/rate limits;
+- is calibrated only after the no-assist plant validates.
+
+Any direct attitude torque not generated by the physical rider is an **ASSIST**, switchable off and excluded from physical validation.
+
+---
+
+## 8. Numerical integration gate
+
+Outer physics clock remains 120 Hz.
+
+Candidate internal integration families:
+
+1. semi-implicit fixed-step with justified local substeps;
+2. linear-implicit treatment of stiff force terms (Rosenbrock/LSRT-style family).
+
+Selection criteria:
+
+- static sag stability;
+- full-travel landing stability;
+- tire compliance convergence;
+- combined-slip transient convergence;
+- no-force airborne momentum conservation;
+- timestep-halving convergence;
+- deterministic mobile CPU cost;
+- no NaN/Inf or unbounded numerical-energy growth.
+
+No production integrator is selected by feel.
+
+---
+
+## 9. Validation matrix
+
+The no-assist plant must support deterministic validation of:
+
+- static axle loads/sag;
+- front/rear suspension bump response;
+- wheel hop/natural response where measurable;
+- coast-down;
+- clutch launch;
+- engine RPM versus wheel speed by gear;
+- acceleration speed-time;
+- rear-wheel slip build/recovery;
+- hard front/rear braking and load transfer;
+- rear lock/recovery;
+- steady turn equilibrium;
+- steering/slalom transient;
+- wheelie onset and sustained response;
+- jump takeoff pitch rate from lip/contact release;
+- ballistic trajectory independence from attitude rotation;
+- airborne wheel-acceleration/braking reaction torque;
+- rider mass-shift reaction in air;
+- landing compression/rebound/bottoming;
+- linear/angular momentum conservation while fully airborne with no external torque.
+
+Gameplay/controller tests remain separate.
+
+---
+
+## 10. Gate state
+
+### Gate A — geometry/mass
+
+**NOT READY.**
+
+Closed/narrowed:
+
+- reference model/spec revision;
+- mass/wheelbase/rake/trail/travel;
+- manufacturer-backed 585.2 mm swingarm length;
+- internally consistent European 25YM longitudinal-CG prior (0.722221 m from rear contact).
 
 Still required:
-- rear linkage hardpoints/motion-ratio curve
-- front and rear damping curves
-- end-stop/friction characterization
-- unsprung/moving masses
+
+- US-reference CG height;
+- principal inertia tensor;
+- component inertias and remaining force-application hardpoints.
+
+### Gate B — suspension
+
+**NOT READY.**
+
+Closed/narrowed:
+
+- front/rear spring data;
+- free/installed spring distinction;
+- shock hardware envelope;
+- rigid swingarm arc geometry.
+
+Still required:
+
+- 2025 Pro-Link local motion-ratio curve;
+- front/rear damping force laws;
+- friction/end-stop calibration.
 
 ### Gate C — powertrain
 
-**Current status: PARTIALLY READY**
+**PARTIAL.**
 
-Available:
-- all ratios
-- idle RPM
-- dyno peak anchors
+Closed/narrowed:
 
-Still required:
-- digitized full dyno curve
-- equivalent engine inertia
-- engine braking/loss torque
-- clutch torque behavior
-
-### Gate D — tire/contact model
-
-**Current status: RESEARCH BLOCKER / highest uncertainty**
-
-Available:
-- tire model/size/pressure/construction
-- validated motorcycle tire-model architecture from literature
-- off-road inverse-dynamics literature for identification/validation
+- all ratios;
+- dyno anchors and coarse curve;
+- few-percent same-generation peak-output variation bound;
+- clutch architecture/lower-bound capacity;
+- engine-inertia identification method.
 
 Still required:
-- effective off-road longitudinal/lateral/camber force surfaces
-- load sensitivity
-- combined-slip calibration
-- relaxation/transient calibration
-- vertical tire stiffness/damping
 
-### Gate E — rider plant and virtual controller
+- dense 2025 curve with uncertainty;
+- engine equivalent inertia;
+- engine-braking/loss map;
+- clutch torque/slip law;
+- drivetrain loss characterization.
 
-**Current status: ARCHITECTURE READY, PARAMETERS NOT READY**
+### Gate D — tire/contact
 
-Available:
-- off-road literature strongly supports a standing-rider model and explicit handlebar/footpeg coupling
+**NOT READY / highest uncertainty.**
+
+Closed/narrowed:
+
+- model architecture;
+- exact tire identities/sizes;
+- front profile-radius band;
+- motocross-specific vertical-stiffness shape prior;
+- measurement/identification data contract.
 
 Still required:
-- neutral rider geometry/CG
-- effective arm/leg response parameters
-- body travel limits
-- steering-torque envelope and control-response data
+
+- loaded/effective radii;
+- vertical stiffness/damping;
+- hardpack `Fx/Fy/Mz` surfaces;
+- combined slip;
+- relaxation/transient calibration.
+
+### Gate E — rider/controller
+
+**Architecture ready, calibration deferred.**
+
+### Gate N — numerical integration
+
+**Benchmark-ready, production method not selected.**
 
 ---
 
-## 12. Research work order before runtime coding
+## 11. Research work order before runtime coding
 
-1. **Acquire/digitize the full 2025 CRF450R dyno curve.** Preserve source image and extracted points with uncertainty.
-2. **Recover 2025 Pro-Link kinematics.** Prefer service/CAD/part-drawing hardpoints; otherwise derive a measured axle-vs-shock curve. Do not substitute an older linkage without documenting the mismatch.
-3. **Find or identify Showa 2025 damping curves.** Search suspension dyno data/tuning literature; if unavailable, define an explicit measurement/identification protocol instead of inventing coefficients.
-4. **Build the mass-property plan.** Use published static distribution immediately; define ISO-consistent CG-height/inertia identification for missing values and identify any defensible published comparison data as bounds only.
-5. **Build the MX33/dirt tire identification plan.** Search instrumented motocross literature for usable force/slip ranges and define which parameters can be inferred from real-bike or high-quality reference-game tests without claiming those games are ground truth.
-6. **Identify wheel and rotating inertias.** Prefer measured component data; otherwise derive bounded estimates from actual masses/geometries and label them DERIVED with sensitivity ranges.
-7. **Research clutch/engine rotational dynamics.** Find measured or component-based inertia/torque-capacity information; otherwise define a black-box identification test from RPM vs wheel-speed transients.
-8. **Only after Gates A-D have defensible initial parameter sets, implement the physical plant with assists disabled.**
-9. Validate against the Section 9 test matrix.
-10. Add game-feel/controller assists only after discrepancies in the physical plant are understood.
+1. Execute/obtain the high-sensitivity measurement/identification datasets defined in `PHYSICS_V2_RESEARCH_PASS_07.md` and `PHYSICS_V2_CALIBRATION_DATASET_SPEC.md`.
+2. Measure or identify bike CG height and principal inertias.
+3. Measure/reconstruct the 2025 Pro-Link wheel-travel/shock-travel curve.
+4. Obtain or identify stock Showa compression/rebound/end-stop force laws.
+5. Identify MX33 hardpack vertical, longitudinal, lateral/camber, combined-slip and relaxation behavior.
+6. Identify equivalent engine inertia, closed-throttle loss/braking and clutch slip/capacity.
+7. Validate the dense dyno trace with explicit uncertainty.
+8. Re-evaluate `PHYSICS_V2_CODING_GATE.md` mechanically.
+9. Only when Gates A-D are defensible, implement the assists-disabled physical plant.
+10. Validate against Section 9 before adding gameplay assists.
 
 ---
 
-## 13. Source hierarchy
+## 12. Source hierarchy
 
 When sources disagree, use this priority unless there is a documented reason not to:
 
