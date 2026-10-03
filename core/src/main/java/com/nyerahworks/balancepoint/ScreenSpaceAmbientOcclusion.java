@@ -20,9 +20,12 @@ import com.badlogic.gdx.utils.GdxRuntimeException;
 import java.nio.IntBuffer;
 
 /**
- * Lightweight mobile SSAO pass. The already-rendered scene is copied into a color/depth
- * texture pair using GLES 3 framebuffer blits, AO is evaluated at half resolution, then
- * multiplied back into the scene before the HUD is drawn.
+ * Lightweight mobile SSAO pass. The forward-rendered scene is copied into a color/depth
+ * texture pair, AO is evaluated at half resolution, then multiplied back into the scene.
+ *
+ * Some Android GLES drivers reject one side of a default-framebuffer blit without throwing
+ * a Java exception. Every blit is therefore checked explicitly and SSAO disables itself
+ * before compositing if capture is not valid, leaving the already-rendered scene untouched.
  */
 final class ScreenSpaceAmbientOcclusion implements Disposable {
     private static final float AO_SCALE = 0.50f;
@@ -58,8 +61,7 @@ final class ScreenSpaceAmbientOcclusion implements Disposable {
                     + "}\n"
                     + "float aoTap(vec3 p, vec3 n, vec2 offset) {\n"
                     + "  vec2 uv = v_uv + offset;\n"
-                    + "  if (uv.x <= 0.001 || uv.x >= 0.999 || uv.y <= 0.001 || uv.y >= 0.999)\n"
-                    + "    return 0.0;\n"
+                    + "  if (uv.x <= 0.001 || uv.x >= 0.999 || uv.y <= 0.001 || uv.y >= 0.999) return 0.0;\n"
                     + "  float d = texture2D(u_depthTex, uv).r;\n"
                     + "  if (d >= 0.99998) return 0.0;\n"
                     + "  vec3 q = viewPosition(uv, d);\n"
@@ -157,8 +159,7 @@ final class ScreenSpaceAmbientOcclusion implements Disposable {
 
             aoProgram = new ShaderProgram(FULLSCREEN_VERTEX, AO_FRAGMENT);
             if (!aoProgram.isCompiled()) {
-                throw new GdxRuntimeException(
-                        "SSAO shader failed to compile: " + aoProgram.getLog());
+                throw new GdxRuntimeException("SSAO shader failed to compile: " + aoProgram.getLog());
             }
             compositeProgram = new ShaderProgram(FULLSCREEN_VERTEX, COMPOSITE_FRAGMENT);
             if (!compositeProgram.isCompiled()) {
@@ -184,12 +185,20 @@ final class ScreenSpaceAmbientOcclusion implements Disposable {
         try {
             ensureBuffers(targetWidth, targetHeight);
             int defaultFramebuffer = currentFramebuffer();
-            capture(defaultFramebuffer);
+            captureChecked(defaultFramebuffer);
             renderAo(camera);
             composite(defaultFramebuffer);
+            checkGl("SSAO composite");
         } catch (RuntimeException error) {
+            // The scene was already drawn into the real backbuffer before SSAO started. If a
+            // mobile driver rejects the copy, do not composite an empty texture over it.
             failed = true;
-            Gdx.app.error("BalancePoint", "Disabling SSAO after framebuffer/shader failure", error);
+            Gdx.gl30.glBindFramebuffer(GL20.GL_FRAMEBUFFER, 0);
+            Gdx.gl.glViewport(0, 0,
+                    Gdx.graphics.getBackBufferWidth(), Gdx.graphics.getBackBufferHeight());
+            Gdx.app.error("BalancePoint",
+                    "Disabling SSAO after framebuffer/shader failure; preserving forward render",
+                    error);
             disposeBuffers();
         }
     }
@@ -228,15 +237,31 @@ final class ScreenSpaceAmbientOcclusion implements Disposable {
                 Texture.TextureWrap.ClampToEdge, Texture.TextureWrap.ClampToEdge);
     }
 
-    private void capture(int defaultFramebuffer) {
-        Gdx.gl30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, defaultFramebuffer);
-        Gdx.gl30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, captureBuffer.getFramebufferHandle());
-        Gdx.gl30.glBlitFramebuffer(
-                0, 0, width, height,
-                0, 0, width, height,
-                GL20.GL_COLOR_BUFFER_BIT | GL20.GL_DEPTH_BUFFER_BIT,
-                GL20.GL_NEAREST);
-        Gdx.gl30.glBindFramebuffer(GL20.GL_FRAMEBUFFER, defaultFramebuffer);
+    private void captureChecked(int defaultFramebuffer) {
+        clearGlErrors();
+        try {
+            Gdx.gl30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, defaultFramebuffer);
+            Gdx.gl30.glBindFramebuffer(
+                    GL30.GL_DRAW_FRAMEBUFFER, captureBuffer.getFramebufferHandle());
+
+            // Do color and depth separately. Several tile-based mobile GPUs reject a combined
+            // default-FBO blit even though each individual blit is valid.
+            Gdx.gl30.glBlitFramebuffer(
+                    0, 0, width, height,
+                    0, 0, width, height,
+                    GL20.GL_COLOR_BUFFER_BIT,
+                    GL20.GL_NEAREST);
+            checkGl("SSAO color capture");
+
+            Gdx.gl30.glBlitFramebuffer(
+                    0, 0, width, height,
+                    0, 0, width, height,
+                    GL20.GL_DEPTH_BUFFER_BIT,
+                    GL20.GL_NEAREST);
+            checkGl("SSAO depth capture");
+        } finally {
+            Gdx.gl30.glBindFramebuffer(GL20.GL_FRAMEBUFFER, defaultFramebuffer);
+        }
     }
 
     private void renderAo(PerspectiveCamera camera) {
@@ -257,6 +282,7 @@ final class ScreenSpaceAmbientOcclusion implements Disposable {
         aoProgram.setUniformf("u_projScale", camera.projection.val[Matrix4.M11]);
         aoProgram.setUniformf("u_radius", AO_RADIUS_METERS);
         fullscreenQuad.render(aoProgram, GL20.GL_TRIANGLES);
+        checkGl("SSAO AO pass");
         aoBuffer.end();
     }
 
@@ -278,6 +304,20 @@ final class ScreenSpaceAmbientOcclusion implements Disposable {
         Gdx.gl.glEnable(GL20.GL_DEPTH_TEST);
         Gdx.gl.glEnable(GL20.GL_CULL_FACE);
         Gdx.gl.glCullFace(GL20.GL_BACK);
+    }
+
+    private void clearGlErrors() {
+        while (Gdx.gl.glGetError() != GL20.GL_NO_ERROR) {
+            // Drain stale errors so a previous pass cannot falsely disable SSAO.
+        }
+    }
+
+    private void checkGl(String stage) {
+        int error = Gdx.gl.glGetError();
+        if (error != GL20.GL_NO_ERROR) {
+            throw new GdxRuntimeException(stage + " failed with GL error 0x"
+                    + Integer.toHexString(error));
+        }
     }
 
     private void disposeBuffers() {
