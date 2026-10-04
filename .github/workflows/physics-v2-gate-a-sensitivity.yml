@@ -1,0 +1,38 @@
+name: Physics V2 Gate A Sensitivity
+
+on:
+  push:
+    paths:
+      - 'tools/physics_v2_gate_a_sensitivity.py'
+      - '.github/workflows/physics-v2-gate-a-sensitivity.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Run deterministic Gate A sweep
+        run: |
+          set -o pipefail
+          python tools/physics_v2_gate_a_sensitivity.py --out-dir gate_a_sensitivity \
+            | tee gate_a_sensitivity.log
+
+      - name: Upload sensitivity artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: physics-v2-gate-a-sensitivity
+          path: |
+            gate_a_sensitivity/
+            gate_a_sensitivity.log
+          retention-days: 30
