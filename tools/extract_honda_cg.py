@@ -279,7 +279,11 @@ def main() -> None:
             "visible_vehicle": "CR ELECTRIC",
             "visible_vehicle_wheelbase_mm": CR_ELECTRIC_WHEELBASE_MM,
             "comparison_crf450r_2021_wheelbase_mm": CRF450R_2021_WHEELBASE_MM,
-            "note": "Figure 9 is a CR ELECTRIC side view; 1491 mm is the image scale. The 1481 mm value identifies the comparison 2021 CRF450R but is not the visible-image wheelbase.",
+            "note": (
+                "Figure 9 is a CR ELECTRIC side view; 1491 mm is the image scale. "
+                "The 1481 mm value identifies the comparison 2021 CRF450R but is "
+                "not the visible-image wheelbase."
+            ),
         },
         "figure9_candidate": candidate,
         "figure9_crop_rect_points": rect_dict(crop_rect),
