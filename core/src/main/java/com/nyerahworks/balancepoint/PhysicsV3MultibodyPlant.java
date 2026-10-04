@@ -87,18 +87,22 @@ final class PhysicsV3MultibodyPlant {
     private static final float MAX_REAR_BRAKE_TORQUE = 820f;
 
     private static final float STEER_INERTIA = 0.24f;
-    private static final float STEER_SERVO_KP = 72f;
-    private static final float STEER_SERVO_KD = 8.5f;
-    private static final float STEER_ROLL_ERROR_GAIN = 0.62f;
+    // Grounded steering is intentionally direct and overdamped. Player input is turn
+    // intent, not a request for an autonomous countersteer/lean feedback loop.
+    private static final float STEER_SERVO_KP = 46f;
+    private static final float STEER_SERVO_KD = 15f;
+    private static final float STEER_ALIGNING_GAIN = 0.25f;
     private static final float MAX_STEER_TORQUE = 26f;
     private static final float MAX_STEER_ANGLE = radians(32f);
     private static final float MAX_TARGET_LEAN = radians(36f);
 
     // TUM-style desired-roll controller plus a small game-facing rider balance
     // moment. The direct balance term only exists while a tire is grounded.
-    private static final float BALANCE_ROLL_KP = 118f;
-    private static final float BALANCE_ROLL_KD = 58f;
-    private static final float MAX_BALANCE_ROLL_TORQUE = 135f;
+    // Strong, near-critically-damped grounded rider balance. This is a game-facing
+    // rider assist and never runs when both tires are unloaded.
+    private static final float BALANCE_ROLL_KP = 520f;
+    private static final float BALANCE_ROLL_KD = 300f;
+    private static final float MAX_BALANCE_ROLL_TORQUE = 500f;
     private static final float YAW_DAMPING = 9f;
 
     // Grounded anti-loop catch. It is deliberately above the geometric balance
@@ -399,30 +403,44 @@ final class PhysicsV3MultibodyPlant {
     private void updateSteering(float speedForward, float dt) {
         float speed = Math.abs(speedForward);
         boolean anyGround = rearGrounded() || frontGrounded();
-        float desiredSteer = 0f;
-        float controllerTorque = 0f;
+        float controllerTorque;
 
         if (anyGround) {
+            float command = clamp(input.steer, -1f, 1f);
             float authority = smoothstep(1.0f, 6.0f, speed);
-            float targetRoll = -clamp(input.steer, -1f, 1f)
-                    * MAX_TARGET_LEAN * authority;
+            float targetRoll = -command * MAX_TARGET_LEAN * authority;
+
+            // At walking speed the bars behave directly. Once the bike is moving, player
+            // input first establishes lean in the requested direction; same-direction front
+            // steer is fed in only as that lean develops. This avoids both the autonomous
+            // countersteer reversal and the opposite-roll kick caused by instantly steering
+            // a still-upright motorcycle into the turn.
+            float lowSpeedBlend = 1f - smoothstep(0.6f, 2.6f, speed);
+            float directionalLean = -Math.signum(command) * roll();
+            float targetLeanMagnitude = Math.abs(targetRoll);
+            float leanProgress = targetLeanMagnitude > radians(1f)
+                    ? clamp(directionalLean / Math.max(targetLeanMagnitude * 0.70f, radians(3f)), 0f, 1f)
+                    : 1f;
+
             float speedSq = Math.max(speed * speed, 9f);
-            float feedForward = -(float)Math.atan(
-                    WHEELBASE * G * Math.tan(targetRoll) / speedSq);
-            float rollError = targetRoll - roll();
-            float counterSteer = STEER_ROLL_ERROR_GAIN * rollError
-                    - 0.09f * rollRate();
-            desiredSteer = clamp(
-                    feedForward + counterSteer,
+            float cornerMagnitude = (float)Math.atan(
+                    WHEELBASE * G * Math.tan(targetLeanMagnitude) / speedSq);
+            float cornerSteer = Math.signum(command) * cornerMagnitude * leanProgress;
+            float lowSpeedSteer = command * MAX_STEER_ANGLE * lowSpeedBlend;
+            float desiredSteer = clamp(
+                    lowSpeedSteer + cornerSteer * (1f - lowSpeedBlend),
                     -MAX_STEER_ANGLE,
                     MAX_STEER_ANGLE);
+
             controllerTorque = STEER_SERVO_KP * (desiredSteer - steerAngle)
                     - STEER_SERVO_KD * steerRate;
         } else {
+            // Airborne behavior intentionally unchanged: no steering recenter servo.
             controllerTorque = -2.2f * steerRate;
         }
 
-        float tireAligning = frontGrounded() ? frontTireForce.mz : 0f;
+        float tireAligning = frontGrounded()
+                ? STEER_ALIGNING_GAIN * frontTireForce.mz : 0f;
         float steerTorque = clamp(
                 controllerTorque + tireAligning,
                 -MAX_STEER_TORQUE,
@@ -438,12 +456,9 @@ final class PhysicsV3MultibodyPlant {
             steerRate = Math.max(0f, steerRate);
         }
 
-        // Steering torque is internal. The complete TUM model routes this through
-        // the steering head; a small equal/opposite yaw reaction preserves that
-        // coupling without pretending the fork is rigidly welded to the frame.
-        if (anyGround) {
-            addAxisMoment(totalMomentWorld, up, -0.18f * steerTorque);
-        }
+        // Do not inject an artificial equal/opposite yaw kick into the chassis. The front
+        // contact force already produces the yaw moment about the CG. The old -0.18 reaction
+        // made the bike initially yaw opposite the player's command and contributed to weave.
     }
 
     private void integrateSuspension(boolean front, float normalForce, float dt) {
