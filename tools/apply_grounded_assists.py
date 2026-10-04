@@ -82,13 +82,14 @@ new_moment_anchor = """        float engineReaction = -0.0065f * powertrain.getE
             totalMomentWorld.z += forward.z * rollTorque;
 
             if (rearGrounded() && pitch() > ASSIST_WHEELIE_ONSET) {
+                // Positive body-X torque pitches the nose down in this coordinate system.
                 float wheelieTorque = ASSIST_WHEELIE_KP
-                        * (ASSIST_WHEELIE_TARGET - pitch())
-                        - ASSIST_WHEELIE_KD * Math.max(0f, pitchRate());
+                        * (pitch() - ASSIST_WHEELIE_TARGET)
+                        + ASSIST_WHEELIE_KD * Math.max(0f, -pitchRate());
                 wheelieTorque = clamp(
                         wheelieTorque,
-                        -ASSIST_MAX_WHEELIE_TORQUE,
-                        0f);
+                        0f,
+                        ASSIST_MAX_WHEELIE_TORQUE);
                 totalMomentWorld.x += right.x * wheelieTorque;
                 totalMomentWorld.y += right.y * wheelieTorque;
                 totalMomentWorld.z += right.z * wheelieTorque;
