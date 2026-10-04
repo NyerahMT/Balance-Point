@@ -1,0 +1,42 @@
+name: Apply Physics V3 Runtime Swap
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - tools/apply_physics_v3_swap.py
+      - .github/workflows/apply-physics-v3-swap.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v6
+      - name: Apply Physics V3 runtime swap
+        run: python3 tools/apply_physics_v3_swap.py
+      - name: Validate Physics V3 runtime
+        run: |
+          python3 tools/quality_gate.py
+          ./gradlew :core:test --stacktrace
+      - name: Commit Physics V3 runtime
+        run: |
+          if git diff --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add core/src/main/java/com/nyerahworks/balancepoint/BalancePointGame.java
+          git commit -m "Swap live runtime to Physics V3 multibody model"
+          git push origin main
