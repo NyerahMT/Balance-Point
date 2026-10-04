@@ -28,14 +28,18 @@ jobs:
           python -m pip install requests pymupdf numpy opencv-python-headless
 
       - name: Extract Honda Figure 9 diagnostics
+        shell: bash
         run: |
+          set -o pipefail
           python tools/extract_honda_cg.py --out-dir cg_extract | tee cg_extract.log
 
       - name: Upload extraction artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: physics-v2-honda-cg-extraction
           path: |
             cg_extract/
             cg_extract.log
+          if-no-files-found: warn
           retention-days: 14
