@@ -31,6 +31,10 @@ def patch_plant() -> None:
     // The outer game loop is 120 Hz, but clutch/contact/unsprung modes are faster.
     // Keep integration at or below 1/480 s to stop those modes aliasing into chassis motion.
     private static final float MAX_INTERNAL_DT = 1f / 480f;
+    // A real rider anticipates acceleration and braces forward. This changes rider mass position
+    // only; it never applies an anti-wheelie chassis torque or clamps pitch.
+    private static final float VIRTUAL_RIDER_BRACE_GAIN = 0.70f;
+    private static final float VIRTUAL_RIDER_BRACE_MAX = 0.70f;
     private static final String PHYSICS_V2_STABILITY_PASS_1 =
             "substep-feedback-cleanup-v1";
 """
@@ -67,10 +71,15 @@ def patch_plant() -> None:
                 dt);
 """
     new = """        float forwardSpeedStart = forward.x * vx + forward.y * vy + forward.z * vz;
-        // Use explicit rider input only. The former acceleration-derived brace fed body
-        // rotation back into CG location and could create a self-exciting geometry loop.
+        // Use an anticipatory virtual-rider brace tied to requested engine effort. The previous
+        // acceleration-derived brace fed body rotation back into CG location and could create a
+        // self-exciting geometry loop. This command is deterministic and position-only.
+        float virtualBrace = clamp(
+                input.throttle * VIRTUAL_RIDER_BRACE_GAIN,
+                0f,
+                VIRTUAL_RIDER_BRACE_MAX);
         riderLongitudinal.step(
-                clamp(input.riderForeAft, -1f, 1f),
+                clamp(input.riderForeAft + virtualBrace, -1f, 1f),
                 0f,
                 airborne(),
                 dt);
@@ -229,10 +238,26 @@ public final class PhysicsV2StabilityTest {
         @Override public float traction(float x, float z) { return 1f; }
     }
 
+    private static final class Wavy implements PhysicsV2Plant.Terrain {
+        @Override public float height(float x, float z) {
+            return 0.035f * (float)Math.sin(z * 1.7f)
+                    + 0.012f * (float)Math.sin(z * 4.2f);
+        }
+
+        @Override public float slopeX(float x, float z) { return 0f; }
+
+        @Override public float slopeZ(float x, float z) {
+            return 0.0595f * (float)Math.cos(z * 1.7f)
+                    + 0.0504f * (float)Math.cos(z * 4.2f);
+        }
+
+        @Override public float traction(float x, float z) { return 1f; }
+    }
+
     @Test
     public void timestepHalvingConvergesForStraightLaunch() {
-        Snapshot a = run(1f / 120f, false);
-        Snapshot b = run(1f / 240f, false);
+        Snapshot a = runFlat(1f / 120f, false);
+        Snapshot b = runFlat(1f / 240f, false);
         assertTrue(
                 "speed delta=" + Math.abs(a.speed - b.speed),
                 Math.abs(a.speed - b.speed) < 0.35f);
@@ -246,14 +271,29 @@ public final class PhysicsV2StabilityTest {
 
     @Test
     public void timestepHalvingConvergesForMildTurn() {
-        Snapshot a = run(1f / 120f, true);
-        Snapshot b = run(1f / 240f, true);
+        Snapshot a = runFlat(1f / 120f, true);
+        Snapshot b = runFlat(1f / 240f, true);
         assertTrue(
                 "roll delta=" + Math.abs(a.roll - b.roll),
                 Math.abs(a.roll - b.roll) < radians(3f));
         assertTrue(
                 "yaw delta=" + Math.abs(a.yaw - b.yaw),
                 angleDelta(a.yaw, b.yaw) < radians(4f));
+    }
+
+    @Test
+    public void roughTerrainTimestepHalvingRemainsClose() {
+        Snapshot a = runWavy(1f / 120f);
+        Snapshot b = runWavy(1f / 240f);
+        assertTrue(
+                "rough speed delta=" + Math.abs(a.speed - b.speed),
+                Math.abs(a.speed - b.speed) < 0.65f);
+        assertTrue(
+                "rough pitch delta=" + Math.abs(a.pitch - b.pitch),
+                Math.abs(a.pitch - b.pitch) < radians(4f));
+        assertTrue(
+                "rough roll delta=" + Math.abs(a.roll - b.roll),
+                Math.abs(a.roll - b.roll) < radians(5f));
     }
 
     @Test
@@ -285,7 +325,7 @@ public final class PhysicsV2StabilityTest {
         assertTrue("roll rate=" + maxRollRate, maxRollRate < 7f);
     }
 
-    private Snapshot run(float dt, boolean turn) {
+    private Snapshot runFlat(float dt, boolean turn) {
         Flat terrain = new Flat();
         PhysicsV2Plant p = new PhysicsV2Plant();
         p.reset(terrain);
@@ -297,6 +337,24 @@ public final class PhysicsV2StabilityTest {
                     turn && t > 2.0f && t < 4.0f ? 0.20f : 0f;
             p.step(terrain, dt);
         }
+        return snapshot(p);
+    }
+
+    private Snapshot runWavy(float dt) {
+        Wavy terrain = new Wavy();
+        PhysicsV2Plant p = new PhysicsV2Plant();
+        p.reset(terrain);
+        int count = Math.round(6f / dt);
+        for (int i = 0; i < count; i++) {
+            float t = i * dt;
+            p.input().throttle = 0.38f + 0.05f * (float)Math.sin(t * 0.8f);
+            p.input().steer = 0.10f * (float)Math.sin(t * 0.65f);
+            p.step(terrain, dt);
+        }
+        return snapshot(p);
+    }
+
+    private Snapshot snapshot(PhysicsV2Plant p) {
         Snapshot s = new Snapshot();
         s.speed = p.speed();
         s.pitch = p.pitch();
@@ -332,4 +390,4 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 
-# Trigger marker: stability-migration-3
+# Trigger marker: stability-migration-4
