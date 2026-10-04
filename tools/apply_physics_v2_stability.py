@@ -20,65 +20,307 @@ def patch_plant() -> None:
     if MARKER in text:
         return
 
-    text = replace_once(
-        text,
-        '''    private static final float FRONT_STATIC_COMPRESSION = 0.08035f;\n    private static final float REAR_STATIC_COMPRESSION = 0.09240f;\n    private static final float AUTO_BRACE_PER_G = 0.85f;\n    private static final float AUTO_BRACE_MAX = 0.80f;\n    private static final String PHYSICS_V2_RIDEABILITY_PASS_2 = "multibody-rider-v2";\n''',
-        '''    private static final float FRONT_STATIC_COMPRESSION = 0.08035f;\n    private static final float REAR_STATIC_COMPRESSION = 0.09240f;\n    // The game calls the plant at 120 Hz, but clutch/contact/unsprung modes are faster.\n    // Keep the integrator step at or below 1/480 s so those modes do not alias into chassis motion.\n    private static final float MAX_INTERNAL_DT = 1f / 480f;\n    private static final String PHYSICS_V2_STABILITY_PASS_1 = "substep-feedback-cleanup-v1";\n''',
-        "stability constants")
+    old = """    private static final float FRONT_STATIC_COMPRESSION = 0.08035f;
+    private static final float REAR_STATIC_COMPRESSION = 0.09240f;
+    private static final float AUTO_BRACE_PER_G = 0.85f;
+    private static final float AUTO_BRACE_MAX = 0.80f;
+    private static final String PHYSICS_V2_RIDEABILITY_PASS_2 = "multibody-rider-v2";
+"""
+    new = """    private static final float FRONT_STATIC_COMPRESSION = 0.08035f;
+    private static final float REAR_STATIC_COMPRESSION = 0.09240f;
+    // The outer game loop is 120 Hz, but clutch/contact/unsprung modes are faster.
+    // Keep integration at or below 1/480 s to stop those modes aliasing into chassis motion.
+    private static final float MAX_INTERNAL_DT = 1f / 480f;
+    private static final String PHYSICS_V2_STABILITY_PASS_1 =
+            "substep-feedback-cleanup-v1";
+"""
+    text = replace_once(text, old, new, "stability constants")
+    text = text.replace("    private float lastLongitudinalAcceleration;\n", "")
+    text = text.replace("        lastLongitudinalAcceleration = 0f;\n", "")
 
-    text = text.replace('    private float lastLongitudinalAcceleration;\n', '')
-    text = text.replace('        lastLongitudinalAcceleration = 0f;\n', '')
+    old = """    void step(Terrain terrain, float dt) {
+        if (terrain == null || dt <= 0f) return;
+        basis();
+"""
+    new = """    void step(Terrain terrain, float dt) {
+        if (terrain == null || dt <= 0f) return;
+        int substeps = Math.max(1, (int)Math.ceil(dt / MAX_INTERNAL_DT));
+        float h = dt / substeps;
+        for (int i = 0; i < substeps; i++) substep(terrain, h);
+    }
 
-    old_step = '''    void step(Terrain terrain, float dt) {\n        if (terrain == null || dt <= 0f) return;\n        basis();\n'''
-    new_step = '''    void step(Terrain terrain, float dt) {\n        if (terrain == null || dt <= 0f) return;\n        int substeps = Math.max(1, (int)Math.ceil(dt / MAX_INTERNAL_DT));\n        float h = dt / substeps;\n        for (int i = 0; i < substeps; i++) substep(terrain, h);\n    }\n\n    private void substep(Terrain terrain, float dt) {\n        basis();\n'''
-    text = replace_once(text, old_step, new_step, "substep wrapper")
+    private void substep(Terrain terrain, float dt) {
+        basis();
+"""
+    text = replace_once(text, old, new, "substep wrapper")
 
-    old_rider = '''        float forwardSpeedStart = forward.x * vx + forward.y * vy + forward.z * vz;\n        float autoBrace = clamp(\n                lastLongitudinalAcceleration / G * AUTO_BRACE_PER_G,\n                0f,\n                AUTO_BRACE_MAX);\n        float riderCommand = clamp(input.riderForeAft + autoBrace, -1f, 1f);\n        riderLongitudinal.step(\n                riderCommand,\n                lastLongitudinalAcceleration,\n                airborne(),\n                dt);\n'''
-    new_rider = '''        float forwardSpeedStart = forward.x * vx + forward.y * vy + forward.z * vz;\n        // Rider position follows only explicit player input in this plant pass. The previous\n        // acceleration-derived auto-brace fed body rotation back into CG location and could create\n        // a self-exciting loop. Proper inertial rider coupling returns with a validated multibody.\n        riderLongitudinal.step(\n                clamp(input.riderForeAft, -1f, 1f),\n                0f,\n                airborne(),\n                dt);\n'''
-    text = replace_once(text, old_rider, new_rider, "remove acceleration rider feedback")
+    old = """        float forwardSpeedStart = forward.x * vx + forward.y * vy + forward.z * vz;
+        float autoBrace = clamp(
+                lastLongitudinalAcceleration / G * AUTO_BRACE_PER_G,
+                0f,
+                AUTO_BRACE_MAX);
+        float riderCommand = clamp(input.riderForeAft + autoBrace, -1f, 1f);
+        riderLongitudinal.step(
+                riderCommand,
+                lastLongitudinalAcceleration,
+                airborne(),
+                dt);
+"""
+    new = """        float forwardSpeedStart = forward.x * vx + forward.y * vy + forward.z * vz;
+        // Use explicit rider input only. The former acceleration-derived brace fed body
+        // rotation back into CG location and could create a self-exciting geometry loop.
+        riderLongitudinal.step(
+                clamp(input.riderForeAft, -1f, 1f),
+                0f,
+                airborne(),
+                dt);
+"""
+    text = replace_once(text, old, new, "remove acceleration rider feedback")
 
-    old_steer = '''        float steerTorque = riderSteer * MAX_STEER_TORQUE\n                + frontTireForce.mz - STEER_DAMPING * steerRate;\n        steerRate += steerTorque / STEER_INERTIA * dt;\n'''
-    new_steer = '''        float riderSteerTorque = riderSteer * MAX_STEER_TORQUE;\n        float steeringDampingTorque = -STEER_DAMPING * steerRate;\n        float steerTorque = riderSteerTorque + frontTireForce.mz + steeringDampingTorque;\n        steerRate += steerTorque / STEER_INERTIA * dt;\n'''
-    text = replace_once(text, old_steer, new_steer, "steering torque decomposition")
+    old = """        float steerTorque = riderSteer * MAX_STEER_TORQUE
+                + frontTireForce.mz - STEER_DAMPING * steerRate;
+        steerRate += steerTorque / STEER_INERTIA * dt;
+"""
+    new = """        float riderSteerTorque = riderSteer * MAX_STEER_TORQUE;
+        float steeringDampingTorque = -STEER_DAMPING * steerRate;
+        float steerTorque = riderSteerTorque + frontTireForce.mz
+                + steeringDampingTorque;
+        steerRate += steerTorque / STEER_INERTIA * dt;
+"""
+    text = replace_once(text, old, new, "steering torque decomposition")
 
-    text = replace_once(
-        text,
-        '''        addContactToRigidBody(\n                rearContact,\n                rearTireForce,\n                rearSpring,\n                totalForce,\n                totalMomentWorld);\n        addContactToRigidBody(\n                frontContact,\n                frontTireForce,\n                frontSpring,\n                totalForce,\n                totalMomentWorld);\n''',
-        '''        addContactToRigidBody(\n                rearContact,\n                rearTireForce,\n                rearSpring,\n                false,\n                totalForce,\n                totalMomentWorld);\n        addContactToRigidBody(\n                frontContact,\n                frontTireForce,\n                frontSpring,\n                true,\n                totalForce,\n                totalMomentWorld);\n''',
-        "front/rear contact ownership")
+    old = """        addContactToRigidBody(
+                rearContact,
+                rearTireForce,
+                rearSpring,
+                totalForce,
+                totalMomentWorld);
+        addContactToRigidBody(
+                frontContact,
+                frontTireForce,
+                frontSpring,
+                totalForce,
+                totalMomentWorld);
+"""
+    new = """        addContactToRigidBody(
+                rearContact,
+                rearTireForce,
+                rearSpring,
+                false,
+                totalForce,
+                totalMomentWorld);
+        addContactToRigidBody(
+                frontContact,
+                frontTireForce,
+                frontSpring,
+                true,
+                totalForce,
+                totalMomentWorld);
+"""
+    text = replace_once(text, old, new, "front/rear contact ownership")
 
-    old_rider_pitch = '''        float riderPitchTorque = riderLongitudinal.pitchReactionTorque(\n                airborne(),\n                frontGrounded());\n        totalMomentWorld.x += right.x * riderPitchTorque;\n        totalMomentWorld.y += right.y * riderPitchTorque;\n        totalMomentWorld.z += right.z * riderPitchTorque;\n\n'''
-    text = replace_once(text, old_rider_pitch, '', "remove legacy rider pitch torque")
+    old = """        float riderPitchTorque = riderLongitudinal.pitchReactionTorque(
+                airborne(),
+                frontGrounded());
+        totalMomentWorld.x += right.x * riderPitchTorque;
+        totalMomentWorld.y += right.y * riderPitchTorque;
+        totalMomentWorld.z += right.z * riderPitchTorque;
 
-    old_gyro = '''        // Wheel gyroscopic bearing reactions. Spin acceleration remains handled by hub torque.\n        float cs = (float)Math.cos(steerAngle);\n        float ss = (float)Math.sin(steerAngle);\n        float frontH = FRONT_WHEEL_INERTIA * frontWheelOmega;\n        float rearH = REAR_WHEEL_INERTIA * rearWheelOmega;\n        float hx = rearH + frontH * cs;\n        float hz = -frontH * ss;\n        torqueBody.x += -wy * hz - steerRate * hz;\n        torqueBody.y += -(wz * hx - wx * hz);\n        torqueBody.z += wy * hx + steerRate * frontH * cs;\n\n'''
-    new_gyro = '''        // Wheel gyroscopic chassis coupling is intentionally omitted in this stabilization pass.\n        // The previous hand-expanded cross terms were not independently validated and could inject\n        // energy. Wheel spin inertia remains physical; gyro coupling returns with a tested wheel\n        // orientation/Jacobian model rather than another sign-sensitive shortcut.\n\n'''
-    text = replace_once(text, old_gyro, new_gyro, "remove unvalidated gyro coupling")
+"""
+    text = replace_once(text, old, "", "remove legacy rider pitch torque")
 
-    old_end = '''        integrateQuaternion(dt);\n        basis();\n        float forwardSpeedEnd = forward.x * vx + forward.y * vy + forward.z * vz;\n        lastLongitudinalAcceleration = (forwardSpeedEnd - forwardSpeedStart)\n                / Math.max(dt, 0.0001f);\n\n        if (!finite()) reset(terrain);\n'''
-    new_end = '''        integrateQuaternion(dt);\n\n        if (!finite()) reset(terrain);\n'''
-    text = replace_once(text, old_end, new_end, "remove projected acceleration feedback")
+    old = """        // Wheel gyroscopic bearing reactions. Spin acceleration remains handled by hub torque.
+        float cs = (float)Math.cos(steerAngle);
+        float ss = (float)Math.sin(steerAngle);
+        float frontH = FRONT_WHEEL_INERTIA * frontWheelOmega;
+        float rearH = REAR_WHEEL_INERTIA * rearWheelOmega;
+        float hx = rearH + frontH * cs;
+        float hz = -frontH * ss;
+        torqueBody.x += -wy * hz - steerRate * hz;
+        torqueBody.y += -(wz * hx - wx * hz);
+        torqueBody.z += wy * hx + steerRate * frontH * cs;
 
-    old_sig = '''            PhysicsV2Tire.Force f,\n            float suspensionForce,\n            Vec forceSum,\n            Vec momentSum) {\n'''
-    new_sig = '''            PhysicsV2Tire.Force f,\n            float suspensionForce,\n            boolean isFront,\n            Vec forceSum,\n            Vec momentSum) {\n'''
-    text = replace_once(text, old_sig, new_sig, "contact signature")
+"""
+    new = """        // The former hand-expanded gyro cross terms were not independently validated.
+        // Omit them until wheel orientation/Jacobian coupling has conservation tests.
+        // Wheel spin inertia itself remains physical.
 
-    old_moments = '''        momentSum.add(m);\n        momentSum.x += c.normal.x * f.mz + c.wheelForward.x * f.mx;\n        momentSum.y += c.normal.y * f.mz + c.wheelForward.y * f.mx;\n        momentSum.z += c.normal.z * f.mz + c.wheelForward.z * f.mx;\n'''
-    new_moments = '''        momentSum.add(m);\n        // Front aligning moment belongs to the steering DOF. Applying it here as well would\n        // double-count the same external tire moment. Rear aligning moment acts on the chassis.\n        if (!isFront) {\n            momentSum.x += c.normal.x * f.mz;\n            momentSum.y += c.normal.y * f.mz;\n            momentSum.z += c.normal.z * f.mz;\n        }\n        momentSum.x += c.wheelForward.x * f.mx;\n        momentSum.y += c.wheelForward.y * f.mx;\n        momentSum.z += c.wheelForward.z * f.mx;\n'''
-    text = replace_once(text, old_moments, new_moments, "front aligning moment ownership")
+"""
+    text = replace_once(text, old, new, "remove unvalidated gyro coupling")
 
-    reaction_anchor = '''        totalMomentWorld.set(0f, 0f, 0f);\n'''
-    reaction = '''        totalMomentWorld.set(0f, 0f, 0f);\n        float steeringInternalReaction = -(riderSteerTorque + steeringDampingTorque);\n        totalMomentWorld.x += up.x * steeringInternalReaction;\n        totalMomentWorld.y += up.y * steeringInternalReaction;\n        totalMomentWorld.z += up.z * steeringInternalReaction;\n'''
-    text = replace_once(text, reaction_anchor, reaction, "steering chassis reaction")
+    old = """        integrateQuaternion(dt);
+        basis();
+        float forwardSpeedEnd = forward.x * vx + forward.y * vy + forward.z * vz;
+        lastLongitudinalAcceleration = (forwardSpeedEnd - forwardSpeedStart)
+                / Math.max(dt, 0.0001f);
 
-    text = text.replace(
-        '''                && finite(frontWheelOmega) && finite(rearWheelOmega)\n                && finite(lastLongitudinalAcceleration);''',
-        '''                && finite(frontWheelOmega) && finite(rearWheelOmega);''')
+        if (!finite()) reset(terrain);
+"""
+    new = """        integrateQuaternion(dt);
+
+        if (!finite()) reset(terrain);
+"""
+    text = replace_once(text, old, new, "remove projected acceleration feedback")
+
+    old = """            PhysicsV2Tire.Force f,
+            float suspensionForce,
+            Vec forceSum,
+            Vec momentSum) {
+"""
+    new = """            PhysicsV2Tire.Force f,
+            float suspensionForce,
+            boolean isFront,
+            Vec forceSum,
+            Vec momentSum) {
+"""
+    text = replace_once(text, old, new, "contact signature")
+
+    old = """        momentSum.add(m);
+        momentSum.x += c.normal.x * f.mz + c.wheelForward.x * f.mx;
+        momentSum.y += c.normal.y * f.mz + c.wheelForward.y * f.mx;
+        momentSum.z += c.normal.z * f.mz + c.wheelForward.z * f.mx;
+"""
+    new = """        momentSum.add(m);
+        // Front aligning moment belongs to the steering DOF. Adding it here too
+        // double-counts the same external tire moment.
+        if (!isFront) {
+            momentSum.x += c.normal.x * f.mz;
+            momentSum.y += c.normal.y * f.mz;
+            momentSum.z += c.normal.z * f.mz;
+        }
+        momentSum.x += c.wheelForward.x * f.mx;
+        momentSum.y += c.wheelForward.y * f.mx;
+        momentSum.z += c.wheelForward.z * f.mx;
+"""
+    text = replace_once(text, old, new, "front aligning moment ownership")
+
+    old = """        totalMomentWorld.set(0f, 0f, 0f);
+"""
+    new = """        totalMomentWorld.set(0f, 0f, 0f);
+        // Rider bar torque and steering-joint damping are internal reactions.
+        float steeringInternalReaction =
+                -(riderSteerTorque + steeringDampingTorque);
+        totalMomentWorld.x += up.x * steeringInternalReaction;
+        totalMomentWorld.y += up.y * steeringInternalReaction;
+        totalMomentWorld.z += up.z * steeringInternalReaction;
+"""
+    text = replace_once(text, old, new, "steering chassis reaction")
+
+    old = """                && finite(frontWheelOmega) && finite(rearWheelOmega)
+                && finite(lastLongitudinalAcceleration);"""
+    new = """                && finite(frontWheelOmega) && finite(rearWheelOmega);"""
+    text = replace_once(text, old, new, "finite state")
 
     PLANT.write_text(text, encoding="utf-8")
 
 
 def test_source() -> str:
-    return '''package com.nyerahworks.balancepoint;\n\nimport static org.junit.Assert.assertTrue;\n\nimport org.junit.Test;\n\npublic final class PhysicsV2StabilityTest {\n    private static final class Flat implements PhysicsV2Plant.Terrain {\n        @Override public float height(float x, float z) { return 0f; }\n        @Override public float slopeX(float x, float z) { return 0f; }\n        @Override public float slopeZ(float x, float z) { return 0f; }\n        @Override public float traction(float x, float z) { return 1f; }\n    }\n\n    @Test\n    public void timestepHalvingConvergesForStraightLaunch() {\n        Snapshot a = run(1f / 120f, false);\n        Snapshot b = run(1f / 240f, false);\n        assertTrue("speed delta=" + Math.abs(a.speed - b.speed),\n                Math.abs(a.speed - b.speed) < 0.35f);\n        assertTrue("pitch delta=" + Math.abs(a.pitch - b.pitch),\n                Math.abs(a.pitch - b.pitch) < radians(1.5f));\n        assertTrue("height delta=" + Math.abs(a.y - b.y),\n                Math.abs(a.y - b.y) < 0.02f);\n    }\n\n    @Test\n    public void timestepHalvingConvergesForMildTurn() {\n        Snapshot a = run(1f / 120f, true);\n        Snapshot b = run(1f / 240f, true);\n        assertTrue("roll delta=" + Math.abs(a.roll - b.roll),\n                Math.abs(a.roll - b.roll) < radians(3f));\n        assertTrue("yaw delta=" + Math.abs(a.yaw - b.yaw),\n                angleDelta(a.yaw, b.yaw) < radians(4f));\n    }\n\n    @Test\n    public void scriptedRideDoesNotDevelopSpontaneousAngularExplosion() {\n        Flat terrain = new Flat();\n        PhysicsV2Plant p = new PhysicsV2Plant();\n        p.reset(terrain);\n        float dt = 1f / 120f;\n        float maxPitchRate = 0f;\n        float maxRollRate = 0f;\n        for (int i = 0; i < 1200; i++) {\n            float t = i * dt;\n            p.input().throttle = t < 2f ? 0.38f : (t < 5f ? 0.55f : 0.28f);\n            p.input().steer = t < 2.5f ? 0f : (t < 4f ? 0.22f : (t < 5.5f ? -0.18f : 0f));\n            p.input().riderForeAft = t < 3f ? 0.10f : 0f;\n            p.step(terrain, dt);\n            maxPitchRate = Math.max(maxPitchRate, Math.abs(p.pitchRate()));\n            maxRollRate = Math.max(maxRollRate, Math.abs(p.rollRate()));\n            assertTrue("non-finite orientation at t=" + t,\n                    Float.isFinite(p.pitch()) && Float.isFinite(p.roll()) && Float.isFinite(p.yaw()));\n        }\n        assertTrue("pitch rate=" + maxPitchRate, maxPitchRate < 5f);\n        assertTrue("roll rate=" + maxRollRate, maxRollRate < 7f);\n    }\n\n    private Snapshot run(float dt, boolean turn) {\n        Flat terrain = new Flat();\n        PhysicsV2Plant p = new PhysicsV2Plant();\n        p.reset(terrain);\n        int count = Math.round(5f / dt);\n        for (int i = 0; i < count; i++) {\n            float t = i * dt;\n            p.input().throttle = t < 1f ? 0.25f : 0.48f;\n            p.input().steer = turn && t > 2.0f && t < 4.0f ? 0.20f : 0f;\n            p.step(terrain, dt);\n        }\n        Snapshot s = new Snapshot();\n        s.speed = p.speed();\n        s.pitch = p.pitch();\n        s.roll = p.roll();\n        s.yaw = p.yaw();\n        s.y = p.y();\n        return s;\n    }\n\n    private static float angleDelta(float a, float b) {\n        float d = Math.abs(a - b);\n        while (d > Math.PI * 2f) d -= Math.PI * 2f;\n        return d > Math.PI ? (float)(Math.PI * 2f - d) : d;\n    }\n\n    private static float radians(float degrees) {\n        return degrees * (float)Math.PI / 180f;\n    }\n\n    private static final class Snapshot {\n        float speed, pitch, roll, yaw, y;\n    }\n}\n'''
+    return """package com.nyerahworks.balancepoint;
+
+import static org.junit.Assert.assertTrue;
+
+import org.junit.Test;
+
+public final class PhysicsV2StabilityTest {
+    private static final class Flat implements PhysicsV2Plant.Terrain {
+        @Override public float height(float x, float z) { return 0f; }
+        @Override public float slopeX(float x, float z) { return 0f; }
+        @Override public float slopeZ(float x, float z) { return 0f; }
+        @Override public float traction(float x, float z) { return 1f; }
+    }
+
+    @Test
+    public void timestepHalvingConvergesForStraightLaunch() {
+        Snapshot a = run(1f / 120f, false);
+        Snapshot b = run(1f / 240f, false);
+        assertTrue(
+                "speed delta=" + Math.abs(a.speed - b.speed),
+                Math.abs(a.speed - b.speed) < 0.35f);
+        assertTrue(
+                "pitch delta=" + Math.abs(a.pitch - b.pitch),
+                Math.abs(a.pitch - b.pitch) < radians(1.5f));
+        assertTrue(
+                "height delta=" + Math.abs(a.y - b.y),
+                Math.abs(a.y - b.y) < 0.02f);
+    }
+
+    @Test
+    public void timestepHalvingConvergesForMildTurn() {
+        Snapshot a = run(1f / 120f, true);
+        Snapshot b = run(1f / 240f, true);
+        assertTrue(
+                "roll delta=" + Math.abs(a.roll - b.roll),
+                Math.abs(a.roll - b.roll) < radians(3f));
+        assertTrue(
+                "yaw delta=" + Math.abs(a.yaw - b.yaw),
+                angleDelta(a.yaw, b.yaw) < radians(4f));
+    }
+
+    @Test
+    public void scriptedRideDoesNotDevelopSpontaneousAngularExplosion() {
+        Flat terrain = new Flat();
+        PhysicsV2Plant p = new PhysicsV2Plant();
+        p.reset(terrain);
+        float dt = 1f / 120f;
+        float maxPitchRate = 0f;
+        float maxRollRate = 0f;
+        for (int i = 0; i < 1200; i++) {
+            float t = i * dt;
+            p.input().throttle =
+                    t < 2f ? 0.38f : (t < 5f ? 0.55f : 0.28f);
+            p.input().steer =
+                    t < 2.5f ? 0f : (t < 4f ? 0.22f :
+                            (t < 5.5f ? -0.18f : 0f));
+            p.input().riderForeAft = t < 3f ? 0.10f : 0f;
+            p.step(terrain, dt);
+            maxPitchRate = Math.max(maxPitchRate, Math.abs(p.pitchRate()));
+            maxRollRate = Math.max(maxRollRate, Math.abs(p.rollRate()));
+            assertTrue(
+                    "non-finite orientation at t=" + t,
+                    Float.isFinite(p.pitch())
+                            && Float.isFinite(p.roll())
+                            && Float.isFinite(p.yaw()));
+        }
+        assertTrue("pitch rate=" + maxPitchRate, maxPitchRate < 5f);
+        assertTrue("roll rate=" + maxRollRate, maxRollRate < 7f);
+    }
+
+    private Snapshot run(float dt, boolean turn) {
+        Flat terrain = new Flat();
+        PhysicsV2Plant p = new PhysicsV2Plant();
+        p.reset(terrain);
+        int count = Math.round(5f / dt);
+        for (int i = 0; i < count; i++) {
+            float t = i * dt;
+            p.input().throttle = t < 1f ? 0.25f : 0.48f;
+            p.input().steer =
+                    turn && t > 2.0f && t < 4.0f ? 0.20f : 0f;
+            p.step(terrain, dt);
+        }
+        Snapshot s = new Snapshot();
+        s.speed = p.speed();
+        s.pitch = p.pitch();
+        s.roll = p.roll();
+        s.yaw = p.yaw();
+        s.y = p.y();
+        return s;
+    }
+
+    private static float angleDelta(float a, float b) {
+        float d = Math.abs(a - b);
+        while (d > Math.PI * 2f) d -= Math.PI * 2f;
+        return d > Math.PI ? (float)(Math.PI * 2f - d) : d;
+    }
+
+    private static float radians(float degrees) {
+        return degrees * (float)Math.PI / 180f;
+    }
+
+    private static final class Snapshot {
+        float speed, pitch, roll, yaw, y;
+    }
+}
+"""
 
 
 def main() -> None:
@@ -90,4 +332,4 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 
-# Trigger marker: stability-migration-1
+# Trigger marker: stability-migration-3
