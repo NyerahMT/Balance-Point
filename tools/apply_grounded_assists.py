@@ -31,10 +31,10 @@ new_constants = """    private static final float AERO_COEFF = 0.34f;
     private static final float ASSIST_MAX_ROLL_TORQUE = 240f;
     private static final float ASSIST_STEER_DAMPING = 5.5f;
     private static final float ASSIST_WHEELIE_TARGET = radians(14f);
-    private static final float ASSIST_WHEELIE_ONSET = radians(10f);
-    private static final float ASSIST_WHEELIE_KP = 260f;
-    private static final float ASSIST_WHEELIE_KD = 72f;
-    private static final float ASSIST_MAX_WHEELIE_TORQUE = 320f;
+    private static final float ASSIST_WHEELIE_ONSET = radians(5f);
+    private static final float ASSIST_WHEELIE_KP = 360f;
+    private static final float ASSIST_WHEELIE_KD = 125f;
+    private static final float ASSIST_MAX_WHEELIE_TORQUE = 450f;
 """
 if old_constants not in text:
     raise SystemExit("constant insertion anchor not found")
@@ -81,9 +81,7 @@ new_moment_anchor = """        float engineReaction = -0.0065f * powertrain.getE
             totalMomentWorld.y += forward.y * rollTorque;
             totalMomentWorld.z += forward.z * rollTorque;
 
-            if (rearGrounded()
-                    && !frontGrounded()
-                    && pitch() > ASSIST_WHEELIE_ONSET) {
+            if (rearGrounded() && pitch() > ASSIST_WHEELIE_ONSET) {
                 float wheelieTorque = ASSIST_WHEELIE_KP
                         * (ASSIST_WHEELIE_TARGET - pitch())
                         - ASSIST_WHEELIE_KD * Math.max(0f, pitchRate());
