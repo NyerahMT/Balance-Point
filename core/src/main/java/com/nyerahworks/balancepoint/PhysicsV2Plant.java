@@ -169,7 +169,17 @@ final class PhysicsV2Plant {
         if (steerAngle < -MAX_STEER_ANGLE) { steerAngle = -MAX_STEER_ANGLE; steerRate = Math.max(0f, steerRate); }
 
         float horizontalSpeed = (float)Math.sqrt(vx * vx + vz * vz);
-        float clutchCommand = clamp(0.16f + horizontalSpeed / 6.0f, 0.16f, 1f);
+        // Automatic launch clutch is a physical plate-force command, not an RPM target.
+        // With the throttle closed at rest the clutch is open, so idle cannot creep the bike.
+        // Engagement grows with rider torque request and road speed while transmitted torque
+        // still comes exclusively from the clutch slip law in PhysicsV2Powertrain.
+        float clutchCommand;
+        if (input.throttle < 0.03f && horizontalSpeed < 0.8f) {
+            clutchCommand = 0f;
+        } else {
+            clutchCommand = clamp(0.08f + 0.18f * input.throttle
+                    + horizontalSpeed / 6.0f, 0f, 1f);
+        }
         float rearDriveTorque = powertrain.step(rearWheelOmega, input.throttle, clutchCommand, dt);
         float brakeTorque = clamp(input.rearBrake, 0f, 1f) * MAX_REAR_BRAKE_TORQUE;
         float rearBrakeSign = Math.abs(rearWheelOmega) > 0.2f ? Math.signum(rearWheelOmega) : 1f;

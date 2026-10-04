@@ -76,6 +76,24 @@ public final class BalancePointGame extends ApplicationAdapter {
     private EngineAudio engineAudio;
     private TerrainVisuals terrainVisuals;
 
+    // PHYSICS_V2_RUNTIME -- physical dimensions live inside the plant; the old constants above
+    // remain only because GameScene/DirtBikeVisualRig use the imported GLB's presentation scale.
+    private final PhysicsV2Plant physicsV2 = new PhysicsV2Plant();
+    private final PhysicsV2Plant.Terrain physicsV2Terrain = new PhysicsV2Plant.Terrain() {
+        @Override public float height(float x, float z) {
+            return terrainVisuals == null ? 0f : terrainVisuals.groundHeight(x, z);
+        }
+        @Override public float slopeX(float x, float z) {
+            return terrainVisuals == null ? 0f : terrainVisuals.groundSlopeX(x, z);
+        }
+        @Override public float slopeZ(float x, float z) {
+            return terrainVisuals == null ? 0f : terrainVisuals.groundSlopeZ(x, z);
+        }
+        @Override public float traction(float x, float z) {
+            return terrainVisuals == null ? 1f : terrainVisuals.tractionCoefficient(x, z);
+        }
+    };
+
     private float speed;
     private float lateralSpeed;
     private float bikeZ;
@@ -201,7 +219,8 @@ public final class BalancePointGame extends ApplicationAdapter {
 
         if (gameState != GameState.MAIN_MENU) {
             updateBikeVisuals();
-            instrumentDisplay.update(speed, drivetrain);
+            instrumentDisplay.update(speed, physicsV2.powertrain().getRpm(),
+                    physicsV2.powertrain().getRedlineRpm(), physicsV2.powertrain().getGear());
         }
         updateCamera(frameDt);
         if (gameState == GameState.PLAYING && engineAudio != null) {
@@ -334,8 +353,8 @@ public final class BalancePointGame extends ApplicationAdapter {
         looking = lookTouch;
 
         if (!crashed) {
-            if (shiftUpTouch && !shiftUpHeld) drivetrain.shiftUp();
-            if (shiftDownTouch && !shiftDownHeld) drivetrain.shiftDown(speed);
+            if (shiftUpTouch && !shiftUpHeld) physicsV2.shiftUp();
+            if (shiftDownTouch && !shiftDownHeld) physicsV2.shiftDown();
         }
         shiftUpHeld = shiftUpTouch;
         shiftDownHeld = shiftDownTouch;
@@ -521,7 +540,8 @@ public final class BalancePointGame extends ApplicationAdapter {
         float bikeVy = verticalVelocity;
         float bikeVz = cos * speed;
         float closing = bikeVx * toListenerX + bikeVy * (-ly) + bikeVz * toListenerZ;
-        engineAudio.update(drivetrain.getRpm(), throttle, drivetrain.isShifting(), crashed,
+        engineAudio.update(physicsV2.powertrain().getRpm(), throttle,
+                physicsV2.powertrain().isShifting(), crashed,
                 pan, dist, rear, closing);
     }
 
@@ -536,382 +556,46 @@ public final class BalancePointGame extends ApplicationAdapter {
             return;
         }
 
-        boolean wasTerrainAirborne = terrainAirborne;
-        riderDynamics.step(riderLeanTarget, longitudinalAcceleration, terrainAirborne, dt);
-        riderLean = riderDynamics.pose();
+        float previousSpeed = speed;
+        PhysicsV2Plant.Input v2Input = physicsV2.input();
+        v2Input.throttle = throttle;
+        v2Input.rearBrake = rearBrake;
+        // Player turn intent is physical steering-torque authority in the V2 plant.
+        v2Input.steer = steer;
+        physicsV2.step(physicsV2Terrain, dt);
 
-        float sinYaw = MathUtils.sin(yaw);
-        float cosYaw = MathUtils.cos(yaw);
-        float sinPitch = MathUtils.sin(pitch);
-        float cosPitch = MathUtils.cos(pitch);
+        // Dynamic state comes exclusively from the V2 plant. The Y conversion below is only
+        // an imported-mesh origin adapter: GameScene still expects its historical visual root.
+        bikeX = physicsV2.x();
+        bikeZ = physicsV2.z();
+        chassisY = physicsV2.y() - 0.826f + (WHEEL_RADIUS + COM_HEIGHT);
+        speed = physicsV2.speed();
+        verticalVelocity = physicsV2.verticalVelocity();
+        pitch = physicsV2.pitch();
+        pitchVelocity = physicsV2.pitchRate();
+        roll = physicsV2.roll();
+        rollVelocity = physicsV2.rollRate();
+        yaw = physicsV2.yaw();
+        yawVelocity = physicsV2.yawRate();
+        terrainRoll = 0f;
+        terrainRollVelocity = 0f;
+        wheelSpin = physicsV2.rearWheelSpin();
+        frontGrounded = physicsV2.frontGrounded();
+        terrainAirborne = physicsV2.airborne();
+        frontNormalLoad = physicsV2.telemetry().frontFz;
+        longitudinalAcceleration = (speed - previousSpeed) / Math.max(dt, 0.0001f);
 
-        float climbPostureShift = 0f;
-        if (terrainVisuals != null && !terrainAirborne) {
-            float centerSlopeX = terrainVisuals.groundSlopeX(bikeX, bikeZ);
-            float centerSlopeZ = terrainVisuals.groundSlopeZ(bikeX, bikeZ);
-            float forwardGrade = centerSlopeX * sinYaw + centerSlopeZ * cosYaw;
-            float uphillAngle = (float) Math.atan(Math.max(0f, forwardGrade));
-            float climbBlend = MathUtils.clamp(uphillAngle
-                    / (40f * MathUtils.degreesToRadians), 0f, 1f);
-            climbPostureShift = climbBlend * 0.14f;
-        }
-        effectiveComForward = MathUtils.clamp(
-                COM_FORWARD + riderDynamics.combinedComShift() + climbPostureShift,
-                0.48f, 0.96f);
-        float rearForward = -effectiveComForward * cosPitch + COM_HEIGHT * sinPitch;
-        float rearVertical = -effectiveComForward * sinPitch - COM_HEIGHT * cosPitch;
-        float frontForward = (WHEELBASE - effectiveComForward) * cosPitch + COM_HEIGHT * sinPitch;
-        float frontVertical = (WHEELBASE - effectiveComForward) * sinPitch - COM_HEIGHT * cosPitch;
+        // Presentation-only legacy values. They do not feed back into PhysicsV2Plant.
+        effectiveComForward = COM_FORWARD;
+        riderLean += (riderLeanTarget - riderLean) * Math.min(1f, dt * 6f);
+        rearWheelAngularSpeed = wheelSpin / Math.max(dt, 0.0001f);
+        bikeY = chassisY - COM_HEIGHT;
 
-        float rearX = bikeX + sinYaw * rearForward;
-        float rearZ = bikeZ + cosYaw * rearForward;
-        float frontX = bikeX + sinYaw * frontForward;
-        float frontZ = bikeZ + cosYaw * frontForward;
-        float rearY = chassisY + rearVertical;
-        float frontY = chassisY + frontVertical;
-
-        float rearForwardVelocity = speed - pitchVelocity * rearVertical;
-        float rearVerticalVelocity = verticalVelocity + pitchVelocity * rearForward;
-        float frontForwardVelocity = speed - pitchVelocity * frontVertical;
-        float frontVerticalVelocity = verticalVelocity + pitchVelocity * frontForward;
-
-        float rearEffectiveMass = MASS * (WHEELBASE - effectiveComForward) / WHEELBASE;
-        float frontEffectiveMass = MASS - rearEffectiveMass;
-        solveWheelContact(rearContactState, rearX, rearY, rearZ,
-                rearForwardVelocity, rearVerticalVelocity, sinYaw, cosYaw,
-                suspension.rear(), rearEffectiveMass, dt);
-        solveWheelContact(frontContactState, frontX, frontY, frontZ,
-                frontForwardVelocity, frontVerticalVelocity, sinYaw, cosYaw,
-                suspension.front(), frontEffectiveMass, dt);
-
-        boolean rearTouching = rearContactState.touching();
-        boolean frontTouching = frontContactState.touching();
-        terrainAirborne = !rearTouching && !frontTouching;
-        frontGrounded = frontTouching;
-        frontNormalLoad = frontContactState.normalForce;
-
-        float rearSurfacePitch = MathUtils.atan2(
-                -rearContactState.normalForward, rearContactState.normalUp);
-        float frontSurfacePitch = MathUtils.atan2(
-                -frontContactState.normalForward, frontContactState.normalUp);
-
-        // Track the support plane while the tires are still on the jump. Its angular rate is
-        // real takeoff information: convex lips, kickers and mismatched wheel release should
-        // produce different chassis pitch momentum instead of all jumps leaving the same way.
-        if (!terrainAirborne) {
-            float supportPitch;
-            if (rearTouching && frontTouching) {
-                supportPitch = MathUtils.atan2(
-                        frontContactState.groundY - rearContactState.groundY, WHEELBASE);
-            } else if (frontTouching) {
-                supportPitch = frontSurfacePitch;
-            } else {
-                supportPitch = rearSurfacePitch;
-            }
-
-            if (!wasTerrainAirborne) {
-                float rawSupportRate = wrapAngle(supportPitch - lastGroundSupportPitch)
-                        / Math.max(dt, 0.0001f);
-                rawSupportRate = MathUtils.clamp(rawSupportRate, -3.5f, 3.5f);
-                groundSupportPitchRate += (rawSupportRate - groundSupportPitchRate)
-                        * Math.min(1f, dt * 18f);
-            } else {
-                groundSupportPitchRate = 0f;
-            }
-            lastGroundSupportPitch = supportPitch;
-        }
-
-        if (terrainAirborne && !wasTerrainAirborne) {
-            airborneVelocityX = sinYaw * speed + cosYaw * lateralSpeed;
-            airborneVelocityZ = cosYaw * speed - sinYaw * lateralSpeed;
-
-            float attitudeError = wrapAngle(lastGroundSupportPitch - pitch);
-            float takeoffPitchRate = groundSupportPitchRate * 0.72f + attitudeError * 1.6f;
-            takeoffPitchRate = MathUtils.clamp(
-                    takeoffPitchRate, -TAKEOFF_PITCH_RATE_LIMIT, TAKEOFF_PITCH_RATE_LIMIT);
-            pitchVelocity = MathUtils.lerp(
-                    pitchVelocity, takeoffPitchRate, TAKEOFF_PITCH_RATE_BLEND);
-        }
-
-        MotorcycleLandingDynamics.Result landingState = landingDynamics.step(
-                rearTouching,
-                frontTouching,
-                rearContactState.normalVelocity,
-                frontContactState.normalVelocity,
-                rearSurfacePitch,
-                frontSurfacePitch,
-                suspension.rear(),
-                suspension.front(),
-                pitch,
-                roll,
-                pitchVelocity,
-                dt);
-        float airControlBlend = terrainAirborne
-                ? MathUtils.clamp(landingState.airborneTime / AIR_CONTROL_BLEND_TIME, 0f, 1f)
-                : 0f;
-
-        float absSpeed = Math.abs(speed);
-        float rearTangentForward = rearContactState.normalUp;
-        float rearTangentUp = -rearContactState.normalForward;
-        float tangentGroundSpeed = speed * rearTangentForward
-                + verticalVelocity * rearTangentUp;
-        float wheelLinearSpeed = rearWheelAngularSpeed * WHEEL_RADIUS;
-
-        float drivetrainForce = MathUtils.clamp(
-                drivetrain.update(wheelLinearSpeed, throttle, dt), 0f, MAX_ENGINE_FORCE);
-        float rearSurfaceMu = terrainVisuals != null
-                ? terrainVisuals.tractionCoefficient(rearX, rearZ) : 1.0f;
-        float frontSurfaceMu = terrainVisuals != null
-                ? terrainVisuals.tractionCoefficient(frontX, frontZ) : 1.0f;
-        float rearTractionLimit = rearSurfaceMu * rearContactState.normalForce;
-        float slipSpeed = wheelLinearSpeed - tangentGroundSpeed;
-        float rearTireForce = 0f;
-        if (rearTouching && rearTractionLimit > 0f) {
-            float absSlip = Math.abs(slipSpeed);
-            float forceBuild = MathUtils.clamp(absSlip / TIRE_SLIP_SPEED_AT_PEAK, 0f, 1f);
-            float highSlipBlend = MathUtils.clamp((absSlip - TIRE_HIGH_SLIP_START)
-                    / (TIRE_HIGH_SLIP_FULL - TIRE_HIGH_SLIP_START), 0f, 1f);
-            float highSlipFactor = MathUtils.lerp(1f, TIRE_HIGH_SLIP_GRIP, highSlipBlend);
-            rearTireForce = Math.signum(slipSpeed) * rearTractionLimit
-                    * forceBuild * highSlipFactor;
-        }
-
-        float rearTireForward = rearTireForce * rearTangentForward;
-        float rearTireUp = rearTireForce * rearTangentUp;
-        float rearNormalForward = rearContactState.normalForce * rearContactState.normalForward;
-        float rearNormalUp = rearContactState.normalForce * rearContactState.normalUp;
-        float frontNormalForward = frontContactState.normalForce * frontContactState.normalForward;
-        float frontNormalUp = frontContactState.normalForce * frontContactState.normalUp;
-
-        float rollingMagnitude = (rearContactState.normalForce + frontContactState.normalForce)
-                * ROLLING_RESISTANCE;
-        float rollingForce = absSpeed > 0.05f ? Math.signum(speed) * rollingMagnitude : 0f;
-        // Grounded drag follows the motorcycle axis. In flight drag is applied to the preserved
-        // world-space horizontal vector below, so changing yaw cannot curve the trajectory.
-        float aero = terrainAirborne ? 0f : AERO_DRAG * speed * absSpeed;
-
-        float totalForwardForce = rearNormalForward + frontNormalForward + rearTireForward
-                - rollingForce - aero;
-        float totalVerticalForce = rearNormalUp + frontNormalUp + rearTireUp - MASS * GRAVITY;
-
-        longitudinalAcceleration = totalForwardForce / MASS;
-        speed += longitudinalAcceleration * dt;
-        speed = MathUtils.clamp(speed, -10f, 48f);
-        verticalVelocity += totalVerticalForce / MASS * dt;
-
-        float previousWheelAngularSpeed = rearWheelAngularSpeed;
-        float engineWheelTorque = drivetrainForce * WHEEL_RADIUS;
-        float tireReactionTorque = rearTireForce * WHEEL_RADIUS;
-        float wheelTorqueBeforeBrake = engineWheelTorque - tireReactionTorque;
-        float maxBrakeTorque = MAX_REAR_BRAKE_FORCE * rearBrake * WHEEL_RADIUS;
-
-        if (rearBrake > 0f && Math.abs(rearWheelAngularSpeed) < 1.0f
-                && maxBrakeTorque >= Math.abs(wheelTorqueBeforeBrake)) {
-            rearWheelAngularSpeed = 0f;
-        } else {
-            float brakeDirection = Math.abs(rearWheelAngularSpeed) > 0.25f
-                    ? Math.signum(rearWheelAngularSpeed)
-                    : Math.signum(wheelTorqueBeforeBrake);
-            float netWheelTorque = wheelTorqueBeforeBrake - brakeDirection * maxBrakeTorque;
-            float wheelAngularAcceleration = netWheelTorque / REAR_WHEEL_INERTIA
-                    - rearWheelAngularSpeed * AIR_WHEEL_DRAG;
-            rearWheelAngularSpeed += wheelAngularAcceleration * dt;
-            if (rearBrake > 0f && previousWheelAngularSpeed * rearWheelAngularSpeed < 0f) {
-                rearWheelAngularSpeed = 0f;
-            }
-            rearWheelAngularSpeed = MathUtils.clamp(rearWheelAngularSpeed, -50f, 260f);
-        }
-
-        float actualAngularAcceleration = (rearWheelAngularSpeed - previousWheelAngularSpeed)
-                / Math.max(dt, 0.0001f);
-        if (!rearTouching) {
-            actualAngularAcceleration = MathUtils.clamp(
-                    actualAngularAcceleration,
-                    -AIR_WHEEL_BRAKE_ACCEL,
-                    AIR_WHEEL_DRIVE_ACCEL);
-        }
-        float wheelReactionGain = MathUtils.lerp(1f, AIR_WHEEL_REACTION_GAIN, airControlBlend);
-        float wheelReactionTorque = rearTouching ? 0f
-                : actualAngularAcceleration * REAR_WHEEL_INERTIA * wheelReactionGain;
-
-        float rearContactForwardArm = rearForward
-                - WHEEL_RADIUS * rearContactState.normalForward;
-        float rearContactVerticalArm = rearVertical
-                + suspension.rear().physicalRideOffset()
-                - WHEEL_RADIUS * rearContactState.normalUp;
-        float frontContactForwardArm = frontForward
-                - WHEEL_RADIUS * frontContactState.normalForward;
-        float frontContactVerticalArm = frontVertical
-                + suspension.front().physicalRideOffset()
-                - WHEEL_RADIUS * frontContactState.normalUp;
-
-        float rearForceForward = rearNormalForward + rearTireForward;
-        float rearForceUp = rearNormalUp + rearTireUp;
-        float riderPitchTorque = riderDynamics.pitchReactionTorque(terrainAirborne, frontTouching)
-                * MathUtils.lerp(1f, AIR_RIDER_TORQUE_GAIN, airControlBlend);
-        float pitchTorque = rearContactForwardArm * rearForceUp
-                - rearContactVerticalArm * rearForceForward
-                + frontContactForwardArm * frontNormalUp
-                - frontContactVerticalArm * frontNormalForward
-                + wheelReactionTorque
-                + riderPitchTorque;
-
-        float pitchDamping;
-        if (frontTouching) {
-            pitchDamping = PITCH_DAMPING_GROUNDED;
-        } else if (rearTouching) {
-            pitchDamping = PITCH_DAMPING_WHEELIE;
-        } else {
-            pitchDamping = MathUtils.lerp(PITCH_DAMPING_AIR, AIR_PITCH_DAMPING, airControlBlend);
-        }
-        float pitchAcceleration = pitchTorque / PITCH_INERTIA
-                - pitchVelocity * pitchDamping;
-        pitchVelocity += pitchAcceleration * dt;
-        float maxPitchRate = terrainAirborne
-                ? MathUtils.lerp(MAX_PITCH_RATE, AIR_MAX_PITCH_RATE, airControlBlend)
-                : MAX_PITCH_RATE;
-        pitchVelocity = MathUtils.clamp(pitchVelocity, -maxPitchRate, maxPitchRate);
-        pitch += pitchVelocity * dt;
-
-        if (terrainAirborne) {
-            float airHorizontalSpeed = (float) Math.sqrt(
-                    airborneVelocityX * airborneVelocityX
-                            + airborneVelocityZ * airborneVelocityZ);
-            if (airHorizontalSpeed > 0.001f) {
-                float dragRetention = Math.max(
-                        0f, 1f - (AERO_DRAG * airHorizontalSpeed / MASS) * dt);
-                airborneVelocityX *= dragRetention;
-                airborneVelocityZ *= dragRetention;
-            }
-            bikeX += airborneVelocityX * dt;
-            bikeZ += airborneVelocityZ * dt;
-        } else {
-            bikeX += (sinYaw * speed + cosYaw * lateralSpeed) * dt;
-            bikeZ += (cosYaw * speed - sinYaw * lateralSpeed) * dt;
-        }
-        chassisY += verticalVelocity * dt;
-
-        sinPitch = MathUtils.sin(pitch);
-        cosPitch = MathUtils.cos(pitch);
-        float rearForwardPost = -effectiveComForward * cosPitch + COM_HEIGHT * sinPitch;
-        float rearVerticalPost = -effectiveComForward * sinPitch - COM_HEIGHT * cosPitch;
-        float frontForwardPost = (WHEELBASE - effectiveComForward) * cosPitch + COM_HEIGHT * sinPitch;
-        float frontVerticalPost = (WHEELBASE - effectiveComForward) * sinPitch - COM_HEIGHT * cosPitch;
-        float rearPostX = bikeX + sinYaw * rearForwardPost;
-        float rearPostZ = bikeZ + cosYaw * rearForwardPost;
-        float frontPostX = bikeX + sinYaw * frontForwardPost;
-        float frontPostZ = bikeZ + cosYaw * frontForwardPost;
-        sampleWheelSurface(rearPostContact, rearPostX, chassisY + rearVerticalPost,
-                rearPostZ, sinYaw, cosYaw);
-        sampleWheelSurface(frontPostContact, frontPostX, chassisY + frontVerticalPost,
-                frontPostZ, sinYaw, cosYaw);
-        float rearOverTravel = Math.max(0f,
-                suspension.rear().staticCompression() - rearPostContact.gap
-                        - suspension.rear().travel());
-        float frontOverTravel = Math.max(0f,
-                suspension.front().staticCompression() - frontPostContact.gap
-                        - suspension.front().travel());
-        float penetrationCorrection = Math.max(rearOverTravel, frontOverTravel) - 0.012f;
-        if (penetrationCorrection > 0f) {
-            chassisY += Math.min(penetrationCorrection, 0.16f);
-            if (verticalVelocity < 0f) {
-                float correctionBlend = MathUtils.clamp(penetrationCorrection / 0.16f, 0f, 1f);
-                float velocityRetention = MathUtils.lerp(0.92f, 0.58f, correctionBlend);
-                verticalVelocity *= velocityRetention;
-            }
-        }
-
-        rearVertical = -effectiveComForward * sinPitch - COM_HEIGHT * cosPitch;
-        bikeY = chassisY + rearVertical;
-
-        wheelSpin += rearWheelAngularSpeed * dt;
-        if (wheelSpin > MathUtils.PI2) wheelSpin -= MathUtils.PI2;
-
-        lateralDynamics.step(
-                speed,
-                steer,
-                rearTireForce,
-                rearContactState.normalForce,
-                frontContactState.normalForce,
-                rearSurfaceMu,
-                frontSurfaceMu,
-                rearTouching,
-                frontTouching,
-                dt);
-        lateralSpeed = lateralDynamics.lateralSpeed();
-        yawVelocity = lateralDynamics.yawRate();
-        roll = lateralDynamics.roll();
-        rollVelocity = lateralDynamics.rollRate();
-        yaw += yawVelocity * dt;
-        if (yaw > MathUtils.PI) yaw -= MathUtils.PI2;
-        if (yaw < -MathUtils.PI) yaw += MathUtils.PI2;
-
-        if (terrainAirborne) {
-            // Convert the fixed world velocity back into the moving bike frame for tire/rider
-            // state only. Rotating the chassis can no longer rotate the actual flight path.
-            float airSinYaw = MathUtils.sin(yaw);
-            float airCosYaw = MathUtils.cos(yaw);
-            speed = airSinYaw * airborneVelocityX + airCosYaw * airborneVelocityZ;
-            lateralSpeed = airCosYaw * airborneVelocityX - airSinYaw * airborneVelocityZ;
-            lateralDynamics.syncAirborneVelocity(lateralSpeed);
-
-            // Carry a crooked/cambered lip's roll attitude into flight rather than invisibly
-            // springing the terrain contribution back toward zero in mid-air.
-            terrainRollVelocity *= Math.max(0f, 1f - dt * 0.10f);
-            terrainRoll += terrainRollVelocity * dt;
-        } else {
-            float terrainRollTarget = 0f;
-            if (terrainVisuals != null) {
-                float slopeX = terrainVisuals.groundSlopeX(bikeX, bikeZ);
-                float slopeZ = terrainVisuals.groundSlopeZ(bikeX, bikeZ);
-                float lateralGrade = slopeX * MathUtils.cos(yaw) - slopeZ * MathUtils.sin(yaw);
-                terrainRollTarget = (float) Math.atan(lateralGrade);
-            }
-            float terrainRollAcceleration = (terrainRollTarget - terrainRoll)
-                    * TERRAIN_ROLL_NATURAL_FREQUENCY * TERRAIN_ROLL_NATURAL_FREQUENCY
-                    - 2f * TERRAIN_ROLL_DAMPING_RATIO * TERRAIN_ROLL_NATURAL_FREQUENCY
-                    * terrainRollVelocity;
-            terrainRollVelocity += terrainRollAcceleration * dt;
-            terrainRollVelocity = MathUtils.clamp(terrainRollVelocity, -2.5f, 2.5f);
-            terrainRoll += terrainRollVelocity * dt;
-        }
-
-        if (rearTouching && !frontTouching && speed > 3f) {
+        if (physicsV2.rearGrounded() && !frontGrounded && speed > 3f) {
             wheelieTime += dt;
             bestWheelieTime = Math.max(bestWheelieTime, wheelieTime);
-        } else if (frontTouching) {
+        } else if (frontGrounded) {
             wheelieTime = 0f;
-        }
-
-        // Landing angle/impact severity is not a crash trigger. Only hard motorcycle parts
-        // intersecting terrain end the ride. The rear fender is intentionally not sampled.
-        if (terrainVisuals != null) {
-            float bodySinYaw = MathUtils.sin(yaw);
-            float bodyCosYaw = MathUtils.cos(yaw);
-            float bodySinPitch = MathUtils.sin(pitch);
-            float bodyCosPitch = MathUtils.cos(pitch);
-            float rootForward = -effectiveComForward * bodyCosPitch
-                    + COM_HEIGHT * bodySinPitch;
-            float rootVertical = -effectiveComForward * bodySinPitch
-                    - COM_HEIGHT * bodyCosPitch;
-            float rootX = bikeX + bodySinYaw * rootForward;
-            float rootZ = bikeZ + bodyCosYaw * rootForward;
-            float rootY = chassisY + rootVertical;
-            if (bodyContact.hitsGround(
-                    rootX, rootY, rootZ, yaw, pitch, roll + terrainRoll,
-                    (x, z) -> terrainVisuals.groundHeight(x, z))) {
-                beginCrash();
-                return;
-            }
-        }
-
-        if (pitch > MathUtils.PI) pitch -= MathUtils.PI2;
-        if (pitch < -MathUtils.PI) pitch += MathUtils.PI2;
-
-        if (Float.isNaN(pitch) || Float.isNaN(speed) || Float.isNaN(lateralSpeed)
-                || Float.isNaN(yaw) || Float.isNaN(roll) || Float.isNaN(bikeX)
-                || Float.isNaN(bikeZ) || Float.isNaN(chassisY)) {
-            beginCrash();
         }
     }
 
@@ -1091,6 +775,7 @@ public final class BalancePointGame extends ApplicationAdapter {
         lateralDynamics.reset();
         riderDynamics.reset();
         landingDynamics.reset();
+        physicsV2.reset(physicsV2Terrain);
         frontGrounded = true;
         crashed = false;
         crashSettled = false;
@@ -1115,8 +800,8 @@ public final class BalancePointGame extends ApplicationAdapter {
         state.speed = speed;
         state.steer = steer;
         state.riderLean = riderLean;
-        state.rearSuspensionTravel = suspension.rear().rideOffset();
-        state.frontSuspensionTravel = suspension.front().rideOffset();
+        state.rearSuspensionTravel = physicsV2.rearCompression() - 0.111f;
+        state.frontSuspensionTravel = physicsV2.frontCompression() - 0.095f;
         state.frontGrounded = frontGrounded;
         state.terrainAirborne = terrainAirborne;
         state.crashed = crashed;
@@ -1165,8 +850,8 @@ public final class BalancePointGame extends ApplicationAdapter {
         state.riderLeanTarget = riderLeanTarget;
         state.throttleTarget = throttleTarget;
         state.rearBrakeTarget = rearBrakeTarget;
-        state.gear = drivetrain.getGear();
-        state.rpm = drivetrain.getRpm();
+        state.gear = physicsV2.powertrain().getGear();
+        state.rpm = physicsV2.powertrain().getRpm();
         hud.draw();
     }
 

@@ -25,8 +25,11 @@ final class InstrumentDisplay {
     }
 
     void update(float speed, MotorcycleDrivetrain drivetrain) {
-        float rpmNorm = MathUtils.clamp(
-                drivetrain.getRpm() / drivetrain.getRedlineRpm(), 0f, 1f);
+        update(speed, drivetrain.getRpm(), drivetrain.getRedlineRpm(), drivetrain.getGear());
+    }
+
+    void update(float speed, float rpm, float redlineRpm, int gear) {
+        float rpmNorm = MathUtils.clamp(rpm / Math.max(redlineRpm, 1f), 0f, 1f);
 
         pixmap.setColor(0.007f, 0.014f, 0.012f, 1f);
         pixmap.fill();
@@ -62,7 +65,7 @@ final class InstrumentDisplay {
         int mph = MathUtils.clamp(Math.round(speed * 2.23694f), 0, 199);
         drawSevenSegmentNumber(mph, 10, 29, 31, 45, 5, 3);
         drawSevenSegmentDigit(
-                MathUtils.clamp(drivetrain.getGear(), 0, 9), 153, 29, 28, 45, 5);
+                MathUtils.clamp(gear, 0, 9), 153, 29, 28, 45, 5);
         drawMiniText("MPH", 11, 80, 2);
         drawMiniText("G", 162, 80, 2);
 
