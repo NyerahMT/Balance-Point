@@ -7,7 +7,7 @@ motorcycle image, and reports image/color/circle diagnostics used to extract a
 manufacturer-graphical CRF450R CG prior.
 
 It deliberately emits raw diagnostics before promoting any number into the
-Physics V2 parameter pack.  The source image is not a metrology drawing.
+Physics V2 parameter pack. The source image is not a metrology drawing.
 """
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ import argparse
 import hashlib
 import json
 import math
+import subprocess
 from pathlib import Path
 
 import cv2
@@ -22,10 +23,12 @@ import fitz  # PyMuPDF
 import numpy as np
 import requests
 
-PDF_URL = (
-    "https://www.jstage.jst.go.jp/article/hondatechnicalreview/38/0/"
-    "38_2026_38_3/_supplement/_download/38_2026_38_3_1.pdf"
-)
+ARTICLE_URL = "https://www.jstage.jst.go.jp/article/hondatechnicalreview/38/0/38_2026_38_3/_article/-char/en"
+PDF_URLS = [
+    "https://www.jstage.jst.go.jp/article/hondatechnicalreview/38/0/38_2026_38_3/_pdf/-char/en",
+    "https://www.jstage.jst.go.jp/article/hondatechnicalreview/38/0/38_2026_38_3/_supplement/_download/38_2026_38_3_1.pdf",
+    "https://jstage.jst.go.jp/article/hondatechnicalreview/38/0/38_2026_38_3/_supplement/_download/38_2026_38_3_1.pdf",
+]
 PAGE_INDEX = 3  # PDF page 26, Figure 9
 CR_ELECTRIC_WHEELBASE_MM = 1491.0
 CRF450R_2021_WHEELBASE_MM = 1481.0
@@ -89,11 +92,51 @@ def hough_wheels(bgr: np.ndarray) -> list[dict[str, float]]:
         return []
     ans = []
     for x, y, r in np.round(circles[0]).astype(int):
-        # Wheels must live in the lower ~70% of the motorcycle image.
         if y < h * 0.35:
             continue
         ans.append({"cx": int(x), "cy": int(y), "r": int(r)})
     return sorted(ans, key=lambda c: c["cx"])
+
+
+def download_pdf(out: Path) -> tuple[bytes, str]:
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/141 Safari/537.36",
+        "Accept": "application/pdf,text/html;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": ARTICLE_URL,
+        "Connection": "close",
+    }
+    failures: list[str] = []
+    session = requests.Session()
+    for url in PDF_URLS:
+        try:
+            r = session.get(url, timeout=45, headers=headers, allow_redirects=True)
+            if r.ok and r.content.startswith(b"%PDF"):
+                return r.content, url
+            failures.append(f"requests {url}: status={r.status_code} bytes={len(r.content)} type={r.headers.get('content-type')}")
+        except Exception as exc:
+            failures.append(f"requests {url}: {exc!r}")
+
+    # J-STAGE occasionally behaves differently toward curl than Python clients.
+    curl_path = out / "curl_source.pdf"
+    for url in PDF_URLS:
+        cmd = [
+            "curl", "--http1.1", "-fL", "--retry", "3", "--retry-delay", "1", "--retry-all-errors",
+            "-A", headers["User-Agent"], "-e", ARTICLE_URL,
+            "-H", "Accept: application/pdf,text/html;q=0.9,*/*;q=0.8",
+            "-o", str(curl_path), url,
+        ]
+        try:
+            cp = subprocess.run(cmd, check=False, text=True, capture_output=True, timeout=90)
+            if curl_path.exists():
+                data = curl_path.read_bytes()
+                if cp.returncode == 0 and data.startswith(b"%PDF"):
+                    return data, url
+            failures.append(f"curl {url}: rc={cp.returncode} stderr={cp.stderr[-300:]}")
+        except Exception as exc:
+            failures.append(f"curl {url}: {exc!r}")
+
+    raise RuntimeError("Could not retrieve Honda PDF:\n" + "\n".join(failures))
 
 
 def main() -> None:
@@ -103,9 +146,7 @@ def main() -> None:
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
 
-    response = requests.get(PDF_URL, timeout=60, headers={"User-Agent": "Mozilla/5.0 Balance-Point Physics V2 research"})
-    response.raise_for_status()
-    pdf_bytes = response.content
+    pdf_bytes, resolved_url = download_pdf(out)
     (out / "source.pdf").write_bytes(pdf_bytes)
 
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
@@ -127,7 +168,6 @@ def main() -> None:
                 }
             )
 
-    # Figure 9 is the lower-right placed motorcycle image on page 26.
     candidates = [
         p
         for p in image_placements
@@ -142,8 +182,6 @@ def main() -> None:
     ir = candidate["rect"]
     image_rect = fitz.Rect(ir["x0"], ir["y0"], ir["x1"], ir["y1"])
 
-    # Render a modest expansion around the placed image so any vector annotations
-    # immediately adjacent to the raster are retained.
     expand_x = image_rect.width * 0.05
     expand_y = image_rect.height * 0.08
     crop_rect = fitz.Rect(
@@ -166,7 +204,6 @@ def main() -> None:
     green_components = connected_components(green_mask)
     wheels = hough_wheels(bgr)
 
-    # A second wheel pass on the placed raster alone helps reject surrounding labels.
     raw = doc.extract_image(candidate["xref"])
     raw_path = out / f"figure9_xref_{candidate['xref']}.{raw['ext']}"
     raw_path.write_bytes(raw["image"])
@@ -175,7 +212,8 @@ def main() -> None:
 
     results = {
         "source": {
-            "url": PDF_URL,
+            "requested_urls": PDF_URLS,
+            "resolved_url": resolved_url,
             "sha256": hashlib.sha256(pdf_bytes).hexdigest(),
             "page_index_zero_based": PAGE_INDEX,
             "page_number_printed": 26,
@@ -197,8 +235,6 @@ def main() -> None:
         "hough_wheels_raw": raw_wheels,
     }
 
-    # If exactly two plausible raw-image wheel circles are found, emit a scale
-    # candidate, but do not auto-promote a CG coordinate from color alone.
     if len(raw_wheels) >= 2:
         left = raw_wheels[0]
         right = raw_wheels[-1]
