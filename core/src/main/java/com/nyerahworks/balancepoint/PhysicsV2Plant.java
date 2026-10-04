@@ -89,12 +89,14 @@ final class PhysicsV2Plant {
     // threshold. It does not pin the bike at a low angle or cut drive to fake stability.
     private static final String PHYSICS_V2_GROUNDED_ASSISTS_V1 =
             "legends-balance-point-v1";
-    private static final float ASSIST_MAX_LEAN = radians(30f);
-    // Critical damping on the 40 kg m^2 roll inertia. The old 150/48 pair was
-    // zeta ~ 0.3 and wagged against the bar controller.
-    private static final float ASSIST_ROLL_KP = 100f;
-    private static final float ASSIST_ROLL_KD = 132f;
-    private static final float ASSIST_MAX_ROLL_TORQUE = 180f;
+    private static final float ASSIST_MAX_LEAN = radians(38f);
+    // Critical damping on the 40 kg m^2 roll inertia. Upright gain stays on even
+    // with the stick centered, so the bike stands itself up instead of staying flopped.
+    private static final float ASSIST_ROLL_KP = 240f;
+    private static final float ASSIST_ROLL_KD = 210f;
+    private static final float ASSIST_MAX_ROLL_TORQUE = 340f;
+    private static final float ASSIST_UPRIGHT_KP = 280f;
+    private static final float ASSIST_UPRIGHT_KD = 96f;
     private static final float ASSIST_STEER_DAMPING = 1.2f;
     private static final float ASSIST_YAW_RATE_GAIN = 1f / 9.5f;
     private static final float ASSIST_MAX_YAW_RATE = 1.45f;
@@ -343,12 +345,19 @@ final class PhysicsV2Plant {
         // Grounded rideability assists. No part of this block runs fully airborne.
         if (!airborne()) {
             float speedAbs = Math.abs(forwardSpeedStart);
-            float leanAuthority = smoothstep(2.0f, 7.0f, speedAbs);
+            float leanAuthority = smoothstep(1.2f, 6.0f, speedAbs);
             float shapedSteer = clamp(input.steer, -1f, 1f);
-            shapedSteer *= 0.72f + 0.28f * Math.abs(shapedSteer);
+            shapedSteer *= 0.55f + 0.45f * Math.abs(shapedSteer);
+            // Positive stick is right. Negative roll is right lean in this plant.
             float targetRoll = -shapedSteer * ASSIST_MAX_LEAN * leanAuthority;
+            float stickHeld = Math.min(1f, Math.abs(shapedSteer) * 1.4f);
+            float upright = 1f - stickHeld;
             float rollTorque = ASSIST_ROLL_KP * (targetRoll - roll())
                     - ASSIST_ROLL_KD * rollRate();
+            // Extra stand-up once the stick comes back. This is the bike trying
+            // to hold itself upright, not a lean spring that goes dead at center.
+            rollTorque += upright * (ASSIST_UPRIGHT_KP * (0f - roll())
+                    - ASSIST_UPRIGHT_KD * rollRate());
             rollTorque = clamp(
                     rollTorque,
                     -ASSIST_MAX_ROLL_TORQUE,

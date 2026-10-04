@@ -89,6 +89,25 @@ public final class PhysicsV2RideabilityTest {
     }
 
     @Test
+    public void positiveSteerLeansAndTurnsRightThenStandsUp() {
+        FlatTerrain terrain = new FlatTerrain();
+        PhysicsV2Plant p = new PhysicsV2Plant();
+        p.reset(terrain);
+        p.input().throttle = 0.45f;
+        for (int i = 0; i < 480; i++) p.step(terrain, DT);
+
+        p.input().steer = 0.75f;
+        for (int i = 0; i < 360; i++) p.step(terrain, DT);
+        assertTrue("right lean=" + p.roll(), p.roll() < -radians(12f));
+        assertTrue("right yaw=" + p.yaw(), p.yaw() > radians(4f));
+        assertTrue("right path=" + p.x(), p.x() > 1f);
+
+        p.input().steer = 0f;
+        for (int i = 0; i < 240; i++) p.step(terrain, DT);
+        assertTrue("stood up=" + p.roll(), Math.abs(p.roll()) < radians(8f));
+    }
+
+    @Test
     public void suspensionHeaveSettlesAfterRoadStep() {
         FlatTerrain terrain = new FlatTerrain();
         PhysicsV2Plant p = new PhysicsV2Plant();

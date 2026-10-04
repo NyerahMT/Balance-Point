@@ -378,7 +378,10 @@ final class GameScene {
         }
 
         bikeRoot.idt().translate(rootX, rootHeight, rootZ)
-                .rotate(Vector3.Y, yawDeg)
+                // Physics yaw is atan2(forward.x, forward.z): positive heads +X.
+                // libGDX +Y rotation heads -X, so the model has to take the opposite angle
+                // or the bike faces and leans backwards relative to the stick.
+                .rotate(Vector3.Y, -yawDeg)
                 .rotate(Vector3.Z, rollDeg + terrainRollDeg)
                 .rotate(Vector3.X, -pitchDeg);
 

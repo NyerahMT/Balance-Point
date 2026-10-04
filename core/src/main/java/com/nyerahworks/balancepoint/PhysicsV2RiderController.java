@@ -44,10 +44,13 @@ final class PhysicsV2RiderController {
         float directSteer = shaped * LOW_SPEED_STEER;
         float leaned = shaped * MAX_LEAN * leanAuthority;
         float countersteer = 0f;
-        if (speed > 2.5f) {
+        if (speed > 2.5f && Math.abs(shaped) > 0.08f) {
             countersteer = -WHEELBASE * G * (float)Math.tan(leaned)
                     / Math.max(speed * speed, 4f);
             countersteer = clamp(countersteer, -radians(7f), radians(7f));
+        } else if (speed > 2.5f) {
+            // Stick centered: steer into the lean so the bike stands itself up.
+            countersteer = clamp(roll * 0.85f, -radians(10f), radians(10f));
         }
         float steerTarget = directSteer + (countersteer - directSteer) * highSpeedBlend;
 
