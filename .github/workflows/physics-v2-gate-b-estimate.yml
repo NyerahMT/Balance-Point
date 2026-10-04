@@ -1,0 +1,31 @@
+name: Physics V2 Gate B Estimate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "tools/physics_v2_gate_b_estimate.py"
+      - ".github/workflows/physics-v2-gate-b-estimate.yml"
+  workflow_dispatch:
+
+jobs:
+  estimate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Run Gate B estimator
+        shell: bash
+        run: |
+          set -o pipefail
+          python tools/physics_v2_gate_b_estimate.py | tee gate_b_estimate.log
+      - name: Upload Gate B artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: physics-v2-gate-b-estimate
+          path: |
+            gate_b_estimate/
+            gate_b_estimate.log
+          retention-days: 30
