@@ -27,8 +27,8 @@ REAR_EQ_TORQUE = [
     (6900, 44.61),  # 32.9 lb-ft published peak
     (7500, 44.2),
     (8500, 42.5),
-    (9000, 40.8),
-    (9600, 37.70),  # constrained to about 51.1 hp at 9600 rpm
+    (9000, 40.2),
+    (9600, 37.904),  # 51.1 hp published power peak
     (10200, 33.0),
     (10800, 27.0),
     (11200, 20.0),
