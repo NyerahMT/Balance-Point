@@ -20,6 +20,7 @@ final class PhysicsV2Plant {
         float throttle;
         float rearBrake;
         float steer;
+        float riderForeAft;
     }
 
     static final class Telemetry {
@@ -37,7 +38,7 @@ final class PhysicsV2Plant {
     }
 
     private static final float G = 9.80665f;
-    private static final float MASS = 198.0f;
+    private static final float TOTAL_MASS = 198.0f;
     private static final float WHEELBASE = 1.48082f;
     private static final float CG_FORWARD = 0.7222f;
     // Bike-only Honda prior plus fixed first-pass rider mass. Gate E will replace rider geometry.
@@ -48,10 +49,15 @@ final class PhysicsV2Plant {
 
     private static final float FRONT_TRAVEL = 0.3099f;
     private static final float REAR_TRAVEL = 0.30988f;
-    private static final float FRONT_STATIC_COMPRESSION = 0.095f;
-    private static final float REAR_STATIC_COMPRESSION = 0.111f;
     private static final float FRONT_UNSPRUNG_EFFECTIVE_MASS = 12f;
     private static final float REAR_UNSPRUNG_EFFECTIVE_MASS = 18f;
+    private static final float SPRUNG_MASS = TOTAL_MASS
+            - FRONT_UNSPRUNG_EFFECTIVE_MASS - REAR_UNSPRUNG_EFFECTIVE_MASS;
+    private static final float FRONT_STATIC_COMPRESSION = 0.08035f;
+    private static final float REAR_STATIC_COMPRESSION = 0.09240f;
+    private static final float AUTO_BRACE_PER_G = 0.85f;
+    private static final float AUTO_BRACE_MAX = 0.80f;
+    private static final String PHYSICS_V2_RIDEABILITY_PASS_2 = "multibody-rider-v2";
     private static final float FRONT_SPRING = 10_000f;
     private static final float FRONT_COMP_DAMP = 620f;
     private static final float FRONT_REBOUND_DAMP = 930f;
@@ -71,6 +77,9 @@ final class PhysicsV2Plant {
     private final Input input = new Input();
     private final Telemetry telemetry = new Telemetry();
     private final PhysicsV2Powertrain powertrain = new PhysicsV2Powertrain();
+    private final PhysicsV2RiderController riderController = new PhysicsV2RiderController();
+    private final MotorcycleRiderDynamics riderLongitudinal =
+            new MotorcycleRiderDynamics(TOTAL_MASS, G);
     private final PhysicsV2Tire.State rearTireState = new PhysicsV2Tire.State();
     private final PhysicsV2Tire.State frontTireState = new PhysicsV2Tire.State();
     private final PhysicsV2Tire.Force rearTireForce = new PhysicsV2Tire.Force();
@@ -88,6 +97,7 @@ final class PhysicsV2Plant {
     private float rearCompression, rearCompressionRate;
     private float frontWheelOmega, rearWheelOmega;
     private float rearWheelSpin, frontWheelSpin;
+    private float lastLongitudinalAcceleration;
 
     private final Vec right = new Vec();
     private final Vec up = new Vec();
@@ -122,7 +132,10 @@ final class PhysicsV2Plant {
         rearTireState.reset();
         frontTireState.reset();
         powertrain.reset();
-        input.throttle = input.rearBrake = input.steer = 0f;
+        riderController.reset();
+        riderLongitudinal.reset();
+        lastLongitudinalAcceleration = 0f;
+        input.throttle = input.rearBrake = input.steer = input.riderForeAft = 0f;
         updateTelemetry();
     }
 
@@ -131,8 +144,23 @@ final class PhysicsV2Plant {
         basis();
         rotateBodyToWorld(wx, wy, wz, omegaWorld);
 
-        float staticFront = MASS * G * CG_FORWARD / WHEELBASE;
-        float staticRear = MASS * G - staticFront;
+        float forwardSpeedStart = forward.x * vx + forward.y * vy + forward.z * vz;
+        float autoBrace = clamp(
+                lastLongitudinalAcceleration / G * AUTO_BRACE_PER_G,
+                0f,
+                AUTO_BRACE_MAX);
+        float riderCommand = clamp(input.riderForeAft + autoBrace, -1f, 1f);
+        riderLongitudinal.step(
+                riderCommand,
+                lastLongitudinalAcceleration,
+                airborne(),
+                dt);
+        float effectiveCgForward = CG_FORWARD + riderLongitudinal.combinedComShift();
+
+        float staticFrontSprung = SPRUNG_MASS * G * CG_FORWARD / WHEELBASE;
+        float staticRearSprung = SPRUNG_MASS * G - staticFrontSprung;
+        float staticFront = staticFrontSprung + FRONT_UNSPRUNG_EFFECTIVE_MASS * G;
+        float staticRear = staticRearSprung + REAR_UNSPRUNG_EFFECTIVE_MASS * G;
         float frontStaticDeflection = staticFront
                 / PhysicsV2Tire.effectiveVerticalStiffness(PhysicsV2Tire.FRONT, staticFront);
         float rearStaticDeflection = staticRear
@@ -142,17 +170,36 @@ final class PhysicsV2Plant {
         float rearFullExtY = PhysicsV2Tire.REAR.radius - rearStaticDeflection
                 - CG_HEIGHT - REAR_STATIC_COMPRESSION;
 
-        sampleContact(rearContact, terrain, -CG_FORWARD, rearFullExtY + rearCompression,
-                0f, rearCompressionRate, false, dt);
-        sampleContact(frontContact, terrain, WHEELBASE - CG_FORWARD,
-                frontFullExtY + frontCompression, 0f, frontCompressionRate, true, dt);
+        sampleContact(
+                rearContact,
+                terrain,
+                -effectiveCgForward,
+                rearFullExtY + rearCompression,
+                0f,
+                rearCompressionRate,
+                false,
+                dt);
+        sampleContact(
+                frontContact,
+                terrain,
+                WHEELBASE - effectiveCgForward,
+                frontFullExtY + frontCompression,
+                0f,
+                frontCompressionRate,
+                true,
+                dt);
 
-        // Reduced unsprung generalized-coordinate dynamics. These coordinates alter actual wheel
-        // center/contact geometry; their forces are not visual filters.
+        // The unsprung masses receive tire load. Spring/damper force reacts through the chassis.
         float frontSpring = frontSuspensionForce(frontCompression, frontCompressionRate);
         float rearSpring = rearSuspensionForce(rearCompression, rearCompressionRate);
-        float frontQdd = (frontContact.normalForce - frontSpring) / FRONT_UNSPRUNG_EFFECTIVE_MASS;
-        float rearQdd = (rearContact.normalForce - rearSpring) / REAR_UNSPRUNG_EFFECTIVE_MASS;
+        float frontWheelUp = wheelForceAlongUp(frontContact, frontTireForce);
+        float rearWheelUp = wheelForceAlongUp(rearContact, rearTireForce);
+        float frontQdd = (frontWheelUp - frontSpring
+                - FRONT_UNSPRUNG_EFFECTIVE_MASS * G * up.y)
+                / FRONT_UNSPRUNG_EFFECTIVE_MASS;
+        float rearQdd = (rearWheelUp - rearSpring
+                - REAR_UNSPRUNG_EFFECTIVE_MASS * G * up.y)
+                / REAR_UNSPRUNG_EFFECTIVE_MASS;
         frontCompressionRate += frontQdd * dt;
         rearCompressionRate += rearQdd * dt;
         frontCompression += frontCompressionRate * dt;
@@ -160,8 +207,16 @@ final class PhysicsV2Plant {
         enforceSuspensionLimits(true);
         enforceSuspensionLimits(false);
 
-        // Physical steering degree of freedom. Player steering is torque authority, not angle.
-        float steerTorque = clamp(input.steer, -1f, 1f) * MAX_STEER_TORQUE
+        float riderSteer = riderController.normalizedTorque(
+                input.steer,
+                forwardSpeedStart,
+                roll(),
+                rollRate(),
+                steerAngle,
+                steerRate,
+                MAX_STEER_TORQUE,
+                dt);
+        float steerTorque = riderSteer * MAX_STEER_TORQUE
                 + frontTireForce.mz - STEER_DAMPING * steerRate;
         steerRate += steerTorque / STEER_INERTIA * dt;
         steerAngle += steerRate * dt;
@@ -194,10 +249,20 @@ final class PhysicsV2Plant {
         rearWheelSpin += rearWheelOmega * dt;
         frontWheelSpin += frontWheelOmega * dt;
 
-        totalForce.set(0f, -MASS * G, 0f);
+        totalForce.set(0f, -SPRUNG_MASS * G, 0f);
         totalMomentWorld.set(0f, 0f, 0f);
-        addContactToRigidBody(rearContact, rearTireForce, totalForce, totalMomentWorld);
-        addContactToRigidBody(frontContact, frontTireForce, totalForce, totalMomentWorld);
+        addContactToRigidBody(
+                rearContact,
+                rearTireForce,
+                rearSpring,
+                totalForce,
+                totalMomentWorld);
+        addContactToRigidBody(
+                frontContact,
+                frontTireForce,
+                frontSpring,
+                totalForce,
+                totalMomentWorld);
 
         // Drag/rolling forces are external and oppose world horizontal velocity.
         if (horizontalSpeed > 0.05f) {
@@ -218,23 +283,46 @@ final class PhysicsV2Plant {
         totalMomentWorld.y += right.y * engineReaction;
         totalMomentWorld.z += right.z * engineReaction;
 
-        vx += totalForce.x / MASS * dt;
-        vy += totalForce.y / MASS * dt;
-        vz += totalForce.z / MASS * dt;
+        float riderPitchTorque = riderLongitudinal.pitchReactionTorque(
+                airborne(),
+                frontGrounded());
+        totalMomentWorld.x += right.x * riderPitchTorque;
+        totalMomentWorld.y += right.y * riderPitchTorque;
+        totalMomentWorld.z += right.z * riderPitchTorque;
+
+        vx += totalForce.x / SPRUNG_MASS * dt;
+        vy += totalForce.y / SPRUNG_MASS * dt;
+        vz += totalForce.z / SPRUNG_MASS * dt;
         px += vx * dt;
         py += vy * dt;
         pz += vz * dt;
 
         Vec torqueBody = new Vec();
         rotateWorldToBody(totalMomentWorld.x, totalMomentWorld.y, totalMomentWorld.z, torqueBody);
-        // Euler rigid-body equation with diagonal body inertia.
-        float gx = (YAW_INERTIA - ROLL_INERTIA) * wy * wz;
-        float gy = (ROLL_INERTIA - PITCH_INERTIA) * wz * wx;
-        float gz = (PITCH_INERTIA - YAW_INERTIA) * wx * wy;
+
+        // Wheel gyroscopic bearing reactions. Spin acceleration remains handled by hub torque.
+        float cs = (float)Math.cos(steerAngle);
+        float ss = (float)Math.sin(steerAngle);
+        float frontH = FRONT_WHEEL_INERTIA * frontWheelOmega;
+        float rearH = REAR_WHEEL_INERTIA * rearWheelOmega;
+        float hx = rearH + frontH * cs;
+        float hz = -frontH * ss;
+        torqueBody.x += -wy * hz - steerRate * hz;
+        torqueBody.y += -(wz * hx - wx * hz);
+        torqueBody.z += wy * hx + steerRate * frontH * cs;
+
+        // Euler rigid-body equation with the conventional omega x (I omega) signs.
+        float gx = (ROLL_INERTIA - YAW_INERTIA) * wy * wz;
+        float gy = (PITCH_INERTIA - ROLL_INERTIA) * wz * wx;
+        float gz = (YAW_INERTIA - PITCH_INERTIA) * wx * wy;
         wx += (torqueBody.x - gx) / PITCH_INERTIA * dt;
         wy += (torqueBody.y - gy) / YAW_INERTIA * dt;
         wz += (torqueBody.z - gz) / ROLL_INERTIA * dt;
         integrateQuaternion(dt);
+        basis();
+        float forwardSpeedEnd = forward.x * vx + forward.y * vy + forward.z * vz;
+        lastLongitudinalAcceleration = (forwardSpeedEnd - forwardSpeedStart)
+                / Math.max(dt, 0.0001f);
 
         if (!finite()) reset(terrain);
         updateTelemetry();
@@ -332,15 +420,33 @@ final class PhysicsV2Plant {
         c.contactArm.set(c.contactPoint.x - px, c.contactPoint.y - py, c.contactPoint.z - pz);
     }
 
-    private void addContactToRigidBody(Contact c, PhysicsV2Tire.Force f,
-                                       Vec forceSum, Vec momentSum) {
-        if (f.fz <= 0f) return;
+    private float wheelForceAlongUp(Contact c, PhysicsV2Tire.Force f) {
+        float fx = c.normal.x * f.fz
+                + c.wheelForward.x * f.fx + c.wheelRight.x * f.fy;
+        float fy = c.normal.y * f.fz
+                + c.wheelForward.y * f.fx + c.wheelRight.y * f.fy;
+        float fz = c.normal.z * f.fz
+                + c.wheelForward.z * f.fx + c.wheelRight.z * f.fy;
+        return fx * up.x + fy * up.y + fz * up.z;
+    }
+
+    private void addContactToRigidBody(
+            Contact c,
+            PhysicsV2Tire.Force f,
+            float suspensionForce,
+            Vec forceSum,
+            Vec momentSum) {
+        if (f.fz <= 0f && suspensionForce <= 0f) return;
         c.force.set(
-                c.normal.x * f.fz + c.wheelForward.x * f.fx + c.wheelRight.x * f.fy,
-                c.normal.y * f.fz + c.wheelForward.y * f.fx + c.wheelRight.y * f.fy,
-                c.normal.z * f.fz + c.wheelForward.z * f.fx + c.wheelRight.z * f.fy);
+                c.wheelForward.x * f.fx + c.wheelRight.x * f.fy
+                        + up.x * suspensionForce,
+                c.wheelForward.y * f.fx + c.wheelRight.y * f.fy
+                        + up.y * suspensionForce,
+                c.wheelForward.z * f.fx + c.wheelRight.z * f.fy
+                        + up.z * suspensionForce);
         forceSum.add(c.force);
-        Vec m = cross(c.contactArm, c.force, c.tmpB);
+        c.tmpA.set(c.center.x - px, c.center.y - py, c.center.z - pz);
+        Vec m = cross(c.tmpA, c.force, c.tmpB);
         momentSum.add(m);
         momentSum.x += c.normal.x * f.mz + c.wheelForward.x * f.mx;
         momentSum.y += c.normal.y * f.mz + c.wheelForward.y * f.mx;
@@ -448,7 +554,8 @@ final class PhysicsV2Plant {
                 && finite(qx) && finite(qy) && finite(qz) && finite(qw)
                 && finite(wx) && finite(wy) && finite(wz)
                 && finite(frontCompression) && finite(rearCompression)
-                && finite(frontWheelOmega) && finite(rearWheelOmega);
+                && finite(frontWheelOmega) && finite(rearWheelOmega)
+                && finite(lastLongitudinalAcceleration);
     }
 
     private static boolean finite(float v) { return !Float.isNaN(v) && !Float.isInfinite(v); }

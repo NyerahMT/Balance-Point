@@ -114,7 +114,9 @@ final class PhysicsV2Tire {
         float muY = loadSensitiveMu(spec.muY * surfaceScale, fz);
         float maxX = Math.max(1f, muX * fz);
         float maxY = Math.max(1f, muY * fz);
-        float alphaEffective = alpha + spec.camberGain * gamma;
+        // Camber thrust acts toward the lean direction. Positive gamma in this coordinate
+        // system is left lean, so its equivalent slip-angle contribution is negative.
+        float alphaEffective = alpha - spec.camberGain * gamma;
 
         float pureFx = maxX * (float)Math.tanh(spec.cxPerFz * fz * kappa / maxX);
         float pureFy = maxY * (float)Math.tanh(spec.caPerFz * fz * alphaEffective / maxY);

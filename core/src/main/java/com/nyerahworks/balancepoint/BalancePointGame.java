@@ -562,6 +562,7 @@ public final class BalancePointGame extends ApplicationAdapter {
         v2Input.rearBrake = rearBrake;
         // Player turn intent is physical steering-torque authority in the V2 plant.
         v2Input.steer = steer;
+        v2Input.riderForeAft = riderLean;
         physicsV2.step(physicsV2Terrain, dt);
 
         // Dynamic state comes exclusively from the V2 plant. The Y conversion below is only
