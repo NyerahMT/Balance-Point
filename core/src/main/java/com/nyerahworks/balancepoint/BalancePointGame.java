@@ -76,10 +76,10 @@ public final class BalancePointGame extends ApplicationAdapter {
     private EngineAudio engineAudio;
     private TerrainVisuals terrainVisuals;
 
-    // PHYSICS_V2_RUNTIME -- physical dimensions live inside the plant; the old constants above
+    // PHYSICS_V3_RUNTIME -- physical dimensions live inside the plant; the old constants above
     // remain only because GameScene/DirtBikeVisualRig use the imported GLB's presentation scale.
-    private final PhysicsV2Plant physicsV2 = new PhysicsV2Plant();
-    private final PhysicsV2Plant.Terrain physicsV2Terrain = new PhysicsV2Plant.Terrain() {
+    private final PhysicsV3MultibodyPlant physicsV3 = new PhysicsV3MultibodyPlant();
+    private final PhysicsV3MultibodyPlant.Terrain physicsV3Terrain = new PhysicsV3MultibodyPlant.Terrain() {
         @Override public float height(float x, float z) {
             return terrainVisuals == null ? 0f : terrainVisuals.groundHeight(x, z);
         }
@@ -219,8 +219,8 @@ public final class BalancePointGame extends ApplicationAdapter {
 
         if (gameState != GameState.MAIN_MENU) {
             updateBikeVisuals();
-            instrumentDisplay.update(speed, physicsV2.powertrain().getRpm(),
-                    physicsV2.powertrain().getRedlineRpm(), physicsV2.powertrain().getGear());
+            instrumentDisplay.update(speed, physicsV3.powertrain().getRpm(),
+                    physicsV3.powertrain().getRedlineRpm(), physicsV3.powertrain().getGear());
         }
         updateCamera(frameDt);
         if (gameState == GameState.PLAYING && engineAudio != null) {
@@ -353,8 +353,8 @@ public final class BalancePointGame extends ApplicationAdapter {
         looking = lookTouch;
 
         if (!crashed) {
-            if (shiftUpTouch && !shiftUpHeld) physicsV2.shiftUp();
-            if (shiftDownTouch && !shiftDownHeld) physicsV2.shiftDown();
+            if (shiftUpTouch && !shiftUpHeld) physicsV3.shiftUp();
+            if (shiftDownTouch && !shiftDownHeld) physicsV3.shiftDown();
         }
         shiftUpHeld = shiftUpTouch;
         shiftDownHeld = shiftDownTouch;
@@ -540,8 +540,8 @@ public final class BalancePointGame extends ApplicationAdapter {
         float bikeVy = verticalVelocity;
         float bikeVz = cos * speed;
         float closing = bikeVx * toListenerX + bikeVy * (-ly) + bikeVz * toListenerZ;
-        engineAudio.update(physicsV2.powertrain().getRpm(), throttle,
-                physicsV2.powertrain().isShifting(), crashed,
+        engineAudio.update(physicsV3.powertrain().getRpm(), throttle,
+                physicsV3.powertrain().isShifting(), crashed,
                 pan, dist, rear, closing);
     }
 
@@ -557,42 +557,42 @@ public final class BalancePointGame extends ApplicationAdapter {
         }
 
         float previousSpeed = speed;
-        PhysicsV2Plant.Input v2Input = physicsV2.input();
+        PhysicsV3MultibodyPlant.Input v2Input = physicsV3.input();
         v2Input.throttle = throttle;
         v2Input.rearBrake = rearBrake;
         // Player turn intent is physical steering-torque authority in the V2 plant.
         v2Input.steer = steer;
         v2Input.riderForeAft = riderLean;
-        physicsV2.step(physicsV2Terrain, dt);
+        physicsV3.step(physicsV3Terrain, dt);
 
         // Dynamic state comes exclusively from the V2 plant. The Y conversion below is only
-        // an imported-mesh origin adapter: GameScene still expects its historical visual root.
-        bikeX = physicsV2.x();
-        bikeZ = physicsV2.z();
-        chassisY = physicsV2.y() - 0.826f + (WHEEL_RADIUS + COM_HEIGHT);
-        speed = physicsV2.speed();
-        verticalVelocity = physicsV2.verticalVelocity();
-        pitch = physicsV2.pitch();
-        pitchVelocity = physicsV2.pitchRate();
-        roll = physicsV2.roll();
-        rollVelocity = physicsV2.rollRate();
-        yaw = physicsV2.yaw();
-        yawVelocity = physicsV2.yawRate();
+        // an imported-mesh origin adapter; it does not feed back into Physics V3.
+        bikeX = physicsV3.x();
+        bikeZ = physicsV3.z();
+        chassisY = physicsV3.y() - 0.826f + (WHEEL_RADIUS + COM_HEIGHT);
+        speed = physicsV3.speed();
+        verticalVelocity = physicsV3.verticalVelocity();
+        pitch = physicsV3.pitch();
+        pitchVelocity = physicsV3.pitchRate();
+        roll = physicsV3.roll();
+        rollVelocity = physicsV3.rollRate();
+        yaw = physicsV3.yaw();
+        yawVelocity = physicsV3.yawRate();
         terrainRoll = 0f;
         terrainRollVelocity = 0f;
-        wheelSpin = physicsV2.rearWheelSpin();
-        frontGrounded = physicsV2.frontGrounded();
-        terrainAirborne = physicsV2.airborne();
-        frontNormalLoad = physicsV2.telemetry().frontFz;
+        wheelSpin = physicsV3.rearWheelSpin();
+        frontGrounded = physicsV3.frontGrounded();
+        terrainAirborne = physicsV3.airborne();
+        frontNormalLoad = physicsV3.telemetry().frontFz;
         longitudinalAcceleration = (speed - previousSpeed) / Math.max(dt, 0.0001f);
 
-        // Presentation-only legacy values. They do not feed back into PhysicsV2Plant.
+        // Presentation-only legacy values. They do not feed back into PhysicsV3MultibodyPlant.
         effectiveComForward = COM_FORWARD;
         riderLean += (riderLeanTarget - riderLean) * Math.min(1f, dt * 6f);
         rearWheelAngularSpeed = wheelSpin / Math.max(dt, 0.0001f);
         bikeY = chassisY - COM_HEIGHT;
 
-        if (physicsV2.rearGrounded() && !frontGrounded && speed > 3f) {
+        if (physicsV3.rearGrounded() && !frontGrounded && speed > 3f) {
             wheelieTime += dt;
             bestWheelieTime = Math.max(bestWheelieTime, wheelieTime);
         } else if (frontGrounded) {
@@ -776,7 +776,7 @@ public final class BalancePointGame extends ApplicationAdapter {
         lateralDynamics.reset();
         riderDynamics.reset();
         landingDynamics.reset();
-        physicsV2.reset(physicsV2Terrain);
+        physicsV3.reset(physicsV3Terrain);
         frontGrounded = true;
         crashed = false;
         crashSettled = false;
@@ -801,8 +801,8 @@ public final class BalancePointGame extends ApplicationAdapter {
         state.speed = speed;
         state.steer = steer;
         state.riderLean = riderLean;
-        state.rearSuspensionTravel = physicsV2.rearCompression() - 0.111f;
-        state.frontSuspensionTravel = physicsV2.frontCompression() - 0.095f;
+        state.rearSuspensionTravel = physicsV3.rearCompression() - 0.111f;
+        state.frontSuspensionTravel = physicsV3.frontCompression() - 0.095f;
         state.frontGrounded = frontGrounded;
         state.terrainAirborne = terrainAirborne;
         state.crashed = crashed;
@@ -851,8 +851,8 @@ public final class BalancePointGame extends ApplicationAdapter {
         state.riderLeanTarget = riderLeanTarget;
         state.throttleTarget = throttleTarget;
         state.rearBrakeTarget = rearBrakeTarget;
-        state.gear = physicsV2.powertrain().getGear();
-        state.rpm = physicsV2.powertrain().getRpm();
+        state.gear = physicsV3.powertrain().getGear();
+        state.rpm = physicsV3.powertrain().getRpm();
         hud.draw();
     }
 
