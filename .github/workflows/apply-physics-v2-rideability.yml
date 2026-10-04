@@ -4,7 +4,7 @@ on:
   push:
     branches: [ main ]
     paths:
-      - "tools/apply_physics_v2_rideability.py"
+      - "tools/apply_physics_v2_rideability_fix.py"
 
 permissions:
   contents: write
@@ -25,7 +25,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v6
 
       - name: Apply Physics V2 rideability corrections
-        run: python3 tools/apply_physics_v2_rideability.py
+        run: python3 tools/apply_physics_v2_rideability_fix.py
 
       - name: Validate corrected plant
         run: |
