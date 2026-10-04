@@ -23,12 +23,12 @@ public final class PhysicsV2PlantTest {
         p.reset(terrain);
         for (int i = 0; i < 2400; i++) p.step(terrain, DT);
 
-        assertTrue(p.y() > 0.45f && p.y() < 1.25f);
-        assertTrue(Math.abs(p.speed()) < 1.0f);
-        assertTrue(Math.abs(p.pitch()) < 0.25f);
-        assertTrue(!Float.isNaN(p.roll()));
-        assertTrue(p.telemetry().rearFz >= 0f);
-        assertTrue(p.telemetry().frontFz >= 0f);
+        assertTrue("y=" + p.y(), p.y() > 0.45f && p.y() < 1.25f);
+        assertTrue("speed=" + p.speed(), Math.abs(p.speed()) < 1.0f);
+        assertTrue("pitch=" + p.pitch(), Math.abs(p.pitch()) < 0.25f);
+        assertTrue("roll=" + p.roll(), !Float.isNaN(p.roll()));
+        assertTrue("rearFz=" + p.telemetry().rearFz, p.telemetry().rearFz >= 0f);
+        assertTrue("frontFz=" + p.telemetry().frontFz, p.telemetry().frontFz >= 0f);
     }
 
     @Test
@@ -40,8 +40,10 @@ public final class PhysicsV2PlantTest {
         p.input().throttle = 0.85f;
         for (int i = 0; i < 360; i++) p.step(terrain, DT);
 
-        assertTrue(p.speed() > 0.5f);
-        assertTrue(p.powertrain().getRpm() > 1500f);
+        assertTrue("speed=" + p.speed() + " rpm=" + p.powertrain().getRpm()
+                        + " rearFz=" + p.telemetry().rearFz + " rearFx=" + p.telemetry().rearFx,
+                p.speed() > 0.5f);
+        assertTrue("rpm=" + p.powertrain().getRpm(), p.powertrain().getRpm() > 1500f);
         assertTrue(p.telemetry().rearUtilization <= 1.0001f);
     }
 
