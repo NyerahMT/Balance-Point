@@ -1,0 +1,36 @@
+name: Physics V2 Gate D Estimate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "tools/physics_v2_gate_d_estimate.py"
+      - ".github/workflows/physics-v2-gate-d-estimate.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  estimate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Run Gate D estimator
+        shell: bash
+        run: |
+          set -o pipefail
+          python tools/physics_v2_gate_d_estimate.py | tee gate_d_estimate.log
+      - name: Upload Gate D artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: physics-v2-gate-d-estimate
+          path: |
+            gate_d_estimate/
+            gate_d_estimate.log
+          retention-days: 30
