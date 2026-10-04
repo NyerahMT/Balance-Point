@@ -1,15 +1,12 @@
-# Physics V3 grounded steering correction
+# Physics V3 grounded steering
 
-The live V3 plant now treats horizontal touch input as intuitive turn intent instead of closing a roll-error countersteer loop.
+Horizontal touch input is turn intent. The bars are the lean actuator.
 
 Grounded behavior:
-- walking-speed steering remains direct;
-- above walking speed, requested lean is established before same-direction front steer is blended in;
-- the previous roll-error countersteer reversal is removed;
-- the artificial opposite-yaw steering-head reaction is removed;
-- grounded roll stabilization is stronger and near critically damped;
-- front-tire aligning torque is reduced at the steering servo to avoid exciting weave.
+- walking-speed steering stays direct, with a fading upright moment so the bike does not flop at a standstill;
+- above walking speed that external roll moment fades out, because a roll torque at the center of gravity has to be cancelled by tire lateral force and saturates the front tire;
+- a right-turn request first countersteers left, which is what rolls the chassis right;
+- once that lean exists, the bars hold the bicycle-model steer angle for the actual lean, not the requested lean;
+- no artificial steering-head yaw kick is injected. Yaw comes from the front contact force.
 
 Airborne steering/attitude behavior is unchanged.
-
-The guarded migration passed the full 76-test core suite before commit `9a472bf4924b7d15d3013258bd5dde48d3bec70d` was pushed to `main`.

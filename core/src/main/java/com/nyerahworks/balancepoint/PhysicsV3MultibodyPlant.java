@@ -87,23 +87,25 @@ final class PhysicsV3MultibodyPlant {
     private static final float MAX_REAR_BRAKE_TORQUE = 820f;
 
     private static final float STEER_INERTIA = 0.24f;
-    // Grounded steering is intentionally direct and overdamped. Player input is turn
-    // intent, not a request for an autonomous countersteer/lean feedback loop.
+    // Player input is turn intent. Above walking speed the bars countersteer to
+    // create lean, then hold the bicycle-model steer for the lean that exists.
     private static final float STEER_SERVO_KP = 46f;
     private static final float STEER_SERVO_KD = 15f;
     private static final float STEER_ALIGNING_GAIN = 0.25f;
     private static final float MAX_STEER_TORQUE = 26f;
     private static final float MAX_STEER_ANGLE = radians(32f);
     private static final float MAX_TARGET_LEAN = radians(36f);
+    private static final float COUNTERSTEER_KP = 0.85f;
+    private static final float COUNTERSTEER_KD = 0.95f;
+    private static final float MAX_COUNTERSTEER = radians(6f);
 
-    // TUM-style desired-roll controller plus a small game-facing rider balance
-    // moment. The direct balance term only exists while a tire is grounded.
-    // Strong, near-critically-damped grounded rider balance. This is a game-facing
-    // rider assist and never runs when both tires are unloaded.
-    private static final float BALANCE_ROLL_KP = 520f;
-    private static final float BALANCE_ROLL_KD = 300f;
-    private static final float MAX_BALANCE_ROLL_TORQUE = 500f;
-    private static final float YAW_DAMPING = 9f;
+    // Upright assist only while the tires cannot yet balance the bike. An external
+    // roll moment at speed has to be cancelled by lateral force and saturates the
+    // front tire before the bike can yaw.
+    private static final float LOW_SPEED_BALANCE_KP = 160f;
+    private static final float LOW_SPEED_BALANCE_KD = 85f;
+    private static final float MAX_LOW_SPEED_BALANCE = 140f;
+    private static final float YAW_DAMPING = 4f;
 
     // Grounded anti-loop catch. It is deliberately above the geometric balance
     // point and contributes nothing when the rear contact is gone.
@@ -345,15 +347,15 @@ final class PhysicsV3MultibodyPlant {
 
         boolean anyGround = rearGrounded() || frontGrounded();
         if (anyGround) {
-            float leanAuthority = smoothstep(1.0f, 6.0f, Math.abs(speedForward));
-            float targetRoll = -clamp(input.steer, -1f, 1f)
-                    * MAX_TARGET_LEAN * leanAuthority;
-            float rollMoment = BALANCE_ROLL_KP * (targetRoll - roll())
-                    - BALANCE_ROLL_KD * rollRate();
-            rollMoment = clamp(
-                    rollMoment,
-                    -MAX_BALANCE_ROLL_TORQUE,
-                    MAX_BALANCE_ROLL_TORQUE);
+            float balanceFade = 1f - smoothstep(1.4f, 4.2f, Math.abs(speedForward));
+            float upright = -LOW_SPEED_BALANCE_KP * roll()
+                    - LOW_SPEED_BALANCE_KD * rollRate();
+            float rollMoment = clamp(
+                    upright,
+                    -MAX_LOW_SPEED_BALANCE,
+                    MAX_LOW_SPEED_BALANCE) * balanceFade;
+            // Rate-only damper stays on at speed so a pickup does not flop through upright.
+            rollMoment += clamp(-42f * rollRate(), -90f, 90f);
             addAxisMoment(totalMomentWorld, forward, rollMoment);
             addAxisMoment(totalMomentWorld, up, -YAW_DAMPING * yawRate());
         }
@@ -407,28 +409,26 @@ final class PhysicsV3MultibodyPlant {
 
         if (anyGround) {
             float command = clamp(input.steer, -1f, 1f);
-            float authority = smoothstep(1.0f, 6.0f, speed);
+            float authority = smoothstep(1.2f, 5.5f, speed);
             float targetRoll = -command * MAX_TARGET_LEAN * authority;
 
-            // At walking speed the bars behave directly. Once the bike is moving, player
-            // input first establishes lean in the requested direction; same-direction front
-            // steer is fed in only as that lean develops. This avoids both the autonomous
-            // countersteer reversal and the opposite-roll kick caused by instantly steering
-            // a still-upright motorcycle into the turn.
-            float lowSpeedBlend = 1f - smoothstep(0.6f, 2.6f, speed);
-            float directionalLean = -Math.signum(command) * roll();
-            float targetLeanMagnitude = Math.abs(targetRoll);
-            float leanProgress = targetLeanMagnitude > radians(1f)
-                    ? clamp(directionalLean / Math.max(targetLeanMagnitude * 0.70f, radians(3f)), 0f, 1f)
-                    : 1f;
+            // Right lean is negative roll. A positive roll error means the bike is not
+            // leaned into the requested turn yet, so the bars steer the other way.
+            // That contact-patch force is what rolls the chassis. Into-the-turn steer
+            // is only the steady term, taken from the lean that already exists.
+            float rollError = roll() - targetRoll;
+            float countersteer = clamp(
+                    -COUNTERSTEER_KP * rollError - COUNTERSTEER_KD * rollRate(),
+                    -MAX_COUNTERSTEER,
+                    MAX_COUNTERSTEER);
+            float speedSq = Math.max(speed * speed, 16f);
+            float steadySteer = -(float) Math.atan(
+                    WHEELBASE * G * (float) Math.tan(roll()) / speedSq);
 
-            float speedSq = Math.max(speed * speed, 9f);
-            float cornerMagnitude = (float)Math.atan(
-                    WHEELBASE * G * Math.tan(targetLeanMagnitude) / speedSq);
-            float cornerSteer = Math.signum(command) * cornerMagnitude * leanProgress;
-            float lowSpeedSteer = command * MAX_STEER_ANGLE * lowSpeedBlend;
+            float lowSpeed = 1f - smoothstep(0.8f, 3.0f, speed);
             float desiredSteer = clamp(
-                    lowSpeedSteer + cornerSteer * (1f - lowSpeedBlend),
+                    command * MAX_STEER_ANGLE * lowSpeed
+                            + (steadySteer + countersteer) * (1f - lowSpeed),
                     -MAX_STEER_ANGLE,
                     MAX_STEER_ANGLE);
 

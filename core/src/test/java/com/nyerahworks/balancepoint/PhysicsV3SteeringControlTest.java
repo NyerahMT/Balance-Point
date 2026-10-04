@@ -28,24 +28,25 @@ public final class PhysicsV3SteeringControlTest {
     }
 
     @Test
-    public void rightTurnDoesNotReverseBarsOrYawLeft() {
+    public void rightTurnCountersteersThenLeansAndYawsRight() {
         FlatTerrain terrain = new FlatTerrain();
         PhysicsV3MultibodyPlant p = new PhysicsV3MultibodyPlant();
         p.reset(terrain);
-        p.input().throttle = 0.42f;
-        for (int i = 0; i < 360; i++) p.step(terrain, DT);
+        p.input().throttle = 0.55f;
+        for (int i = 0; i < 420; i++) p.step(terrain, DT);
 
         float yaw0 = p.yaw();
         p.input().steer = 0.45f;
         float minimumSteer = Float.POSITIVE_INFINITY;
         for (int i = 0; i < 240; i++) {
             p.step(terrain, DT);
-            if (i > 24) minimumSteer = Math.min(minimumSteer, p.steerAngle());
+            if (i < 100) minimumSteer = Math.min(minimumSteer, p.steerAngle());
         }
 
-        assertTrue("speed=" + p.speed(), p.speed() > 2f);
-        assertTrue("minimumSteer=" + minimumSteer, minimumSteer > -0.01f);
-        assertTrue("roll=" + p.roll(), p.roll() < -0.02f);
+        assertTrue("speed=" + p.speed(), p.speed() > 3f);
+        assertTrue("minimumSteer=" + minimumSteer, minimumSteer < -0.01f);
+        assertTrue("roll=" + p.roll(), p.roll() < -0.05f);
+        assertTrue("lateSteer=" + p.steerAngle(), p.steerAngle() > 0f);
         assertTrue("yawDelta=" + (p.yaw() - yaw0), p.yaw() - yaw0 > 0.015f);
     }
 
@@ -54,8 +55,8 @@ public final class PhysicsV3SteeringControlTest {
         FlatTerrain terrain = new FlatTerrain();
         PhysicsV3MultibodyPlant p = new PhysicsV3MultibodyPlant();
         p.reset(terrain);
-        p.input().throttle = 0.38f;
-        for (int i = 0; i < 360; i++) p.step(terrain, DT);
+        p.input().throttle = 0.55f;
+        for (int i = 0; i < 420; i++) p.step(terrain, DT);
 
         p.input().steer = 0.50f;
         for (int i = 0; i < 180; i++) p.step(terrain, DT);
@@ -64,8 +65,8 @@ public final class PhysicsV3SteeringControlTest {
         p.input().steer = 0f;
         for (int i = 0; i < 240; i++) p.step(terrain, DT);
 
-        assertTrue("heldRoll=" + heldRoll, heldRoll > 0.02f);
-        assertTrue("releasedRoll=" + p.roll(), Math.abs(p.roll()) < heldRoll);
+        assertTrue("heldRoll=" + heldRoll, heldRoll > 0.05f);
+        assertTrue("releasedRoll=" + p.roll(), Math.abs(p.roll()) < 0.12f);
         assertTrue("releasedSteer=" + p.steerAngle(), Math.abs(p.steerAngle()) < 0.08f);
     }
 }
