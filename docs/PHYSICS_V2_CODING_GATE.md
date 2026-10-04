@@ -1,211 +1,204 @@
 # Physics V2 Coding Gate
 
-Status: **authoritative pre-runtime checklist through Research Pass 14.**
-
-This document defines when Balance Point may begin the assists-disabled Physics V2 runtime implementation. It prevents two opposite failures: inventing physical constants to make the bike feel right, and waiting indefinitely for factory/laboratory data that are unlikely to become public.
-
-Research Pass 12 introduced `ENGINEERING_ESTIMATE_WITH_UNCERTAINTY`; Pass 13 closed suspension; Pass 14 closes engine/clutch/drivetrain for first-plant implementation under the same explicit-uncertainty policy.
-
----
-
-## 1. Allowed parameter states
-
-Every runtime physical parameter must have one of these states:
-
-- `PUBLISHED` — direct manufacturer, standard, or technical source;
-- `MEASURED` — direct same-configuration physical measurement;
-- `DERIVED` — calculated from accepted published/measured quantities;
-- `IDENTIFIED` — estimated by documented system identification with uncertainty;
-- `ENGINEERING_ESTIMATE_WITH_UNCERTAINTY` — reproducibly derived from relevant published geometry/models, with an explicit interval, centralized replacement point, and validation across that interval;
-- `BOUNDED_LOW_SENSITIVITY` — exact value unavailable, but a defensible interval exists and deterministic sensitivity testing proves the uncertainty does not materially change the applicable validation result.
-
-The following do **not** open a gate: plausible, typical, feels-right, copied-from-another-bike-without-transfer-argument, tuned-to-gameplay, or hidden-assist values.
-
----
-
-## 2. Reference configuration
+Status: **authoritative pre-runtime checklist through Research Pass 15.**
 
 Reference: **late-2025 US Honda CRF450R production-spec configuration**.
 
-- [x] model/year/spec revision frozen;
-- [x] nominal mass and chassis geometry frozen;
-- [x] MX33 tire identities frozen;
-- [x] Honda primary, gear and final ratios frozen;
-- [x] conflicting early launch values retained separately instead of averaged.
+Passes 12-15 use `ENGINEERING_ESTIMATE_WITH_UNCERTAINTY` where exact same-bike factory/bench data are unavailable. An estimate is allowed only when it is reproducibly derived from relevant evidence, carries an explicit uncertainty interval, has one centralized replacement point, is visible in telemetry, and is validated across material uncertainty. Plausible/typical/feels-right values and hidden assists remain prohibited.
 
 ---
 
-## 3. Gate A — rigid-body geometry and mass properties
+## 1. Gate A — geometry and mass properties
 
-First-plant nominal set is reproduced by `tools/physics_v2_mass_property_estimate.py`.
+First-plant set from `tools/physics_v2_mass_property_estimate.py`:
 
-- [x] nominal wet mass: `112.94 kg`;
-- [x] `x_CG = 0.722221 m` from rear contact, implementation uncertainty `+/-0.015 m`;
-- [x] `z_CG = 0.657 m`, implementation uncertainty `+/-0.040 m`;
-- [x] `Ixx ~= 24.3 kg m^2`, `+/-35%`;
-- [x] `Iyy ~= 47.1 kg m^2`, `+/-25%`;
-- [x] `Izz ~= 28.7 kg m^2`, `+/-35%`;
-- [x] plant hardpoints may enter as explicit photogrammetric/CAD-style engineering estimates;
-- [x] products of inertia initialize to zero for the symmetric baseline and remain replaceable;
-- [x] wheel/steering/swingarm component inertias may use geometry-based engineering estimates with conservative bounds.
+- [x] wet mass `112.94 kg`;
+- [x] longitudinal CG `x ~= 0.722221 m` from rear contact, implementation transfer uncertainty `+/-0.015 m`;
+- [x] vertical CG `z ~= 0.657 m`, `+/-0.040 m`;
+- [x] roll inertia `Ixx ~= 24.3 kg m^2`, `+/-35%`;
+- [x] pitch inertia `Iyy ~= 47.1 kg m^2`, `+/-25%`;
+- [x] yaw inertia `Izz ~= 28.7 kg m^2`, `+/-35%`;
+- [x] chassis/plant hardpoints may use explicit photogrammetric/CAD-style engineering estimates;
+- [x] wheel/steering/swingarm component inertias may use geometry-based engineering estimates with conservative bounds;
+- [x] mass-property uncertainty must be included in validation rather than tuned away.
 
-The Pass-11 height sweep showed about an 18% effect on idealized wheelie/rear-lift thresholds, so validation must include the stated CG envelope rather than treating the nominal height as exact.
+Pass 11 showed the broad public CG-height envelope can move idealized wheelie/rear-lift thresholds by about 18%, so the uncertainty remains physically meaningful.
 
 **Gate A: READY FOR INITIAL IMPLEMENTATION WITH ENGINEERING UNCERTAINTY.**
 
 ---
 
-## 4. Gate B — suspension kinematics and force laws
+## 2. Gate B — suspension
 
 Research Pass 13 and `tools/physics_v2_gate_b_estimate.py` define the first-plant suspension.
 
 ### Front
 
-- [x] Showa 49 mm coil fork, 309.9 mm travel;
-- [x] 5.0 N/mm per leg, 10.0 N/mm combined spring rate;
-- [x] 2025 valve/seal/oil revisions retained as architecture context;
-- [x] nominal equivalent compression damping about `620 N s/m`;
+- [x] Showa 49 mm coil fork, `309.9 mm` travel;
+- [x] `5.0 N/mm` each leg / `10.0 N/mm` combined spring rate;
+- [x] nominal compression damping about `620 N s/m`;
 - [x] nominal rebound damping about `930 N s/m`;
-- [x] damping envelope tied to off-road bounce-mode damping ratio `0.35-0.55`;
+- [x] damping envelope tied to off-road damping-ratio evidence;
 - [x] explicit friction term;
-- [x] progressive end-stroke model beginning at 75% travel and reaching about 2.5 kN additional force at full travel, `+/-50%`.
+- [x] progressive end-stroke term beginning around 75% travel, about 2.5 kN additional force at full travel, `+/-50%`.
 
 ### Rear
 
-- [x] 52 N/mm shock spring;
-- [x] approximately 133 mm usable shock stroke;
-- [x] 585.2 mm manufacturer swingarm constraint;
-- [x] average wheel/shock displacement ratio `2.3299`;
-- [x] first-plant local rising-rate curve: about `2.420 -> 2.340 -> 2.086`;
-- [x] local motion-ratio uncertainty `+/-0.12`;
-- [x] resulting wheel spring rate rises from about `8.88 -> 11.95 kN/m`;
-- [x] nominal rear shock compression damping about `3.88 kN s/m`;
-- [x] nominal rebound damping about `5.81 kN s/m`;
-- [x] damping-force uncertainty `+/-35%`;
-- [x] bump-stop begins near 82% shock stroke and reaches about 4.5 kN at full compression, `+/-50%`.
+- [x] `52 N/mm` shock spring;
+- [x] about `133 mm` usable shock stroke;
+- [x] manufacturer `585.2 mm` swingarm constraint;
+- [x] average wheel/shock ratio `2.3299`;
+- [x] first-plant rising-rate curve about `2.420 -> 2.340 -> 2.086`;
+- [x] local ratio uncertainty `+/-0.12`;
+- [x] wheel spring rate rises about `8.88 -> 11.95 kN/m`;
+- [x] nominal shock compression/rebound damping about `3.88 / 5.81 kN s/m`, `+/-35%`;
+- [x] rear bump-stop begins near 82% stroke and reaches about 4.5 kN at full compression, `+/-50%`.
 
-No wheel-rate multiplier, anti-squat multiplier, jump mode, or attitude torque substitutes for physical geometry/forces.
+No wheel-rate multiplier, anti-squat multiplier, landing mode, or attitude torque may substitute for suspension geometry/forces.
 
 **Gate B: READY FOR INITIAL IMPLEMENTATION WITH ENGINEERING UNCERTAINTY.**
 
 ---
 
-## 5. Gate C — engine, clutch and drivetrain
+## 3. Gate C — engine, clutch and drivetrain
 
 Research Pass 14 and `tools/physics_v2_drivetrain_estimate.py` define the first-plant powertrain.
 
-### C1. Published/measured anchors
+### Published/measured anchors
 
 - [x] idle `2,000 +/-100 rpm`;
-- [x] primary reduction `2.357`;
+- [x] primary `2.357`;
 - [x] gears `2.133 / 1.706 / 1.421 / 1.211 / 1.043`;
-- [x] final reduction `49/13 = 3.76923`;
-- [x] overall reductions about `18.950 / 15.156 / 12.624 / 10.759 / 9.266`;
+- [x] final `49/13 = 3.76923`;
 - [x] wet hydraulic multiplate clutch, 8 plates / 6 springs;
-- [x] Dirt Rider rear-wheel dyno peak torque `44.61 N m @ 6,900 rpm`;
-- [x] Dirt Rider rear-wheel dyno peak power `51.1 hp @ 9,600 rpm`;
-- [x] dyno D404 rear-tire test configuration retained so the data are not reused as MX33 transient/tire data.
+- [x] rear-wheel dyno anchors `44.61 N m @ 6,900 rpm` and `51.1 hp @ 9,600 rpm`.
 
-### C2. First-plant engineering estimates
+### First-plant engineering set
 
-- [x] bounded dense torque reconstruction anchored to the published peak torque/power; interior shape uncertainty `+/-6%`;
-- [x] crank-to-wheel drivetrain efficiency nominal `0.95`, interval `0.93-0.97`;
-- [x] nominal pre-loss peak engine torque about `46.96 N m`;
-- [x] equivalent crank-referenced engine inertia `0.0065 kg m^2`, interval `0.00325-0.00975 kg m^2`;
-- [x] closed-throttle engine-loss map from about `2.5 N m @ 2,000 rpm` to `12.7 N m @ 11,500 rpm`, `+/-40%`;
+- [x] dense torque reconstruction anchored to measured data, interior shape uncertainty `+/-6%`;
+- [x] drivetrain efficiency nominal `0.95`, interval `0.93-0.97`;
+- [x] equivalent crank-referenced inertia `0.0065 kg m^2`, interval `0.00325-0.00975`;
+- [x] closed-throttle loss map about `2.5 N m @ 2,000 rpm` to `12.7 N m @ 11,500 rpm`, `+/-40%`;
 - [x] clutch capacity nominal `150 N m` at clutch shaft, interval `115-190 N m`;
-- [x] nominal peak transmission requirement about `110.7 N m` at the clutch shaft;
-- [x] continuous clutch law `T = engagement * Tcap * tanh(delta_omega / omega_scale)`;
-- [x] clutch slip scale nominal `20 rad/s`, interval `10-35 rad/s`;
-- [x] limiter nominal `11,500 rpm`, interval `11,000-12,000 rpm` until stronger same-generation data replace it.
-
-### C3. Architecture rules
-
-- engine RPM is integrated from `I*omega_dot = torque sum`; it is never interpolated toward a target RPM;
-- clutch torque acts equal-and-opposite on engine and gearbox sides;
-- engine braking is crank loss torque, not direct negative chassis force;
-- gear selection changes physical ratio;
-- shift interruption is represented through combustion/clutch state, not a rear-wheel-force multiplier;
-- no powertrain parameter is tuned solely to produce a desired wheelie response.
+- [x] continuous clutch law `T = engagement*Tcap*tanh(delta_omega/omega_scale)`;
+- [x] slip scale nominal `20 rad/s`, interval `10-35 rad/s`;
+- [x] engine RPM is an integrated rotational state; limiter/shift logic acts through torque/clutch state rather than overwriting RPM or rear-wheel force.
 
 **Gate C: READY FOR INITIAL IMPLEMENTATION WITH ENGINEERING UNCERTAINTY.**
 
 ---
 
-## 6. Gate D — tire/contact physics
+## 4. Gate D — tire/contact physics
 
-Known:
+Research Pass 15 and `tools/physics_v2_gate_d_estimate.py` define the first-plant effective hardpack MX33 contact model.
 
-- [x] exact MX33 front/rear identities and nominal sizes;
-- [x] separate front/rear architecture required;
-- [x] front unloaded geometry catalog band;
-- [x] rear tire mass band;
-- [x] motocross-specific load-dependent vertical-stiffness shape prior;
-- [x] representative hardpack pressure envelope and instrumented-identification methodology defined.
+### D1. Geometry and vertical behavior
 
-Still required as measured, identified, or bounded engineering-estimate datasets:
+- [x] front/rear MX33 identities and nominal sizes frozen;
+- [x] separate front/rear parameter sets;
+- [x] reference hardpack pressure `100 kPa` with source evidence spanning roughly `80-100 kPa`;
+- [x] front unloaded radius nominal `0.3538 m`, catalog interval `0.3526-0.3550 m`;
+- [x] rear unloaded radius nominal `0.3373 m`, first-plant interval `0.329-0.345 m`;
+- [x] monotone nonlinear `Fz(delta)` tables generated from motocross-specific load-dependent stiffness constraints;
+- [x] front/rear effective stiffness anchors at 960 N: `105 / 115 kN/m`;
+- [x] vertical-force uncertainty `+/-35%`;
+- [x] radial damping nominal `550 / 650 N s/m`, `+/-60%`;
+- [x] loaded/effective rolling radius generated separately from vertical compliance with `+/-6 mm` implementation uncertainty.
 
-- [ ] loaded/effective rolling radii;
-- [ ] front/rear vertical `Fz(delta)` behavior;
-- [ ] radial damping/transient behavior;
-- [ ] rear longitudinal `Fx(kappa,Fz)`;
-- [ ] front braking `Fx(kappa,Fz)`;
-- [ ] front/rear lateral + camber response `Fy(alpha,gamma,Fz)`;
-- [ ] aligning/twisting moments;
-- [ ] coherent combined-slip law;
-- [ ] relaxation/transient scales;
-- [ ] contact-loss/reacquisition continuity validation.
+### D2. Longitudinal, lateral and camber behavior
 
-A constant `mu*Fz` model plus unrelated lateral clamp is insufficient.
+First-plant pure-force laws are smooth brush-style saturation functions with mild load sensitivity.
 
-**Gate D: NOT READY / FINAL PHYSICAL-DATA BLOCKER.**
+- [x] front/rear nominal hardpack `mu_x` at 1 kN: `0.95 / 1.05`;
+- [x] front/rear nominal `mu_y`: `0.90 / 0.95`;
+- [x] friction level uncertainty `+/-22%`;
+- [x] normalized longitudinal slip stiffness front/rear: `11 / 10`, `+/-30%`;
+- [x] normalized lateral stiffness front/rear: `9 / 8 rad^-1`, `+/-30%`;
+- [x] explicit camber contribution with equivalent-slip gains `0.32 / 0.28`, `+/-50%`;
+- [x] the same laws handle drive, braking and sign reversal without special wheelspin/lock modes.
+
+### D3. Combined slip and moments
+
+- [x] one normalized friction ellipse resolves combined longitudinal/lateral demand;
+- [x] no independent post-solve longitudinal/lateral grip clamps;
+- [x] self-aligning moment uses utilization-dependent pneumatic trail, nominal `30 mm` front / `20 mm` rear at low utilization;
+- [x] explicit overturning/camber moment term;
+- [x] all moments go to zero with contact load.
+
+### D4. Transients and contact state
+
+- [x] first-order relaxation states;
+- [x] nominal longitudinal relaxation lengths `0.14 / 0.16 m` front/rear;
+- [x] nominal lateral relaxation lengths `0.20 / 0.24 m`;
+- [x] relaxation uncertainty `+/-50%`;
+- [x] low-speed regularization required;
+- [x] contact loss sets normal/tangential forces and moments to zero without a special airborne tire mode;
+- [x] reacquisition builds forces through the same normal/contact/relaxation equations without a landing grip multiplier;
+- [x] estimator validates monotone vertical response and combined-slip utilization <= 1.
+
+Exact public MX33 force-rig data remain unavailable. These values are not labeled as Dunlop measurements; they are a coherent, uncertainty-bounded first-plant hardpack dataset with direct replacement points.
+
+**Gate D: READY FOR INITIAL IMPLEMENTATION WITH ENGINEERING UNCERTAINTY.**
 
 ---
 
-## 7. Gate E — rider/controller
+## 5. Gate E — rider/controller
 
-Gate E does not block the first passive no-assist plant if the rider is represented as a fixed/simplified reference mass with no injected attitude torque.
+Gate E does not block the first passive no-assist plant. A fixed/simplified reference rider may be used initially provided it injects no hidden attitude-control torque.
 
-Before gameplay calibration: rider neutral mass/CG, bar/peg attachment coordinates, body motion limits, reduced arm/leg force model, steering-torque envelope, virtual rider separation, and assist-off validation must be completed.
+Before gameplay calibration: rider mass/CG, bar/peg coordinates, body motion limits, steering-torque envelope, reduced arm/leg response, virtual-rider separation, and assists-off validation remain required.
 
 **Gate E: ARCHITECTURE READY; GAMEPLAY CALIBRATION DEFERRED.**
 
 ---
 
-## 8. Gate N — numerical integration
+## 6. Gate N — numerical integration and validation
 
-Candidate families remain semi-implicit fixed-step with justified substeps and linear-implicit stiff-force treatment.
+The implementation must benchmark:
 
-Required benchmarks include airborne momentum conservation, static sag, tire compliance, full-travel landing, combined-slip transient, timestep-halving convergence, deterministic 120 Hz repeatability, mobile CPU budget, and no NaN/energy blow-up.
+- zero-force airborne linear/angular momentum conservation;
+- static sag and axle loads;
+- tire vertical compliance;
+- full-travel landing;
+- straight acceleration and wheelspin;
+- braking/lock/recovery;
+- steady turn and steering transient;
+- combined-slip throttle-on cornering;
+- contact loss/reacquisition;
+- wheelie onset;
+- jump takeoff pitch and ballistic flight;
+- timestep-halving convergence;
+- deterministic 120 Hz outer-clock repeatability;
+- mobile CPU budget;
+- no NaN/Inf or unbounded numerical-energy growth.
 
-**Gate N: BENCHMARK-READY.**
-
----
-
-## 9. Minimum condition to begin Physics V2 runtime
-
-The runtime coding gate becomes OPEN when:
-
-1. Gate A mass/geometry set exists — **satisfied**;
-2. Gate B continuous suspension model exists — **satisfied**;
-3. Gate C rotational engine/clutch/drivetrain model exists — **satisfied**;
-4. Gate D coherent hardpack tire/contact model exists;
-5. every runtime constant has units, provenance/classification, uncertainty where applicable, and one replacement point;
-6. validation covers material uncertainty envelopes;
-7. there are no special wheelie, jump, landing, or airborne-attitude physics modes.
-
-The first runtime remains one 6-DOF chassis with quaternion attitude, physical steering DOF, fork/swingarm coordinates, wheel angular states, coherent tire forces, engine/clutch/chain rotational dynamics, assists disabled, and deterministic force/moment telemetry.
+**Gate N: BENCHMARK-READY; benchmark harness is part of implementation.**
 
 ---
 
-## 10. Current verdict
+## 7. Runtime architecture now authorized
 
-**OVERALL CODING GATE: CLOSED — ONE PHYSICAL SUBSYSTEM REMAINS.**
+The first Physics V2 implementation is authorized to build:
 
-**Gate A, Gate B, and Gate C are READY.**
+- one 6-DOF Newton-Euler chassis;
+- quaternion attitude;
+- physical steering DOF;
+- physical fork and swingarm coordinates;
+- front/rear wheel angular states;
+- Gate-D coherent tire/contact layer;
+- Gate-C engine/clutch/gearbox/chain rotational dynamics;
+- fixed/simplified reference rider for passive validation;
+- assists disabled;
+- deterministic force/moment/state telemetry.
 
-The sole remaining pre-runtime physical subsystem is:
+Jumps, wheelies, stoppies and landings remain outcomes of the same equations. There are **no special wheelie, jump, landing or airborne-attitude physics modes**.
 
-- **Gate D: MX33 hardpack tire/contact behavior.**
+---
 
-Next action: **Gate D.**
+## 8. Verdict
+
+# **OVERALL PHYSICS V2 CODING GATE: OPEN**
+
+Gates A, B, C and D all supply complete first-plant physical parameterizations with explicit uncertainty and centralized replacement points.
+
+The next task is no longer parameter research. It is **5/5: implement the Physics V2 plant, build the deterministic validation harness, pass the machine tests, wire it to the existing controls/rendering, then generate the first user-test build.**
