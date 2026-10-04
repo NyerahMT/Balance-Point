@@ -89,11 +89,17 @@ final class PhysicsV2Plant {
     // threshold. It does not pin the bike at a low angle or cut drive to fake stability.
     private static final String PHYSICS_V2_GROUNDED_ASSISTS_V1 =
             "legends-balance-point-v1";
-    private static final float ASSIST_MAX_LEAN = radians(24f);
-    private static final float ASSIST_ROLL_KP = 150f;
-    private static final float ASSIST_ROLL_KD = 48f;
-    private static final float ASSIST_MAX_ROLL_TORQUE = 240f;
-    private static final float ASSIST_STEER_DAMPING = 5.5f;
+    private static final float ASSIST_MAX_LEAN = radians(30f);
+    // Critical damping on the 40 kg m^2 roll inertia. The old 150/48 pair was
+    // zeta ~ 0.3 and wagged against the bar controller.
+    private static final float ASSIST_ROLL_KP = 100f;
+    private static final float ASSIST_ROLL_KD = 132f;
+    private static final float ASSIST_MAX_ROLL_TORQUE = 180f;
+    private static final float ASSIST_STEER_DAMPING = 1.2f;
+    private static final float ASSIST_YAW_RATE_GAIN = 1f / 9.5f;
+    private static final float ASSIST_MAX_YAW_RATE = 1.45f;
+    private static final float ASSIST_YAW_KP = 32f;
+    private static final float ASSIST_MAX_YAW_TORQUE = 70f;
     private static final float BALANCE_CATCH_PAST = radians(7f);
     private static final float BALANCE_CATCH_FULL = radians(16f);
     private static final float BALANCE_CATCH_MAX = 220f;
@@ -293,9 +299,10 @@ final class PhysicsV2Plant {
 
         totalForce.set(0f, -SPRUNG_MASS * G, 0f);
         totalMomentWorld.set(0f, 0f, 0f);
-        // Rider bar torque and steering-joint damping are internal reactions.
+        // Bar torque is an internal couple. Full reaction was yaw-kicking the chassis
+        // every time the steer servo moved, which read as a weave. Keep a fraction.
         float steeringInternalReaction =
-                -(riderSteerTorque + steeringDampingTorque);
+                -0.22f * (riderSteerTorque + steeringDampingTorque);
         totalMomentWorld.x += up.x * steeringInternalReaction;
         totalMomentWorld.y += up.y * steeringInternalReaction;
         totalMomentWorld.z += up.z * steeringInternalReaction;
@@ -336,9 +343,10 @@ final class PhysicsV2Plant {
         // Grounded rideability assists. No part of this block runs fully airborne.
         if (!airborne()) {
             float speedAbs = Math.abs(forwardSpeedStart);
-            float leanAuthority = smoothstep(2.0f, 8.0f, speedAbs);
-            float targetRoll = -clamp(input.steer, -1f, 1f)
-                    * ASSIST_MAX_LEAN * leanAuthority;
+            float leanAuthority = smoothstep(2.0f, 7.0f, speedAbs);
+            float shapedSteer = clamp(input.steer, -1f, 1f);
+            shapedSteer *= 0.72f + 0.28f * Math.abs(shapedSteer);
+            float targetRoll = -shapedSteer * ASSIST_MAX_LEAN * leanAuthority;
             float rollTorque = ASSIST_ROLL_KP * (targetRoll - roll())
                     - ASSIST_ROLL_KD * rollRate();
             rollTorque = clamp(
@@ -348,6 +356,20 @@ final class PhysicsV2Plant {
             totalMomentWorld.x += forward.x * rollTorque;
             totalMomentWorld.y += forward.y * rollTorque;
             totalMomentWorld.z += forward.z * rollTorque;
+
+            // Legends corner: stick deflection arcs the bike. Rate tracking only,
+            // so it cannot ring the way a lean spring did.
+            float targetYawRate = clamp(
+                    shapedSteer * speedAbs * ASSIST_YAW_RATE_GAIN * leanAuthority,
+                    -ASSIST_MAX_YAW_RATE,
+                    ASSIST_MAX_YAW_RATE);
+            float yawTorque = clamp(
+                    ASSIST_YAW_KP * (targetYawRate - yawRate()),
+                    -ASSIST_MAX_YAW_TORQUE,
+                    ASSIST_MAX_YAW_TORQUE);
+            totalMomentWorld.x += up.x * yawTorque;
+            totalMomentWorld.y += up.y * yawTorque;
+            totalMomentWorld.z += up.z * yawTorque;
 
             if (rearGrounded()) {
                 // theta_bp = atan(comAhead / comHeight): gravity torque about the rear

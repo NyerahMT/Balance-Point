@@ -3,8 +3,9 @@
 Runtime baseline: `ec9e9ea675854c3e84045295ed386d1f70b8062f`, balance-point revision `legends-balance-point-v1`.
 
 Active grounded assists:
-- additional steering-rate damping while at least one tire is grounded;
-- commanded-lean roll stabilization while at least one tire is grounded;
+- commanded-lean roll stabilization while at least one tire is grounded, critically damped so a steer input leans in and holds instead of weaving;
+- speed-scaled yaw-rate tracking so the stick arcs the bike the way MX vs ATV Legends does, without a second roll loop on the bars;
+- handlebar torque only servos steer angle. It no longer regulates roll, which was fighting the lean assist;
 - a rear-contact balance point, not an anti-wheelie clamp.
 
 Balance point:

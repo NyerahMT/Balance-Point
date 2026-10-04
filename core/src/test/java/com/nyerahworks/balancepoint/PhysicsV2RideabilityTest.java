@@ -58,6 +58,37 @@ public final class PhysicsV2RideabilityTest {
     }
 
     @Test
+    public void heldSteerTracksWithoutWeaving() {
+        FlatTerrain terrain = new FlatTerrain();
+        PhysicsV2Plant p = new PhysicsV2Plant();
+        p.reset(terrain);
+        p.input().throttle = 0.40f;
+        for (int i = 0; i < 480; i++) p.step(terrain, DT);
+
+        p.input().steer = 0.55f;
+        int reversals = 0;
+        float previousRate = 0f;
+        float maxRoll = 0f;
+        for (int i = 0; i < 480; i++) {
+            p.step(terrain, DT);
+            float rate = p.rollRate();
+            maxRoll = Math.max(maxRoll, Math.abs(p.roll()));
+            if (i > 200 && previousRate * rate < 0f && Math.abs(rate) > 0.12f) {
+                reversals++;
+            }
+            previousRate = rate;
+            assertTrue(Float.isFinite(p.roll()) && Float.isFinite(p.yawRate()));
+        }
+        assertTrue("weave reversals=" + reversals, reversals < 3);
+        assertTrue("max roll=" + maxRoll, maxRoll > radians(4f) && maxRoll < radians(40f));
+
+        p.input().steer = 0f;
+        for (int i = 0; i < 360; i++) p.step(terrain, DT);
+        assertTrue("release roll=" + p.roll(), Math.abs(p.roll()) < radians(12f));
+        assertTrue("release rate=" + p.rollRate(), Math.abs(p.rollRate()) < 0.45f);
+    }
+
+    @Test
     public void suspensionHeaveSettlesAfterRoadStep() {
         FlatTerrain terrain = new FlatTerrain();
         PhysicsV2Plant p = new PhysicsV2Plant();
