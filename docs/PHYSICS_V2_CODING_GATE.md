@@ -1,10 +1,10 @@
 # Physics V2 Coding Gate
 
-Status: **authoritative pre-runtime checklist through Research Pass 12.**
+Status: **authoritative pre-runtime checklist through Research Pass 13.**
 
 This document defines when Balance Point may begin the assists-disabled Physics V2 runtime implementation. It prevents two opposite failures: inventing physical constants to make the bike feel right, and waiting indefinitely for factory/laboratory data that are unlikely to become public.
 
-Research Pass 12 adds a controlled engineering state so the project can move forward without pretending estimated values are measurements.
+Research Pass 12 adds a controlled engineering-estimate state. Research Pass 13 applies that state to the 2025 suspension so the project can move forward without pretending estimated linkage or damper values are factory measurements.
 
 ---
 
@@ -92,34 +92,45 @@ Gate A is READY when the first-plant mass/geometry set is reproducible, every es
 
 ### B1. Front suspension
 
-- [x] fork type/travel;
-- [x] stock spring rate per leg;
-- [x] spring free-length secondary measurement;
-- [x] parallel coil rate derived;
-- [x] 2025 friction/damping redesign confirmed;
-- [ ] engineering force law for compression/rebound across the motocross velocity envelope;
-- [ ] friction-force estimate/bound;
-- [ ] end-stroke/air-spring/bottoming law;
-- [ ] moving/unsprung mass partition.
+- [x] Showa 49 mm coil fork and 309.9 mm travel;
+- [x] stock spring rate: 5.0 N/mm per leg, 10.0 N/mm combined;
+- [x] 2025 Bending Control Valve, seal and oil revisions confirmed;
+- [x] first-plant equivalent damping anchor derived from published off-road critical-damping data;
+- [x] nominal front compression coefficient: about `620 N s/m`;
+- [x] nominal front rebound coefficient: about `930 N s/m`;
+- [x] damping envelope tied to off-road bounce-mode damping ratio `0.35-0.55`;
+- [x] progressive end-stroke model begins at 75% travel and reaches about 2.5 kN additional force at full travel, `+/-50%`;
+- [x] friction remains an explicit Coulomb/Stribeck term rather than being hidden in damping;
+- [x] moving/unsprung mass may use same-class engineering estimates with `+/-25%` bounds.
+
+The first damper implementation must be branch-separated and continuous through zero velocity. It may use a smooth digressive/blow-off representation but may not extend one unlimited linear coefficient to motocross shaft velocities.
 
 ### B2. Rear suspension
 
-- [x] stock shock spring rate;
-- [x] free/installed spring distinction;
-- [x] shock hardware envelope;
-- [x] 2025-specific linkage identity and pullrod measurement;
-- [x] rigid swingarm arc constrained by 585.2 mm swingarm length;
-- [x] full-stroke average wheel/shock displacement ratio constrained to about 2.330 as a compatibility bound, not a local constant;
-- [ ] 2025 Pro-Link local motion-ratio curve or bounded engineering reconstruction;
-- [ ] compression/rebound force law;
-- [ ] bottoming/bump-stop law;
-- [ ] swingarm/linkage mass/inertia partition.
+- [x] stock shock spring rate: 52 N/mm;
+- [x] shock hardware envelope retained at approximately 133 mm usable stroke;
+- [x] 2025-specific one-piece Pro-Link and revised rising-rate intent confirmed by Honda;
+- [x] swingarm arc constrained by the 585.2 mm manufacturer length;
+- [x] full-stroke average wheel/shock displacement ratio constrained to `2.3299`;
+- [x] first-plant local motion-ratio reconstruction defined and reproducible;
+- [x] nominal local motion ratio: `2.420` top, `2.340` at 70% shock stroke, `~2.086` at full compression;
+- [x] local motion-ratio uncertainty: `+/-0.12`;
+- [x] the estimated curve integrates to the frozen 309.88 mm wheel travel over 133 mm shock stroke;
+- [x] resulting wheel spring rate rises from about 8.88 kN/m to 11.95 kN/m across travel;
+- [x] nominal rear shock damping anchor: about `4.84 kN s/m` at the reference mid-stroke leverage;
+- [x] nominal rear shock compression coefficient: about `3.88 kN s/m`;
+- [x] nominal rear shock rebound coefficient: about `5.81 kN s/m`;
+- [x] nominal damping-force uncertainty: `+/-35%`;
+- [x] rear bump-stop begins at 82% shock stroke and reaches about 4.5 kN shock-axis force at full compression, `+/-50%`;
+- [x] swingarm/linkage moving mass and inertia may use same-class engineering estimates with conservative bounds.
 
 ### B3. Gate-B acceptance rule
 
-Gate B is READY when one continuous suspension model can reproduce static sag, bump response, jump-face compression, whoops, landing and rebound without wheel-rate hacks or attitude torques. Engineering estimates are allowed under the same Pass-12 uncertainty policy.
+Gate B is READY when one continuous suspension model can reproduce static sag, bump response, jump-face compression, whoops, landing and rebound without wheel-rate hacks or attitude torques. Engineering estimates are allowed under the Pass-12 uncertainty policy and must remain centralized, replaceable and telemetry-visible.
 
-**Current status: NOT READY — next priority.**
+Research Pass 13 and `tools/physics_v2_gate_b_estimate.py` provide the first-plant parameterization and uncertainty envelope.
+
+**Current status: READY FOR INITIAL IMPLEMENTATION WITH ENGINEERING UNCERTAINTY.**
 
 ---
 
@@ -213,7 +224,7 @@ Required benchmarks include airborne momentum conservation, static sag, tire com
 The runtime coding gate becomes OPEN when:
 
 1. Gate A supplies a centralized engineering mass/geometry set with uncertainty — **satisfied**;
-2. Gate B supplies a continuous suspension kinematic/force model;
+2. Gate B supplies a continuous suspension kinematic/force model — **satisfied**;
 3. Gate C supplies engine inertia/loss and clutch behavior sufficient for rotational dynamics;
 4. Gate D supplies one coherent hardpack contact model;
 5. every runtime constant has units, provenance/classification, uncertainty where applicable, and a single replacement point;
@@ -228,12 +239,11 @@ The first implementation target remains one 6-DOF rigid-body chassis, quaternion
 
 **OVERALL CODING GATE: CLOSED.**
 
-**Gate A is now CLOSED/READY and is no longer a reason to wait.** The project accepts a reproducible, replaceable mass-property engineering set instead of requiring unavailable factory data.
+**Gate A and Gate B are now READY.** We are no longer waiting on unavailable factory mass-property or stock-Showa/linkage datasets for the first plant; both subsystems have reproducible engineering estimates with explicit uncertainty and replacement rules.
 
-Remaining blocking work is now concentrated in:
+Remaining blocking work is concentrated in:
 
-- Gate B: Pro-Link kinematics and Showa suspension force laws;
-- Gate C: engine inertia/braking and clutch dynamics;
+- Gate C: engine inertia/braking, dense torque curve and clutch dynamics;
 - Gate D: MX33 hardpack tire/contact behavior.
 
-Next action: **Gate B.**
+Next action: **Gate C.**
