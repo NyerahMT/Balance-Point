@@ -4,9 +4,9 @@ package com.nyerahworks.balancepoint;
  * First implementation of the assists-off Physics V2 motorcycle plant.
  *
  * Coordinates: world X right, Y up, Z forward. Body local axes are the same at identity.
- * The rigid system integrates translation, a quaternion attitude, body angular velocity,
- * steering, front/rear suspension coordinates and both wheel angular speeds. No wheelie,
- * jump, landing or airborne attitude mode exists in this class.
+ * Wheelies are a rear-contact balance point: gravity torque is zero when the combined
+ * CoM sits over the rear patch, throttle and rearward weight raise the front, rear brake
+ * drops it. No scripted anti-wheelie clamp.
  */
 final class PhysicsV2Plant {
     interface Terrain {
@@ -59,9 +59,10 @@ final class PhysicsV2Plant {
     // Keep integration at or below 1/480 s to stop those modes aliasing into chassis motion.
     private static final float MAX_INTERNAL_DT = 1f / 480f;
     // A real rider anticipates acceleration and braces forward. This changes rider mass position
-    // only; it never applies an anti-wheelie chassis torque or clamps pitch.
-    private static final float VIRTUAL_RIDER_BRACE_GAIN = 0.70f;
-    private static final float VIRTUAL_RIDER_BRACE_MAX = 0.70f;
+    // only; it never applies an anti-wheelie chassis torque or clamps pitch. Kept small so a
+    // rearward stick command can still move the combined CoM behind the neutral brace.
+    private static final float VIRTUAL_RIDER_BRACE_GAIN = 0.28f;
+    private static final float VIRTUAL_RIDER_BRACE_MAX = 0.28f;
     private static final String PHYSICS_V2_STABILITY_PASS_1 =
             "substep-feedback-cleanup-v1";
     private static final float FRONT_SPRING = 10_000f;
@@ -80,22 +81,27 @@ final class PhysicsV2Plant {
     private static final float AERO_COEFF = 0.34f;
     private static final float ROLLING_COEFF = 0.017f;
 
-    // Explicit game-facing rideability layer. These terms exist only while grounded.
+    // Grounded rideability. Roll/steer assists stay. Wheelie control is a balance point,
+    // not an anti-wheelie clamp. MX vs ATV Legends (assist off) hangs the bike where the
+    // combined CoM sits over the rear contact, holds it with throttle taps, and uses rear
+    // brake / forward weight to drop the nose. The catch only starts past that point so a
+    // wheelie is recoverable instead of an instant loop, matching Legends' raised wheelie
+    // threshold. It does not pin the bike at a low angle or cut drive to fake stability.
     private static final String PHYSICS_V2_GROUNDED_ASSISTS_V1 =
-            "ground-roll-steer-wheelie-v1";
+            "legends-balance-point-v1";
     private static final float ASSIST_MAX_LEAN = radians(24f);
     private static final float ASSIST_ROLL_KP = 150f;
     private static final float ASSIST_ROLL_KD = 48f;
     private static final float ASSIST_MAX_ROLL_TORQUE = 240f;
     private static final float ASSIST_STEER_DAMPING = 5.5f;
-    private static final float ASSIST_WHEELIE_TARGET = radians(14f);
-    private static final float ASSIST_WHEELIE_ONSET = radians(5f);
-    private static final float ASSIST_WHEELIE_KP = 520f;
-    private static final float ASSIST_WHEELIE_KD = 180f;
-    private static final float ASSIST_MAX_WHEELIE_TORQUE = 1200f;
-    private static final float ASSIST_POWER_CUT_START = radians(8f);
-    private static final float ASSIST_POWER_CUT_FULL = radians(18f);
-    private static final float ASSIST_POWER_CUT_MAX = 0.82f;
+    private static final float BALANCE_CATCH_PAST = radians(7f);
+    private static final float BALANCE_CATCH_FULL = radians(16f);
+    private static final float BALANCE_CATCH_MAX = 220f;
+    private static final float BALANCE_RATE_DAMP = 70f;
+    private static final float PLANTED_PITCH_SPRING = 160f;
+    private static final float PLANTED_PITCH_DAMP = 95f;
+    private static final float BRAKE_BALANCE_TORQUE = 420f;
+    private static final float RIDER_POP_TORQUE = 0f;
 
     private final Input input = new Input();
     private final Telemetry telemetry = new Telemetry();
@@ -202,7 +208,7 @@ final class PhysicsV2Plant {
         sampleContact(
                 rearContact,
                 terrain,
-                -effectiveCgForward,
+                -CG_FORWARD,
                 rearFullExtY + rearCompression,
                 0f,
                 rearCompressionRate,
@@ -211,7 +217,7 @@ final class PhysicsV2Plant {
         sampleContact(
                 frontContact,
                 terrain,
-                WHEELBASE - effectiveCgForward,
+                WHEELBASE - CG_FORWARD,
                 frontFullExtY + frontCompression,
                 0f,
                 frontCompressionRate,
@@ -267,20 +273,9 @@ final class PhysicsV2Plant {
             clutchCommand = clamp(0.08f + 0.18f * input.throttle
                     + horizontalSpeed / 6.0f, 0f, 1f);
         }
-        float assistedThrottle = input.throttle;
-        if (rearGrounded()) {
-            float pitchCut = smoothstep(
-                    ASSIST_POWER_CUT_START,
-                    ASSIST_POWER_CUT_FULL,
-                    pitch());
-            float noseUpRate = Math.max(0f, -pitchRate());
-            float rateCut = smoothstep(0.45f, 1.8f, noseUpRate);
-            float cut = Math.max(pitchCut, rateCut) * ASSIST_POWER_CUT_MAX;
-            assistedThrottle *= 1f - cut;
-        }
         float rearDriveTorque = powertrain.step(
                 rearWheelOmega,
-                assistedThrottle,
+                input.throttle,
                 clutchCommand,
                 dt);
         float brakeTorque = clamp(input.rearBrake, 0f, 1f) * MAX_REAR_BRAKE_TORQUE;
@@ -354,19 +349,48 @@ final class PhysicsV2Plant {
             totalMomentWorld.y += forward.y * rollTorque;
             totalMomentWorld.z += forward.z * rollTorque;
 
-            if (rearGrounded() && pitch() > ASSIST_WHEELIE_ONSET) {
-                // Positive body-X torque pitches the nose down in this coordinate system.
-                float noseUpRate = Math.max(0f, -pitchRate());
-                float wheelieTorque = ASSIST_WHEELIE_KP
-                        * (pitch() - ASSIST_WHEELIE_TARGET)
-                        + ASSIST_WHEELIE_KD * noseUpRate;
-                wheelieTorque = clamp(
-                        wheelieTorque,
-                        0f,
-                        ASSIST_MAX_WHEELIE_TORQUE);
-                totalMomentWorld.x += right.x * wheelieTorque;
-                totalMomentWorld.y += right.y * wheelieTorque;
-                totalMomentWorld.z += right.z * wheelieTorque;
+            if (rearGrounded()) {
+                // theta_bp = atan(comAhead / comHeight): gravity torque about the rear
+                // contact is zero there. Nose-up pitch is positive. Body-X torque is
+                // nose-up positive in this plant (drive reaction is -shaft torque).
+                float balancePitch = (float)Math.atan2(
+                        Math.max(0.05f, effectiveCgForward),
+                        CG_HEIGHT);
+                boolean frontUp = !frontGrounded() || pitch() > radians(4f);
+                float noseDown = 0f;
+                if (frontUp) {
+                    noseDown += BALANCE_RATE_DAMP * pitchRate();
+                    float pastBalance = pitch() - balancePitch;
+                    if (pastBalance > 0f) {
+                        noseDown += smoothstep(
+                                BALANCE_CATCH_PAST,
+                                BALANCE_CATCH_FULL,
+                                pastBalance) * BALANCE_CATCH_MAX;
+                    }
+                    noseDown += clamp(input.rearBrake, 0f, 1f) * BRAKE_BALANCE_TORQUE
+                            * smoothstep(radians(6f), radians(16f), pitch());
+                } else {
+                    noseDown += PLANTED_PITCH_SPRING * pitch();
+                    noseDown += PLANTED_PITCH_DAMP * pitchRate();
+                }
+                // Forward rider input adds nose-down. Stick back is the Legends pop,
+                // mostly from the CoM shift above, plus a small pitch nudge.
+                noseDown += clamp(input.riderForeAft, -1f, 1f) * RIDER_POP_TORQUE
+                        * (frontUp ? 1f : 0.5f);
+                // Geometric balance point. Contact forces are applied at the axles, so
+                // they do not produce the inverted-pendulum moment about the rear patch.
+                // This is that missing torque: zero when the CoM is over the contact,
+                // nose-down in front of it, looping past it. Rearward CoM lowers the point.
+                if (!frontGrounded()) {
+                    float pitchNow = pitch();
+                    float offset = effectiveCgForward * (float)Math.cos(pitchNow)
+                            - CG_HEIGHT * (float)Math.sin(pitchNow);
+                    noseDown += SPRUNG_MASS * G * offset;
+                }
+                float noseUpTorque = -noseDown;
+                totalMomentWorld.x += right.x * noseUpTorque;
+                totalMomentWorld.y += right.y * noseUpTorque;
+                totalMomentWorld.z += right.z * noseUpTorque;
             }
         }
 
