@@ -42,6 +42,8 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add core/src/main/java/com/nyerahworks/balancepoint/PhysicsV2Plant.java \
                   core/src/main/java/com/nyerahworks/balancepoint/PhysicsV2RiderController.java \
+                  core/src/main/java/com/nyerahworks/balancepoint/PhysicsV2Tire.java \
+                  core/src/main/java/com/nyerahworks/balancepoint/BalancePointGame.java \
                   core/src/test/java/com/nyerahworks/balancepoint/PhysicsV2RideabilityTest.java
           git commit -m "Correct Physics V2 force path and rider control"
           git push origin HEAD:main
