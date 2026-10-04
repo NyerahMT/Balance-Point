@@ -66,8 +66,6 @@ def patch_plant() -> None:
     new_moments = '''        momentSum.add(m);\n        // Front aligning moment belongs to the steering DOF. Applying it here as well would\n        // double-count the same external tire moment. Rear aligning moment acts on the chassis.\n        if (!isFront) {\n            momentSum.x += c.normal.x * f.mz;\n            momentSum.y += c.normal.y * f.mz;\n            momentSum.z += c.normal.z * f.mz;\n        }\n        momentSum.x += c.wheelForward.x * f.mx;\n        momentSum.y += c.wheelForward.y * f.mx;\n        momentSum.z += c.wheelForward.z * f.mx;\n'''
     text = replace_once(text, old_moments, new_moments, "front aligning moment ownership")
 
-    # Internal rider/damper steering torques react on the chassis. The front-tire aligning moment
-    # is external and remains on the steering assembly, so it is excluded from this reaction.
     reaction_anchor = '''        totalMomentWorld.set(0f, 0f, 0f);\n'''
     reaction = '''        totalMomentWorld.set(0f, 0f, 0f);\n        float steeringInternalReaction = -(riderSteerTorque + steeringDampingTorque);\n        totalMomentWorld.x += up.x * steeringInternalReaction;\n        totalMomentWorld.y += up.y * steeringInternalReaction;\n        totalMomentWorld.z += up.z * steeringInternalReaction;\n'''
     text = replace_once(text, reaction_anchor, reaction, "steering chassis reaction")
@@ -91,3 +89,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+# Trigger marker: stability-migration-1
