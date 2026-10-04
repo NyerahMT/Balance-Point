@@ -22,9 +22,9 @@ text = text.replace(
     "    private static final float MAX_BALANCE_ROLL_TORQUE = 135f;\n",
     "    // Strong, near-critically-damped grounded rider balance. This is a game-facing\n"
     "    // rider assist and never runs when both tires are unloaded.\n"
-    "    private static final float BALANCE_ROLL_KP = 340f;\n"
-    "    private static final float BALANCE_ROLL_KD = 230f;\n"
-    "    private static final float MAX_BALANCE_ROLL_TORQUE = 360f;\n",
+    "    private static final float BALANCE_ROLL_KP = 520f;\n"
+    "    private static final float BALANCE_ROLL_KD = 300f;\n"
+    "    private static final float MAX_BALANCE_ROLL_TORQUE = 500f;\n",
 )
 
 pattern = re.compile(
@@ -40,20 +40,27 @@ replacement = '''    private void updateSteering(float speedForward, float dt) {
         if (anyGround) {
             float command = clamp(input.steer, -1f, 1f);
             float authority = smoothstep(1.0f, 6.0f, speed);
-
-            // Touch input is intuitive turn direction: right command -> right wheel angle.
-            // At walking speed use ordinary direct steering. As speed builds, transition to
-            // the steady-state steer angle implied by the requested lean. There is deliberately
-            // no roll-error countersteer term here; that loop was reversing the bars, crossing
-            // center, and exciting the weave the player was feeling.
             float targetRoll = -command * MAX_TARGET_LEAN * authority;
+
+            // At walking speed the bars behave directly. Once the bike is moving, player
+            // input first establishes lean in the requested direction; same-direction front
+            // steer is fed in only as that lean develops. This avoids both the autonomous
+            // countersteer reversal and the opposite-roll kick caused by instantly steering
+            // a still-upright motorcycle into the turn.
+            float lowSpeedBlend = 1f - smoothstep(0.6f, 2.6f, speed);
+            float directionalLean = -Math.signum(command) * roll();
+            float targetLeanMagnitude = Math.abs(targetRoll);
+            float leanProgress = targetLeanMagnitude > radians(1f)
+                    ? clamp(directionalLean / Math.max(targetLeanMagnitude * 0.70f, radians(3f)), 0f, 1f)
+                    : 1f;
+
             float speedSq = Math.max(speed * speed, 9f);
             float cornerMagnitude = (float)Math.atan(
-                    WHEELBASE * G * Math.tan(Math.abs(targetRoll)) / speedSq);
-            float cornerSteer = Math.signum(command) * cornerMagnitude;
-            float lowSpeedSteer = command * MAX_STEER_ANGLE * (1f - authority);
+                    WHEELBASE * G * Math.tan(targetLeanMagnitude) / speedSq);
+            float cornerSteer = Math.signum(command) * cornerMagnitude * leanProgress;
+            float lowSpeedSteer = command * MAX_STEER_ANGLE * lowSpeedBlend;
             float desiredSteer = clamp(
-                    lowSpeedSteer + cornerSteer,
+                    lowSpeedSteer + cornerSteer * (1f - lowSpeedBlend),
                     -MAX_STEER_ANGLE,
                     MAX_STEER_ANGLE);
 
