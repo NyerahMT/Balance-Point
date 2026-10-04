@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Add explicit grounded rideability assists to Physics V2.
 
-Airborne dynamics are intentionally untouched: when both wheels are off the ground,
-this layer contributes zero chassis attitude torque.
+Airborne dynamics are intentionally untouched: when the rear tire leaves the ground,
+the anti-wheelie torque trim disappears, and when both tires are off the ground the
+rideability layer contributes zero chassis attitude torque.
 """
 from pathlib import Path
 
@@ -21,8 +22,7 @@ old_constants = """    private static final float AERO_COEFF = 0.34f;
 new_constants = """    private static final float AERO_COEFF = 0.34f;
     private static final float ROLLING_COEFF = 0.017f;
 
-    // Explicit game-facing rideability layer. These torques exist only while grounded.
-    // They are intentionally separate from the motorcycle plant so they can be removed later.
+    // Explicit game-facing rideability layer. These terms exist only while grounded.
     private static final String PHYSICS_V2_GROUNDED_ASSISTS_V1 =
             "ground-roll-steer-wheelie-v1";
     private static final float ASSIST_MAX_LEAN = radians(24f);
@@ -32,9 +32,12 @@ new_constants = """    private static final float AERO_COEFF = 0.34f;
     private static final float ASSIST_STEER_DAMPING = 5.5f;
     private static final float ASSIST_WHEELIE_TARGET = radians(14f);
     private static final float ASSIST_WHEELIE_ONSET = radians(5f);
-    private static final float ASSIST_WHEELIE_KP = 360f;
-    private static final float ASSIST_WHEELIE_KD = 125f;
-    private static final float ASSIST_MAX_WHEELIE_TORQUE = 450f;
+    private static final float ASSIST_WHEELIE_KP = 520f;
+    private static final float ASSIST_WHEELIE_KD = 180f;
+    private static final float ASSIST_MAX_WHEELIE_TORQUE = 1200f;
+    private static final float ASSIST_POWER_CUT_START = radians(8f);
+    private static final float ASSIST_POWER_CUT_FULL = radians(18f);
+    private static final float ASSIST_POWER_CUT_MAX = 0.82f;
 """
 if old_constants not in text:
     raise SystemExit("constant insertion anchor not found")
@@ -52,6 +55,31 @@ new_steer = """        float groundedSteerDamping = airborne() ? 0f : ASSIST_STE
 if old_steer not in text:
     raise SystemExit("steering anchor not found")
 text = text.replace(old_steer, new_steer, 1)
+
+old_drive = """        float rearDriveTorque = powertrain.step(rearWheelOmega, input.throttle, clutchCommand, dt);
+        float brakeTorque = clamp(input.rearBrake, 0f, 1f) * MAX_REAR_BRAKE_TORQUE;
+"""
+new_drive = """        float assistedThrottle = input.throttle;
+        if (rearGrounded()) {
+            float pitchCut = smoothstep(
+                    ASSIST_POWER_CUT_START,
+                    ASSIST_POWER_CUT_FULL,
+                    pitch());
+            float noseUpRate = Math.max(0f, -pitchRate());
+            float rateCut = smoothstep(0.45f, 1.8f, noseUpRate);
+            float cut = Math.max(pitchCut, rateCut) * ASSIST_POWER_CUT_MAX;
+            assistedThrottle *= 1f - cut;
+        }
+        float rearDriveTorque = powertrain.step(
+                rearWheelOmega,
+                assistedThrottle,
+                clutchCommand,
+                dt);
+        float brakeTorque = clamp(input.rearBrake, 0f, 1f) * MAX_REAR_BRAKE_TORQUE;
+"""
+if old_drive not in text:
+    raise SystemExit("drive insertion anchor not found")
+text = text.replace(old_drive, new_drive, 1)
 
 old_moment_anchor = """        float engineReaction = -0.0065f * powertrain.getEngineAlpha();
         totalMomentWorld.x += right.x * engineReaction;
@@ -83,9 +111,10 @@ new_moment_anchor = """        float engineReaction = -0.0065f * powertrain.getE
 
             if (rearGrounded() && pitch() > ASSIST_WHEELIE_ONSET) {
                 // Positive body-X torque pitches the nose down in this coordinate system.
+                float noseUpRate = Math.max(0f, -pitchRate());
                 float wheelieTorque = ASSIST_WHEELIE_KP
                         * (pitch() - ASSIST_WHEELIE_TARGET)
-                        + ASSIST_WHEELIE_KD * Math.max(0f, -pitchRate());
+                        + ASSIST_WHEELIE_KD * noseUpRate;
                 wheelieTorque = clamp(
                         wheelieTorque,
                         0f,
