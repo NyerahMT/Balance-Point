@@ -11,3 +11,17 @@ captures/
 .externalNativeBuild/
 .cxx/
 .github/balancepoint-debug.keystore
+
+# Unreal generated state
+unreal/.vs/
+unreal/Binaries/
+unreal/DerivedDataCache/
+unreal/Intermediate/
+unreal/Saved/
+unreal/Plugins/*/Binaries/
+unreal/Plugins/*/Intermediate/
+
+# Locally built Project Chrono installs/work trees
+unreal/Plugins/BalancePointChrono/ThirdParty/Chrono/
+unreal/.chrono-build/
+unreal/.chrono-ios-build/
