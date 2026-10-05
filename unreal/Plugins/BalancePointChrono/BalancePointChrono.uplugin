@@ -1,0 +1,18 @@
+{
+  "FileVersion": 3,
+  "Version": 1,
+  "VersionName": "0.1.0",
+  "FriendlyName": "Balance Point Chrono",
+  "Description": "Project Chrono-backed motorcycle dynamics for Balance Point.",
+  "Category": "Physics",
+  "CreatedBy": "NyerahWorks",
+  "CanContainContent": false,
+  "IsBetaVersion": true,
+  "Modules": [
+    {
+      "Name": "BalancePointChrono",
+      "Type": "Runtime",
+      "LoadingPhase": "Default"
+    }
+  ]
+}

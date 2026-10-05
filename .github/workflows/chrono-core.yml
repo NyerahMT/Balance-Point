@@ -1,0 +1,51 @@
+name: Chrono Core
+
+on:
+  push:
+    paths:
+      - 'unreal/**'
+      - '.github/workflows/chrono-core.yml'
+  workflow_dispatch:
+
+jobs:
+  headless-chrono-bike:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y ninja-build libeigen3-dev
+      - name: Fetch Chrono 10.0.0
+        run: |
+          git clone --depth 1 --branch 10.0.0 https://github.com/projectchrono/chrono.git "$RUNNER_TEMP/chrono"
+          git -C "$RUNNER_TEMP/chrono" submodule update --init --recursive --depth 1
+      - name: Build minimal static Chrono
+        run: |
+          cmake -S "$RUNNER_TEMP/chrono" -B "$RUNNER_TEMP/chrono-build" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/chrono-install" \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DBUILD_DEMOS=OFF \
+            -DBUILD_TESTING=OFF \
+            -DBUILD_BENCHMARKING=OFF \
+            -DCH_ENABLE_MODULE_VEHICLE=OFF \
+            -DCH_ENABLE_MODULE_IRRLICHT=OFF \
+            -DCH_ENABLE_MODULE_VSG=OFF \
+            -DCH_ENABLE_MODULE_SENSOR=OFF \
+            -DCH_ENABLE_MODULE_MULTICORE=OFF \
+            -DEigen3_DIR=/usr/share/eigen3/cmake
+          cmake --build "$RUNNER_TEMP/chrono-build" --target install --parallel 2
+      - name: Locate Chrono CMake package
+        id: chrono
+        shell: bash
+        run: |
+          CONFIG=$(find "$RUNNER_TEMP/chrono-install" -iname 'ChronoConfig.cmake' -o -iname 'chrono-config.cmake' | head -n 1)
+          test -n "$CONFIG"
+          echo "dir=$(dirname "$CONFIG")" >> "$GITHUB_OUTPUT"
+      - name: Build Balance Point Chrono harness
+        run: |
+          cmake -S unreal/Plugins/BalancePointChrono/Tests -B "$RUNNER_TEMP/bp-build" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DChrono_DIR="${{ steps.chrono.outputs.dir }}"
+          cmake --build "$RUNNER_TEMP/bp-build" --parallel 2
+      - name: Run multibody smoke test
+        run: "$RUNNER_TEMP/bp-build/bp_chrono_smoke"
