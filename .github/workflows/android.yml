@@ -3,8 +3,16 @@ name: Mobile Builds
 on:
   push:
     branches: [ main ]
+    paths-ignore:
+      - 'unreal/**'
+      - '.github/workflows/chrono-core.yml'
+      - 'docs/UNREAL_CHRONO_MIGRATION.md'
   pull_request:
     branches: [ main ]
+    paths-ignore:
+      - 'unreal/**'
+      - '.github/workflows/chrono-core.yml'
+      - 'docs/UNREAL_CHRONO_MIGRATION.md'
   workflow_dispatch:
 
 permissions:
