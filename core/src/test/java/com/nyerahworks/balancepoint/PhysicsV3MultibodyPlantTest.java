@@ -80,7 +80,18 @@ public final class PhysicsV3MultibodyPlantTest {
         plant.input().throttle = 0.55f;
         run(plant, terrain, 3f);
         plant.input().steer = 0.45f;
-        run(plant, terrain, 2.5f);
+        for (int i = 0; i < 300; i++) {
+            plant.step(terrain, DT);
+            if ((i + 1) % 60 == 0) {
+                System.out.println("LONG_TURN_DIAG t=" + (i + 1) * DT
+                        + " speed=" + plant.speed() + " roll=" + plant.roll()
+                        + " rollRate=" + plant.rollRate()
+                        + " steer=" + plant.steerAngle()
+                        + " yaw=" + plant.yaw() + " yawRate=" + plant.yawRate()
+                        + " frontFz=" + plant.telemetry().frontFz
+                        + " rearFz=" + plant.telemetry().rearFz);
+            }
+        }
 
         assertTrue("roll=" + plant.roll(), plant.roll() < -0.015f);
         assertTrue("roll=" + plant.roll(), plant.roll() > -0.95f);
