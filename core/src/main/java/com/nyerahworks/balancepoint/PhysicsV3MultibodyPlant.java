@@ -92,13 +92,13 @@ final class PhysicsV3MultibodyPlant {
     // Player input is turn intent. Above walking speed the bars countersteer to
     // create lean, then hold the bicycle-model steer for the lean that exists.
     private static final float STEER_SERVO_KP = 34f;
-    private static final float STEER_SERVO_KD = 9f;
-    private static final float STEER_ALIGNING_GAIN = 0.10f;
+    private static final float STEER_SERVO_KD = 12f;
+    private static final float STEER_ALIGNING_GAIN = 0.05f;
     private static final float MAX_STEER_TORQUE = 18f;
     private static final float MAX_STEER_ANGLE = radians(32f);
     private static final float MAX_TARGET_LEAN = radians(32f);
-    private static final float COUNTERSTEER_KP = 0.56f;
-    private static final float COUNTERSTEER_KD = 0.38f;
+    private static final float COUNTERSTEER_KP = 0.68f;
+    private static final float COUNTERSTEER_KD = 0.15f;
     private static final float MAX_COUNTERSTEER = radians(3.5f);
 
     // Upright assist only while the tires cannot yet balance the bike. An external
@@ -426,10 +426,15 @@ final class PhysicsV3MultibodyPlant {
             // That contact-patch force is what rolls the chassis. Into-the-turn steer
             // is only the steady term, taken from the lean that already exists.
             float rollError = roll() - targetRoll;
+            // The same 3.5-degree countersteer command has far more authority
+            // at 45 mph than at 10 mph. Avoid exciting a high-speed weave by
+            // tapering its angle/rate feedback with increasing road speed.
+            float speedAuthority = clamp(8f / Math.max(speed, 8f), 0.28f, 1f);
             float countersteer = clamp(
-                    -COUNTERSTEER_KP * rollError - COUNTERSTEER_KD * rollRate(),
-                    -MAX_COUNTERSTEER,
-                    MAX_COUNTERSTEER);
+                    (-COUNTERSTEER_KP * rollError
+                            - COUNTERSTEER_KD * rollRate()) * speedAuthority,
+                    -MAX_COUNTERSTEER * speedAuthority,
+                    MAX_COUNTERSTEER * speedAuthority);
             float speedSq = Math.max(speed * speed, 16f);
             float steadySteer = -(float) Math.atan(
                     WHEELBASE * G * (float) Math.tan(roll()) / speedSq);

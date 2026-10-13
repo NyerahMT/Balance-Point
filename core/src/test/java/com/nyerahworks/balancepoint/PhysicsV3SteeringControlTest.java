@@ -94,6 +94,7 @@ public final class PhysicsV3SteeringControlTest {
         float lateMax = 0f;
         float lateYawRate = 0f;
         float lateRollRate = 0f;
+        float lateRoll = 0f;
         int lateSteerReversals = 0;
         int lastSign = 0;
         for (int i = 0; i < 960; i++) {
@@ -104,6 +105,7 @@ public final class PhysicsV3SteeringControlTest {
                 lateMax = Math.max(lateMax, Math.abs(steer));
                 lateYawRate = Math.max(lateYawRate, Math.abs(bike.yawRate()));
                 lateRollRate = Math.max(lateRollRate, Math.abs(bike.rollRate()));
+                lateRoll = Math.max(lateRoll, Math.abs(bike.roll()));
                 int sign = steer > 0.025f ? 1 : (steer < -0.025f ? -1 : 0);
                 if (sign != 0 && lastSign != 0 && sign != lastSign) lateSteerReversals++;
                 if (sign != 0) lastSign = sign;
@@ -114,7 +116,7 @@ public final class PhysicsV3SteeringControlTest {
                 + " firstSteer=" + firstSteer + " oppositePeak=" + peakNegative
                 + " earlySteer=" + earlyMax + " lateSteer=" + lateMax
                 + " lateYawRate=" + lateYawRate + " lateRollRate=" + lateRollRate
-                + " lateReversals=" + lateSteerReversals);
+                + " lateRoll=" + lateRoll + " lateReversals=" + lateSteerReversals);
         assertTrue("wrong sustained turn direction: " + heldYawChange,
                 heldYawChange > 0.01f);
         assertTrue("post-release steer weave " + lateMax, lateMax < 0.12f);
