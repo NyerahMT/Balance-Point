@@ -77,6 +77,7 @@ public final class PhysicsV3MultibodyPlantTest {
         TestTerrain terrain = new TestTerrain();
         PhysicsV3MultibodyPlant plant = new PhysicsV3MultibodyPlant();
         plant.reset(terrain);
+        plant.setStabilizationScale(0.20f);
         plant.input().throttle = 0.55f;
         run(plant, terrain, 3f);
         plant.input().steer = 0.45f;

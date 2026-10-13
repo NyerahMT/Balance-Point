@@ -74,6 +74,7 @@ public final class PhysicsV3SteeringControlTest {
         FlatTerrain terrain = new FlatTerrain();
         PhysicsV3MultibodyPlant bike = new PhysicsV3MultibodyPlant();
         bike.reset(terrain);
+        bike.setStabilizationScale(0.20f);
         bike.input().throttle = 0.75f;
         for (int i = 0; i < 600; i++) bike.step(terrain, DT);
 
