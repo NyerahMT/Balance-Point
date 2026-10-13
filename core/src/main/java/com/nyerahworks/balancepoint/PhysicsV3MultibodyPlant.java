@@ -97,9 +97,12 @@ final class PhysicsV3MultibodyPlant {
     private static final float MAX_STEER_TORQUE = 18f;
     private static final float MAX_STEER_ANGLE = radians(32f);
     private static final float MAX_TARGET_LEAN = radians(32f);
-    private static final float COUNTERSTEER_KP = 0.68f;
-    private static final float COUNTERSTEER_KD = 0.15f;
+    // Countersteer is a transient reaction to *changing* turn intent, not
+    // a perpetual demand to steer the wheel away from the corner.
+    private static final float COUNTERSTEER_KP = 0.04f;
+    private static final float COUNTERSTEER_KD = 0.015f;
     private static final float MAX_COUNTERSTEER = radians(3.5f);
+    private static final float COUNTERSTEER_PULSE_TIME = 0.24f;
 
     // Upright assist only while the tires cannot yet balance the bike. An external
     // roll moment at speed has to be cancelled by lateral force and saturates the
@@ -160,6 +163,8 @@ final class PhysicsV3MultibodyPlant {
     // Generalized coordinates.
     private float steerAngle;
     private float steerRate;
+    private float previousTurnIntent;
+    private float countersteerPulse;
     private float frontSuspension;
     private float frontSuspensionRate;
     private float rearSuspension;
@@ -208,6 +213,7 @@ final class PhysicsV3MultibodyPlant {
         qw = 1f;
         wx = wy = wz = 0f;
         steerAngle = steerRate = 0f;
+        previousTurnIntent = countersteerPulse = 0f;
         frontSuspension = frontSuspensionRate = 0f;
         rearSuspension = rearSuspensionRate = 0f;
         frontWheelOmega = rearWheelOmega = 0f;
@@ -426,18 +432,28 @@ final class PhysicsV3MultibodyPlant {
             // That contact-patch force is what rolls the chassis. Into-the-turn steer
             // is only the steady term, taken from the lean that already exists.
             float rollError = roll() - targetRoll;
-            // The same 3.5-degree countersteer command has far more authority
-            // at 45 mph than at 10 mph. Avoid exciting a high-speed weave by
-            // tapering its angle/rate feedback with increasing road speed.
+            // Direction changes briefly countersteer to initiate/recover lean.
+            // Continuous target-roll chasing left the wheel countersteered for
+            // the entire right turn and excited a post-turn weave at speed.
+            float change = command - previousTurnIntent;
+            previousTurnIntent = command;
+            countersteerPulse = clamp(countersteerPulse + change, -1f, 1f);
+            countersteerPulse *= (float)Math.exp(
+                    -dt / COUNTERSTEER_PULSE_TIME);
+
             float speedAuthority = clamp(8f / Math.max(speed, 8f), 0.28f, 1f);
             float countersteer = clamp(
-                    (-COUNTERSTEER_KP * rollError
-                            - COUNTERSTEER_KD * rollRate()) * speedAuthority,
+                    (-MAX_COUNTERSTEER * countersteerPulse
+                            -COUNTERSTEER_KP * rollError
+                            -COUNTERSTEER_KD * rollRate()) * speedAuthority,
                     -MAX_COUNTERSTEER * speedAuthority,
                     MAX_COUNTERSTEER * speedAuthority);
             float speedSq = Math.max(speed * speed, 16f);
+            // Follow actual lean for equilibrium, with a small physical
+            // bar-steering feedforward while the player holds a direction.
             float steadySteer = -(float) Math.atan(
-                    WHEELBASE * G * (float) Math.tan(roll()) / speedSq);
+                    WHEELBASE * G * (float) Math.tan(roll()) / speedSq)
+                    + command * radians(0.75f) * speedAuthority;
 
             float lowSpeed = 1f - smoothstep(0.8f, 3.0f, speed);
             float desiredSteer = clamp(
@@ -449,7 +465,11 @@ final class PhysicsV3MultibodyPlant {
             controllerTorque = STEER_SERVO_KP * (desiredSteer - steerAngle)
                     - STEER_SERVO_KD * steerRate;
         } else {
-            // Airborne behavior intentionally unchanged: no steering recenter servo.
+            // An airborne fork cannot correct chassis lean by tire contact.
+            // Decay pending turn-in input and retain only physical bar damping.
+            countersteerPulse *= (float)Math.exp(
+                    -dt / COUNTERSTEER_PULSE_TIME);
+            previousTurnIntent = clamp(input.steer, -1f, 1f);
             controllerTorque = -2.2f * steerRate;
         }
 
