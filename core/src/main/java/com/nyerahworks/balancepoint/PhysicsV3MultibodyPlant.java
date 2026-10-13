@@ -107,7 +107,7 @@ final class PhysicsV3MultibodyPlant {
     private static final float LOW_SPEED_BALANCE_KP = 160f;
     private static final float LOW_SPEED_BALANCE_KD = 85f;
     private static final float MAX_LOW_SPEED_BALANCE = 140f;
- 
+
     // Grounded anti-loop catch. It is deliberately above the geometric balance
     // point and contributes nothing when the rear contact is gone.
     private static final float WHEELIE_CATCH_OFFSET = radians(5f);
