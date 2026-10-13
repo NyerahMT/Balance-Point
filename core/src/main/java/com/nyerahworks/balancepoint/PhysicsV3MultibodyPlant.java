@@ -101,7 +101,7 @@ final class PhysicsV3MultibodyPlant {
     // a perpetual demand to steer the wheel away from the corner.
     private static final float COUNTERSTEER_KP = 0.04f;
     private static final float COUNTERSTEER_KD = 0.015f;
-    private static final float MAX_COUNTERSTEER = radians(6f);
+    private static final float MAX_COUNTERSTEER = radians(7.5f);
     private static final float COUNTERSTEER_PULSE_TIME = 0.24f;
 
     // Upright assist only while the tires cannot yet balance the bike. An external
@@ -469,11 +469,11 @@ final class PhysicsV3MultibodyPlant {
                     -MAX_COUNTERSTEER * speedAuthority,
                     MAX_COUNTERSTEER * speedAuthority);
             float speedSq = Math.max(speed * speed, 16f);
-            // Follow actual lean for equilibrium, with a small physical
-            // bar-steering feedforward while the player holds a direction.
+            // At speed the inside-corner bar angle follows real chassis lean.
+            // An extra into-turn command caused the motorcycle to roll past
+            // upright and lean outward on long, steady turns.
             float steadySteer = -(float) Math.atan(
-                    WHEELBASE * G * (float) Math.tan(roll()) / speedSq)
-                    + command * radians(0.75f) * speedAuthority;
+                    WHEELBASE * G * (float) Math.tan(roll()) / speedSq);
 
             float lowSpeed = 1f - smoothstep(0.8f, 3.0f, speed);
             float desiredSteer = clamp(
