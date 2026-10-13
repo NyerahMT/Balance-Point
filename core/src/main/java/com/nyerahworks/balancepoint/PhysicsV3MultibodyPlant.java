@@ -1,5 +1,7 @@
 package com.nyerahworks.balancepoint;
 
+import com.badlogic.gdx.math.Quaternion;
+
 /**
  * Physics V3 motorcycle plant.
  *
@@ -122,6 +124,10 @@ final class PhysicsV3MultibodyPlant {
     private static final float ROLLING_COEFF = 0.017f;
     private static final float AERO_COEFF = 0.34f;
     private static final float MAX_INTERNAL_DT = 1f / 960f;
+
+    // Diagnostic scale for direct stabilizing moments (0 = pure contact/chassis,
+    // 1 = current assisted mobile behavior). It does not alter tire friction.
+    private float stabilizationScale = 1f;
 
     private final Input input = new Input();
     private final Telemetry telemetry = new Telemetry();
@@ -356,8 +362,10 @@ final class PhysicsV3MultibodyPlant {
                     MAX_LOW_SPEED_BALANCE) * balanceFade;
             // Rate-only damper stays on at speed so a pickup does not flop through upright.
             rollMoment += clamp(-42f * rollRate(), -90f, 90f);
-            addAxisMoment(totalMomentWorld, forward, rollMoment);
-            addAxisMoment(totalMomentWorld, up, -YAW_DAMPING * yawRate());
+            addAxisMoment(totalMomentWorld, forward,
+                    rollMoment * stabilizationScale);
+            addAxisMoment(totalMomentWorld, up,
+                    -YAW_DAMPING * yawRate() * stabilizationScale);
         }
 
         if (rearGrounded()) {
@@ -371,7 +379,8 @@ final class PhysicsV3MultibodyPlant {
                         + WHEELIE_CATCH_KD * Math.max(0f, pitchRate() - 0.8f);
                 catchTorque = clamp(catchTorque, 0f, MAX_WHEELIE_CATCH);
                 // Positive body-X is nose-down.
-                addAxisMoment(totalMomentWorld, right, catchTorque);
+                addAxisMoment(totalMomentWorld, right,
+                        catchTorque * stabilizationScale);
             }
         }
 
@@ -404,10 +413,11 @@ final class PhysicsV3MultibodyPlant {
 
     private void updateSteering(float speedForward, float dt) {
         float speed = Math.abs(speedForward);
-        boolean anyGround = rearGrounded() || frontGrounded();
+        // Countersteering needs a loaded front contact patch. During wheelies
+        // the airborne bar may rotate, but cannot magically roll the chassis.
         float controllerTorque;
 
-        if (anyGround) {
+        if (frontGrounded()) {
             float command = clamp(input.steer, -1f, 1f);
             float authority = smoothstep(1.2f, 5.5f, speed);
             float targetRoll = -command * MAX_TARGET_LEAN * authority;
@@ -556,6 +566,24 @@ final class PhysicsV3MultibodyPlant {
         }
         c.normalForce = normalForce;
 
+        // The tilted wheel axis carries camber information, but contact shear
+        // must live in the terrain tangent plane. Otherwise a leaned tire's
+        // lateral force injects a spurious vertical force and roll/yaw torque.
+        c.gamma = -(float)Math.asin(
+                clamp(c.wheelRight.dot(c.normal), -1f, 1f));
+        float normalForward = c.wheelForward.dot(c.normal);
+        c.wheelForward.set(
+                c.wheelForward.x - c.normal.x * normalForward,
+                c.wheelForward.y - c.normal.y * normalForward,
+                c.wheelForward.z - c.normal.z * normalForward);
+        if (c.wheelForward.dot(c.wheelForward) < 1e-8f) {
+            // Recover a tangent direction when the wheel is near vertical
+            // to the ground plane instead of normalizing a zero vector.
+            cross(c.wheelRight, c.normal, c.wheelForward);
+        }
+        c.wheelForward.nor();
+        cross(c.normal, c.wheelForward, c.wheelRight).nor();
+
         float longSpeed = c.centerVelocity.dot(c.wheelForward);
         float lateralSpeed = c.centerVelocity.dot(c.wheelRight);
         float wheelOmega = front ? frontWheelOmega : rearWheelOmega;
@@ -564,8 +592,6 @@ final class PhysicsV3MultibodyPlant {
         c.alpha = (float)Math.atan2(
                 -lateralSpeed,
                 Math.max(Math.abs(longSpeed), 1f));
-        c.gamma = -(float)Math.asin(clamp(c.wheelRight.dot(c.normal), -1f, 1f));
-
         PhysicsV3PacejkaTire.State state = front ? frontTireState : rearTireState;
         PhysicsV3PacejkaTire.Force force = front ? frontTireForce : rearTireForce;
         PhysicsV3PacejkaTire.step(
@@ -651,6 +677,28 @@ final class PhysicsV3MultibodyPlant {
 
     boolean shiftDown() {
         return powertrain.shiftDown(rearWheelOmega);
+    }
+
+    void orientation(Quaternion out) {
+        out.set(qx, qy, qz, qw);
+    }
+
+    void setStabilizationScale(float scale) {
+        stabilizationScale = Float.isFinite(scale)
+                ? clamp(scale, 0f, 1f) : 1f;
+    }
+
+    float stabilizationScale() {
+        return stabilizationScale;
+    }
+
+    // Regression telemetry: tires must apply only tangent-plane shear.
+    float maximumTireTangencyError() {
+        return Math.max(
+                Math.max(Math.abs(frontContact.wheelForward.dot(frontContact.normal)),
+                        Math.abs(frontContact.wheelRight.dot(frontContact.normal))),
+                Math.max(Math.abs(rearContact.wheelForward.dot(rearContact.normal)),
+                        Math.abs(rearContact.wheelRight.dot(rearContact.normal))));
     }
 
     float x() {

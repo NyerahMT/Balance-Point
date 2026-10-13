@@ -19,6 +19,7 @@ import com.badlogic.gdx.graphics.g3d.utils.DepthShaderProvider;
 import com.badlogic.gdx.graphics.g3d.utils.ModelBuilder;
 import com.badlogic.gdx.math.MathUtils;
 import com.badlogic.gdx.math.Matrix4;
+import com.badlogic.gdx.math.Quaternion;
 import com.badlogic.gdx.math.Vector3;
 import com.badlogic.gdx.utils.Array;
 
@@ -33,6 +34,9 @@ final class GameScene {
         float roll;
         float yaw;
         float terrainRoll;
+        // Exact body orientation from Physics V3; presentation never feeds it back.
+        final Quaternion orientation = new Quaternion();
+        float steerAngle;
         float wheelSpin;
         float speed;
         float steer;
@@ -61,6 +65,7 @@ final class GameScene {
     private final Array<Model> ownedModels = new Array<>();
     private final Matrix4 bikeRoot = new Matrix4();
     private final Vector3 tempA = new Vector3();
+    private final Vector3 rearOffset = new Vector3();
     private final Vector3 shadowFocus = new Vector3();
 
     private final ModelBatch modelBatch = new ModelBatch();
@@ -352,38 +357,48 @@ final class GameScene {
     }
 
     float updateBike(BikeState state) {
-        float pitchDeg = state.pitch * MathUtils.radiansToDegrees;
-        float rollDeg = state.roll * MathUtils.radiansToDegrees;
-        float yawDeg = state.yaw * MathUtils.radiansToDegrees;
-
-        float sinYaw = MathUtils.sin(state.yaw);
-        float cosYaw = MathUtils.cos(state.yaw);
-        float sinPitch = MathUtils.sin(state.pitch);
-        float cosPitch = MathUtils.cos(state.pitch);
         float visualComForward = state.effectiveComForward > 0f
                 ? state.effectiveComForward : comForward;
-        float rearForward = -visualComForward * cosPitch + comHeight * sinPitch;
-        float rearVertical = -visualComForward * sinPitch - comHeight * cosPitch;
-        float rootX = state.bikeX + sinYaw * rearForward;
-        float rootZ = state.bikeZ + cosYaw * rearForward;
-        float rootHeight = state.chassisY + rearVertical;
-        float bikeY = rootHeight;
+        float rootX;
+        float rootZ;
+        float rootHeight;
 
-        float terrainRollDeg = state.terrainRoll * MathUtils.radiansToDegrees;
-
-        if (state.crashed && state.crashSettled) {
-            float rearTerrainHeight = terrainVisuals != null
-                    ? terrainVisuals.groundHeight(rootX, rootZ) : 0f;
-            rootHeight = rearTerrainHeight + 0.22f;
+        if (!state.crashed) {
+            // A full physics quaternion is essential: independent yaw/roll/pitch
+            // Euler reconstruction rotates a leaned bike about the wrong axes.
+            // The same orientation positions the rear axle relative to the CG.
+            BikePoseTransform.setFromPhysics(
+                    bikeRoot, rearOffset,
+                    state.bikeX, state.chassisY, state.bikeZ,
+                    visualComForward, comHeight, state.orientation);
+            rootX = state.bikeX + rearOffset.x;
+            rootZ = state.bikeZ + rearOffset.z;
+            rootHeight = state.chassisY + rearOffset.y;
+        } else {
+            // Crash animation temporarily owns attitude, but yaw still follows
+            // the same positive-to-+X convention as the physical heading.
+            float sinYaw = MathUtils.sin(state.yaw);
+            float cosYaw = MathUtils.cos(state.yaw);
+            float sinPitch = MathUtils.sin(state.pitch);
+            float cosPitch = MathUtils.cos(state.pitch);
+            float rearForward = -visualComForward * cosPitch + comHeight * sinPitch;
+            float rearVertical = -visualComForward * sinPitch - comHeight * cosPitch;
+            rootX = state.bikeX + sinYaw * rearForward;
+            rootZ = state.bikeZ + cosYaw * rearForward;
+            rootHeight = state.chassisY + rearVertical;
+            if (state.crashSettled) {
+                float rearTerrainHeight = terrainVisuals != null
+                        ? terrainVisuals.groundHeight(rootX, rootZ) : 0f;
+                rootHeight = rearTerrainHeight + 0.22f;
+            }
+            bikeRoot.idt().translate(rootX, rootHeight, rootZ)
+                    .rotate(Vector3.Y, state.yaw * MathUtils.radiansToDegrees)
+                    .rotate(Vector3.Z, (state.roll + state.terrainRoll)
+                            * MathUtils.radiansToDegrees)
+                    .rotate(Vector3.X, -state.pitch * MathUtils.radiansToDegrees);
         }
 
-        bikeRoot.idt().translate(rootX, rootHeight, rootZ)
-                // Physics yaw is atan2(forward.x, forward.z): positive heads +X.
-                // libGDX +Y rotation heads -X, so the model has to take the opposite angle
-                // or the bike faces and leans backwards relative to the stick.
-                .rotate(Vector3.Y, -yawDeg)
-                .rotate(Vector3.Z, rollDeg + terrainRollDeg)
-                .rotate(Vector3.X, -pitchDeg);
+        float bikeY = rootHeight;
 
         float spinDeg = -state.wheelSpin * MathUtils.radiansToDegrees;
         setWheel(rearWheel, 0f, 0f, 0f, spinDeg);

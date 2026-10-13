@@ -797,6 +797,10 @@ public final class BalancePointGame extends ApplicationAdapter {
         state.roll = roll;
         state.yaw = yaw;
         state.terrainRoll = terrainRoll;
+        // The render transform and fork rig must consume the simulated pose,
+        // not synthetic lean/steer angles inferred from controller input.
+        physicsV3.orientation(state.orientation);
+        state.steerAngle = physicsV3.steerAngle();
         state.wheelSpin = wheelSpin;
         state.speed = speed;
         state.steer = steer;

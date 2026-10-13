@@ -190,6 +190,37 @@ public final class PhysicsV3MultibodyPlantTest {
                 Math.abs(a.roll() - b.roll()) < 0.20f);
     }
 
+    @Test
+    public void tireContactAxesRemainTangentOnUnevenTerrain() {
+        TestTerrain terrain = new TestTerrain();
+        terrain.waves = true;
+        PhysicsV3MultibodyPlant plant = new PhysicsV3MultibodyPlant();
+        plant.reset(terrain);
+        plant.input().throttle = 0.45f;
+        plant.input().steer = 0.2f;
+        for (int i = 0; i < 600; i++) {
+            plant.step(terrain, DT);
+            assertTrue("tangent error=" + plant.maximumTireTangencyError(),
+                    plant.maximumTireTangencyError() < 0.0001f);
+        }
+    }
+
+    @Test
+    public void disabledStabilizersDoNotChangeTireModelOrOrientationValidity() {
+        TestTerrain terrain = new TestTerrain();
+        PhysicsV3MultibodyPlant plant = new PhysicsV3MultibodyPlant();
+        plant.setStabilizationScale(0f);
+        assertEquals(0f, plant.stabilizationScale(), 0f);
+        plant.reset(terrain);
+        plant.input().throttle = 0.38f;
+        run(plant, terrain, 1.5f);
+        assertTrue(Float.isFinite(plant.yaw()));
+        assertTrue(Float.isFinite(plant.roll()));
+        assertTrue(plant.telemetry().rearUtilization <= 1.0001f);
+        plant.setStabilizationScale(1f);
+        assertEquals(1f, plant.stabilizationScale(), 0f);
+    }
+
     private static void run(PhysicsV3MultibodyPlant plant,
                             TestTerrain terrain, float seconds) {
         int steps = Math.round(seconds / DT);
