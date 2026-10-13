@@ -77,10 +77,22 @@ public final class PhysicsV3MultibodyPlantTest {
         TestTerrain terrain = new TestTerrain();
         PhysicsV3MultibodyPlant plant = new PhysicsV3MultibodyPlant();
         plant.reset(terrain);
+        plant.setStabilizationScale(0.20f);
         plant.input().throttle = 0.55f;
         run(plant, terrain, 3f);
         plant.input().steer = 0.45f;
-        run(plant, terrain, 2.5f);
+        for (int i = 0; i < 300; i++) {
+            plant.step(terrain, DT);
+            if ((i + 1) % 60 == 0) {
+                System.out.println("LONG_TURN_DIAG t=" + (i + 1) * DT
+                        + " speed=" + plant.speed() + " roll=" + plant.roll()
+                        + " rollRate=" + plant.rollRate()
+                        + " steer=" + plant.steerAngle()
+                        + " yaw=" + plant.yaw() + " yawRate=" + plant.yawRate()
+                        + " frontFz=" + plant.telemetry().frontFz
+                        + " rearFz=" + plant.telemetry().rearFz);
+            }
+        }
 
         assertTrue("roll=" + plant.roll(), plant.roll() < -0.015f);
         assertTrue("roll=" + plant.roll(), plant.roll() > -0.95f);
@@ -188,6 +200,37 @@ public final class PhysicsV3MultibodyPlantTest {
                 Math.abs(a.pitch() - b.pitch()) < 0.18f);
         assertTrue("roll delta=" + Math.abs(a.roll() - b.roll()),
                 Math.abs(a.roll() - b.roll()) < 0.20f);
+    }
+
+    @Test
+    public void tireContactAxesRemainTangentOnUnevenTerrain() {
+        TestTerrain terrain = new TestTerrain();
+        terrain.waves = true;
+        PhysicsV3MultibodyPlant plant = new PhysicsV3MultibodyPlant();
+        plant.reset(terrain);
+        plant.input().throttle = 0.45f;
+        plant.input().steer = 0.2f;
+        for (int i = 0; i < 600; i++) {
+            plant.step(terrain, DT);
+            assertTrue("tangent error=" + plant.maximumTireTangencyError(),
+                    plant.maximumTireTangencyError() < 0.0001f);
+        }
+    }
+
+    @Test
+    public void disabledStabilizersDoNotChangeTireModelOrOrientationValidity() {
+        TestTerrain terrain = new TestTerrain();
+        PhysicsV3MultibodyPlant plant = new PhysicsV3MultibodyPlant();
+        plant.setStabilizationScale(0f);
+        assertEquals(0f, plant.stabilizationScale(), 0f);
+        plant.reset(terrain);
+        plant.input().throttle = 0.38f;
+        run(plant, terrain, 1.5f);
+        assertTrue(Float.isFinite(plant.yaw()));
+        assertTrue(Float.isFinite(plant.roll()));
+        assertTrue(plant.telemetry().rearUtilization <= 1.0001f);
+        plant.setStabilizationScale(1f);
+        assertEquals(1f, plant.stabilizationScale(), 0f);
     }
 
     private static void run(PhysicsV3MultibodyPlant plant,

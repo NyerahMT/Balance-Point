@@ -1,5 +1,7 @@
 package com.nyerahworks.balancepoint;
 
+import com.badlogic.gdx.math.Quaternion;
+
 /**
  * Physics V3 motorcycle plant.
  *
@@ -89,15 +91,18 @@ final class PhysicsV3MultibodyPlant {
     private static final float STEER_INERTIA = 0.24f;
     // Player input is turn intent. Above walking speed the bars countersteer to
     // create lean, then hold the bicycle-model steer for the lean that exists.
-    private static final float STEER_SERVO_KP = 46f;
-    private static final float STEER_SERVO_KD = 15f;
-    private static final float STEER_ALIGNING_GAIN = 0.25f;
-    private static final float MAX_STEER_TORQUE = 26f;
+    private static final float STEER_SERVO_KP = 34f;
+    private static final float STEER_SERVO_KD = 12f;
+    private static final float STEER_ALIGNING_GAIN = 0.05f;
+    private static final float MAX_STEER_TORQUE = 18f;
     private static final float MAX_STEER_ANGLE = radians(32f);
-    private static final float MAX_TARGET_LEAN = radians(36f);
-    private static final float COUNTERSTEER_KP = 0.85f;
-    private static final float COUNTERSTEER_KD = 0.95f;
-    private static final float MAX_COUNTERSTEER = radians(6f);
+    private static final float MAX_TARGET_LEAN = radians(32f);
+    // Countersteer is a transient reaction to *changing* turn intent, not
+    // a perpetual demand to steer the wheel away from the corner.
+    private static final float COUNTERSTEER_KP = 0.04f;
+    private static final float COUNTERSTEER_KD = 0.16f;
+    private static final float MAX_COUNTERSTEER = radians(7.5f);
+    private static final float COUNTERSTEER_PULSE_TIME = 0.24f;
 
     // Upright assist only while the tires cannot yet balance the bike. An external
     // roll moment at speed has to be cancelled by lateral force and saturates the
@@ -105,7 +110,6 @@ final class PhysicsV3MultibodyPlant {
     private static final float LOW_SPEED_BALANCE_KP = 160f;
     private static final float LOW_SPEED_BALANCE_KD = 85f;
     private static final float MAX_LOW_SPEED_BALANCE = 140f;
-    private static final float YAW_DAMPING = 4f;
 
     // Grounded anti-loop catch. It is deliberately above the geometric balance
     // point and contributes nothing when the rear contact is gone.
@@ -118,10 +122,19 @@ final class PhysicsV3MultibodyPlant {
     private static final float RIDER_KP = 46f;
     private static final float RIDER_KD = 13f;
     private static final float RIDER_HEIGHT_ABOVE_CG = 0.24f;
+    // Rider shifts laterally inside the chassis. The COM changes tire
+    // contact moment arms instead of applying a magic chassis lean torque.
+    private static final float RIDER_LATERAL_TRAVEL = 0.12f;
+    private static final float RIDER_LATERAL_KP = 25f;
+    private static final float RIDER_LATERAL_KD = 10f;
 
     private static final float ROLLING_COEFF = 0.017f;
     private static final float AERO_COEFF = 0.34f;
     private static final float MAX_INTERNAL_DT = 1f / 960f;
+
+    // Diagnostic scale for direct stabilizing moments (0 = pure contact/chassis,
+    // 1 = current assisted mobile behavior). It does not alter tire friction.
+    private float stabilizationScale = 1f;
 
     private final Input input = new Input();
     private final Telemetry telemetry = new Telemetry();
@@ -155,6 +168,8 @@ final class PhysicsV3MultibodyPlant {
     // Generalized coordinates.
     private float steerAngle;
     private float steerRate;
+    private float previousTurnIntent;
+    private float countersteerPulse;
     private float frontSuspension;
     private float frontSuspensionRate;
     private float rearSuspension;
@@ -165,6 +180,8 @@ final class PhysicsV3MultibodyPlant {
     private float rearWheelSpin;
     private float riderX;
     private float riderXRate;
+    private float riderLateral;
+    private float riderLateralRate;
 
     private final Vec right = new Vec();
     private final Vec up = new Vec();
@@ -203,11 +220,13 @@ final class PhysicsV3MultibodyPlant {
         qw = 1f;
         wx = wy = wz = 0f;
         steerAngle = steerRate = 0f;
+        previousTurnIntent = countersteerPulse = 0f;
         frontSuspension = frontSuspensionRate = 0f;
         rearSuspension = rearSuspensionRate = 0f;
         frontWheelOmega = rearWheelOmega = 0f;
         frontWheelSpin = rearWheelSpin = 0f;
         riderX = riderXRate = 0f;
+        riderLateral = riderLateralRate = 0f;
         rearTireState.reset();
         frontTireState.reset();
         powertrain.reset();
@@ -245,12 +264,23 @@ final class PhysicsV3MultibodyPlant {
 
         float riderCgShift = RIDER_MASS / TOTAL_MASS * riderX;
         float effectiveCgForward = BIKE_CG_FORWARD + riderCgShift;
+        float lateralTarget = clamp(input.steer, -1f, 1f)
+                * RIDER_LATERAL_TRAVEL;
+        float lateralAccel = RIDER_LATERAL_KP
+                * (lateralTarget - riderLateral)
+                - RIDER_LATERAL_KD * riderLateralRate;
+        riderLateralRate += lateralAccel * dt;
+        riderLateral += riderLateralRate * dt;
+        riderLateral = clamp(riderLateral,
+                -RIDER_LATERAL_TRAVEL, RIDER_LATERAL_TRAVEL);
+        float effectiveCgRight = RIDER_MASS / TOTAL_MASS * riderLateral;
 
         sampleContact(
                 rearContact,
                 terrain,
                 false,
                 -effectiveCgForward,
+                -effectiveCgRight,
                 rearSuspension,
                 rearSuspensionRate,
                 dt);
@@ -259,6 +289,7 @@ final class PhysicsV3MultibodyPlant {
                 terrain,
                 true,
                 WHEELBASE - effectiveCgForward,
+                -effectiveCgRight,
                 frontSuspension,
                 frontSuspensionRate,
                 dt);
@@ -336,8 +367,10 @@ final class PhysicsV3MultibodyPlant {
                 right,
                 -ENGINE_INERTIA * powertrain.getEngineAlpha());
 
-        addWheelGyroReaction(rearContact.wheelRight, rearWheelOmega, 0f);
-        addWheelGyroReaction(frontContact.wheelRight, frontWheelOmega, steerRate);
+        // Gyroscopic angular momentum follows the actual tilted axle.
+        // Contact force tangent axes are separate and cannot substitute for it.
+        addWheelGyroReaction(rearContact.wheelAxle, rearWheelOmega, 0f);
+        addWheelGyroReaction(frontContact.wheelAxle, frontWheelOmega, steerRate);
 
         // Rider fore/aft acceleration exchanges angular momentum with the frame.
         // Positive rider acceleration is forward; its reaction above the CG is
@@ -354,10 +387,10 @@ final class PhysicsV3MultibodyPlant {
                     upright,
                     -MAX_LOW_SPEED_BALANCE,
                     MAX_LOW_SPEED_BALANCE) * balanceFade;
-            // Rate-only damper stays on at speed so a pickup does not flop through upright.
-            rollMoment += clamp(-42f * rollRate(), -90f, 90f);
-            addAxisMoment(totalMomentWorld, forward, rollMoment);
-            addAxisMoment(totalMomentWorld, up, -YAW_DAMPING * yawRate());
+            // Artificial high-speed roll/yaw damping is deliberately omitted.
+            // At low speed, modest gamepad balance help fades away entirely.
+            addAxisMoment(totalMomentWorld, forward,
+                    rollMoment * stabilizationScale);
         }
 
         if (rearGrounded()) {
@@ -371,7 +404,8 @@ final class PhysicsV3MultibodyPlant {
                         + WHEELIE_CATCH_KD * Math.max(0f, pitchRate() - 0.8f);
                 catchTorque = clamp(catchTorque, 0f, MAX_WHEELIE_CATCH);
                 // Positive body-X is nose-down.
-                addAxisMoment(totalMomentWorld, right, catchTorque);
+                addAxisMoment(totalMomentWorld, right,
+                        catchTorque * stabilizationScale);
             }
         }
 
@@ -404,10 +438,11 @@ final class PhysicsV3MultibodyPlant {
 
     private void updateSteering(float speedForward, float dt) {
         float speed = Math.abs(speedForward);
-        boolean anyGround = rearGrounded() || frontGrounded();
+        // Countersteering needs a loaded front contact patch. During wheelies
+        // the airborne bar may rotate, but cannot magically roll the chassis.
         float controllerTorque;
 
-        if (anyGround) {
+        if (frontGrounded()) {
             float command = clamp(input.steer, -1f, 1f);
             float authority = smoothstep(1.2f, 5.5f, speed);
             float targetRoll = -command * MAX_TARGET_LEAN * authority;
@@ -417,11 +452,29 @@ final class PhysicsV3MultibodyPlant {
             // That contact-patch force is what rolls the chassis. Into-the-turn steer
             // is only the steady term, taken from the lean that already exists.
             float rollError = roll() - targetRoll;
+            // Direction changes briefly countersteer to initiate/recover lean.
+            // Continuous target-roll chasing left the wheel countersteered for
+            // the entire right turn and excited a post-turn weave at speed.
+            float change = command - previousTurnIntent;
+            previousTurnIntent = command;
+            countersteerPulse = clamp(countersteerPulse + change, -1f, 1f);
+            countersteerPulse *= (float)Math.exp(
+                    -dt / COUNTERSTEER_PULSE_TIME);
+
+            float speedAuthority = clamp(8f / Math.max(speed, 8f), 0.28f, 1f);
+            float settled = 1f - clamp(
+                    Math.abs(countersteerPulse) * 2f, 0f, 1f);
             float countersteer = clamp(
-                    -COUNTERSTEER_KP * rollError - COUNTERSTEER_KD * rollRate(),
-                    -MAX_COUNTERSTEER,
-                    MAX_COUNTERSTEER);
+                    (-MAX_COUNTERSTEER * countersteerPulse
+                            -COUNTERSTEER_KP * rollError
+                            -COUNTERSTEER_KD * rollRate() * settled)
+                            * speedAuthority,
+                    -MAX_COUNTERSTEER * speedAuthority,
+                    MAX_COUNTERSTEER * speedAuthority);
             float speedSq = Math.max(speed * speed, 16f);
+            // At speed the inside-corner bar angle follows real chassis lean.
+            // An extra into-turn command caused the motorcycle to roll past
+            // upright and lean outward on long, steady turns.
             float steadySteer = -(float) Math.atan(
                     WHEELBASE * G * (float) Math.tan(roll()) / speedSq);
 
@@ -435,7 +488,11 @@ final class PhysicsV3MultibodyPlant {
             controllerTorque = STEER_SERVO_KP * (desiredSteer - steerAngle)
                     - STEER_SERVO_KD * steerRate;
         } else {
-            // Airborne behavior intentionally unchanged: no steering recenter servo.
+            // An airborne fork cannot correct chassis lean by tire contact.
+            // Decay pending turn-in input and retain only physical bar damping.
+            countersteerPulse *= (float)Math.exp(
+                    -dt / COUNTERSTEER_PULSE_TIME);
+            previousTurnIntent = clamp(input.steer, -1f, 1f);
             controllerTorque = -2.2f * steerRate;
         }
 
@@ -498,7 +555,7 @@ final class PhysicsV3MultibodyPlant {
     }
 
     private void sampleContact(Contact c, Terrain terrain, boolean front,
-                               float localForward, float suspension,
+                               float localForward, float localRight, float suspension,
                                float suspensionRate, float dt) {
         PhysicsV3PacejkaTire.Spec spec = front
                 ? PhysicsV3PacejkaTire.FRONT : PhysicsV3PacejkaTire.REAR;
@@ -509,7 +566,7 @@ final class PhysicsV3MultibodyPlant {
         float hubLocalY = spec.radius - staticTireDeflection - CG_HEIGHT
                 + suspension;
 
-        rotateBodyToWorld(0f, hubLocalY, localForward, c.rel);
+        rotateBodyToWorld(localRight, hubLocalY, localForward, c.rel);
         c.center.set(px + c.rel.x, py + c.rel.y, pz + c.rel.z);
 
         float sx = terrain.slopeX(c.center.x, c.center.z);
@@ -556,6 +613,25 @@ final class PhysicsV3MultibodyPlant {
         }
         c.normalForce = normalForce;
 
+        // The tilted wheel axis carries camber information, but contact shear
+        // must live in the terrain tangent plane. Otherwise a leaned tire's
+        // lateral force injects a spurious vertical force and roll/yaw torque.
+        c.wheelAxle.set(c.wheelRight);
+        c.gamma = -(float)Math.asin(
+                clamp(c.wheelAxle.dot(c.normal), -1f, 1f));
+        float normalForward = c.wheelForward.dot(c.normal);
+        c.wheelForward.set(
+                c.wheelForward.x - c.normal.x * normalForward,
+                c.wheelForward.y - c.normal.y * normalForward,
+                c.wheelForward.z - c.normal.z * normalForward);
+        if (c.wheelForward.dot(c.wheelForward) < 1e-8f) {
+            // Recover a tangent direction when the wheel is near vertical
+            // to the ground plane instead of normalizing a zero vector.
+            cross(c.wheelRight, c.normal, c.wheelForward);
+        }
+        c.wheelForward.nor();
+        cross(c.normal, c.wheelForward, c.wheelRight).nor();
+
         float longSpeed = c.centerVelocity.dot(c.wheelForward);
         float lateralSpeed = c.centerVelocity.dot(c.wheelRight);
         float wheelOmega = front ? frontWheelOmega : rearWheelOmega;
@@ -564,8 +640,6 @@ final class PhysicsV3MultibodyPlant {
         c.alpha = (float)Math.atan2(
                 -lateralSpeed,
                 Math.max(Math.abs(longSpeed), 1f));
-        c.gamma = -(float)Math.asin(clamp(c.wheelRight.dot(c.normal), -1f, 1f));
-
         PhysicsV3PacejkaTire.State state = front ? frontTireState : rearTireState;
         PhysicsV3PacejkaTire.Force force = front ? frontTireForce : rearTireForce;
         PhysicsV3PacejkaTire.step(
@@ -612,7 +686,7 @@ final class PhysicsV3MultibodyPlant {
     }
 
     private void addWheelGyroReaction(Vec wheelAxis, float wheelOmega, float steerRateLocal) {
-        float inertia = wheelAxis == rearContact.wheelRight
+        float inertia = wheelAxis == rearContact.wheelAxle
                 ? REAR_WHEEL_INERTIA : FRONT_WHEEL_INERTIA;
         tmpA.set(
                 wheelAxis.x * inertia * wheelOmega,
@@ -651,6 +725,28 @@ final class PhysicsV3MultibodyPlant {
 
     boolean shiftDown() {
         return powertrain.shiftDown(rearWheelOmega);
+    }
+
+    void orientation(Quaternion out) {
+        out.set(qx, qy, qz, qw);
+    }
+
+    void setStabilizationScale(float scale) {
+        stabilizationScale = Float.isFinite(scale)
+                ? clamp(scale, 0f, 1f) : 1f;
+    }
+
+    float stabilizationScale() {
+        return stabilizationScale;
+    }
+
+    // Regression telemetry: tires must apply only tangent-plane shear.
+    float maximumTireTangencyError() {
+        return Math.max(
+                Math.max(Math.abs(frontContact.wheelForward.dot(frontContact.normal)),
+                        Math.abs(frontContact.wheelRight.dot(frontContact.normal))),
+                Math.max(Math.abs(rearContact.wheelForward.dot(rearContact.normal)),
+                        Math.abs(rearContact.wheelRight.dot(rearContact.normal))));
     }
 
     float x() {
@@ -919,6 +1015,8 @@ final class PhysicsV3MultibodyPlant {
         final Vec normal = new Vec();
         final Vec wheelForward = new Vec();
         final Vec wheelRight = new Vec();
+        // Preserve the unprojected physical wheel-spin axis for gyro reactions.
+        final Vec wheelAxle = new Vec();
         final Vec centerVelocity = new Vec();
         final Vec groundPoint = new Vec();
         final Vec contactPoint = new Vec();

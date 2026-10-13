@@ -69,4 +69,61 @@ public final class PhysicsV3SteeringControlTest {
         assertTrue("releasedRoll=" + p.roll(), Math.abs(p.roll()) < 0.12f);
         assertTrue("releasedSteer=" + p.steerAngle(), Math.abs(p.steerAngle()) < 0.08f);
     }
+    @Test
+    public void capturePostTurnOscillationAndRightInputResponse() {
+        FlatTerrain terrain = new FlatTerrain();
+        PhysicsV3MultibodyPlant bike = new PhysicsV3MultibodyPlant();
+        bike.reset(terrain);
+        bike.setStabilizationScale(0.20f);
+        bike.input().throttle = 0.75f;
+        for (int i = 0; i < 600; i++) bike.step(terrain, DT);
+
+        float startYaw = bike.yaw();
+        bike.input().steer = 0.52f;
+        float firstSteer = 0f;
+        float peakNegative = 0f;
+        for (int i = 0; i < 180; i++) {
+            bike.step(terrain, DT);
+            if (i == 20) firstSteer = bike.steerAngle();
+            peakNegative = Math.min(peakNegative, bike.steerAngle());
+        }
+
+        float heldYawChange = bike.yaw() - startYaw;
+        float heldRoll = bike.roll();
+        bike.input().steer = 0f;
+        float earlyMax = 0f;
+        float lateMax = 0f;
+        float lateYawRate = 0f;
+        float lateRollRate = 0f;
+        float lateRoll = 0f;
+        int lateSteerReversals = 0;
+        int lastSign = 0;
+        for (int i = 0; i < 960; i++) {
+            bike.step(terrain, DT);
+            float steer = bike.steerAngle();
+            if (i < 240) earlyMax = Math.max(earlyMax, Math.abs(steer));
+            if (i >= 480) {
+                lateMax = Math.max(lateMax, Math.abs(steer));
+                lateYawRate = Math.max(lateYawRate, Math.abs(bike.yawRate()));
+                lateRollRate = Math.max(lateRollRate, Math.abs(bike.rollRate()));
+                lateRoll = Math.max(lateRoll, Math.abs(bike.roll()));
+                int sign = steer > 0.025f ? 1 : (steer < -0.025f ? -1 : 0);
+                if (sign != 0 && lastSign != 0 && sign != lastSign) lateSteerReversals++;
+                if (sign != 0) lastSign = sign;
+            }
+        }
+        System.out.println("STEERING_DIAG speed=" + bike.speed()
+                + " yawOnRight=" + heldYawChange + " rollOnRight=" + heldRoll
+                + " firstSteer=" + firstSteer + " oppositePeak=" + peakNegative
+                + " earlySteer=" + earlyMax + " lateSteer=" + lateMax
+                + " lateYawRate=" + lateYawRate + " lateRollRate=" + lateRollRate
+                + " lateRoll=" + lateRoll + " lateReversals=" + lateSteerReversals);
+        assertTrue("wrong sustained turn direction: " + heldYawChange,
+                heldYawChange > 0.01f);
+        assertTrue("post-release steer weave " + lateMax, lateMax < 0.12f);
+        assertTrue("post-release yaw weave " + lateYawRate, lateYawRate < 0.55f);
+        assertTrue("post-release repeated steering reversals " + lateSteerReversals,
+                lateSteerReversals <= 3);
+    }
+
 }
