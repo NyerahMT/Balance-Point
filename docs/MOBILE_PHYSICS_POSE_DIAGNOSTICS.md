@@ -29,3 +29,25 @@ Validation must compare the physics forward basis with the graphics forward
 axis, confirm the wheel joint angle visually during countersteering, test
 static and moving lean, and sample front/rear contact tangency across graded
 terrain. CI checks are necessary but not sufficient to validate game feel.
+
+## Follow-up: turn-entry/wobble investigation
+
+The original mobile handling felt reversed on turn-in and wobbled after a
+steering event. Physics right-stick maps to positive heading yaw after a full
+corner, but the initial high-speed countersteer is physically opposite, and
+the prior target-roll controller drove this phase aggressively.
+
+Changes in this pass:
+- Reduce the target-lean/countersteer and handlebar torque servo gains, with
+  less feedthrough of tire aligning moment. Right/left gamepad input is not
+  silently inverted because right-turn physics regression expects right yaw.
+- Preserve the physical tilted front/rear axle for gyroscopic torque; use
+  separate ground-tangent wheel directions for tire slip/traction forces.
+- Remove direct high-speed chassis roll-rate and yaw-rate moments entirely.
+- Use 20% of former direct low-speed stabilizing and anti-loop torques on the
+  mobile runtime; diagnostic physics unit tests may vary this scale.
+- Quantify right turn, release, wheel wobble/steer sign reversals in JUnit.
+
+A real device still must validate whether the countersteer phase is too
+prominent or the physical assembly requires additional tuning. Do not reverse
+touch controls without verifying the final physical turn direction.

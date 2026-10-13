@@ -91,15 +91,15 @@ final class PhysicsV3MultibodyPlant {
     private static final float STEER_INERTIA = 0.24f;
     // Player input is turn intent. Above walking speed the bars countersteer to
     // create lean, then hold the bicycle-model steer for the lean that exists.
-    private static final float STEER_SERVO_KP = 46f;
-    private static final float STEER_SERVO_KD = 15f;
-    private static final float STEER_ALIGNING_GAIN = 0.25f;
-    private static final float MAX_STEER_TORQUE = 26f;
+    private static final float STEER_SERVO_KP = 34f;
+    private static final float STEER_SERVO_KD = 9f;
+    private static final float STEER_ALIGNING_GAIN = 0.10f;
+    private static final float MAX_STEER_TORQUE = 18f;
     private static final float MAX_STEER_ANGLE = radians(32f);
-    private static final float MAX_TARGET_LEAN = radians(36f);
-    private static final float COUNTERSTEER_KP = 0.85f;
-    private static final float COUNTERSTEER_KD = 0.95f;
-    private static final float MAX_COUNTERSTEER = radians(6f);
+    private static final float MAX_TARGET_LEAN = radians(32f);
+    private static final float COUNTERSTEER_KP = 0.56f;
+    private static final float COUNTERSTEER_KD = 0.38f;
+    private static final float MAX_COUNTERSTEER = radians(3.5f);
 
     // Upright assist only while the tires cannot yet balance the bike. An external
     // roll moment at speed has to be cancelled by lateral force and saturates the
@@ -107,8 +107,7 @@ final class PhysicsV3MultibodyPlant {
     private static final float LOW_SPEED_BALANCE_KP = 160f;
     private static final float LOW_SPEED_BALANCE_KD = 85f;
     private static final float MAX_LOW_SPEED_BALANCE = 140f;
-    private static final float YAW_DAMPING = 4f;
-
+ 
     // Grounded anti-loop catch. It is deliberately above the geometric balance
     // point and contributes nothing when the rear contact is gone.
     private static final float WHEELIE_CATCH_OFFSET = radians(5f);
@@ -342,8 +341,10 @@ final class PhysicsV3MultibodyPlant {
                 right,
                 -ENGINE_INERTIA * powertrain.getEngineAlpha());
 
-        addWheelGyroReaction(rearContact.wheelRight, rearWheelOmega, 0f);
-        addWheelGyroReaction(frontContact.wheelRight, frontWheelOmega, steerRate);
+        // Gyroscopic angular momentum follows the actual tilted axle.
+        // Contact force tangent axes are separate and cannot substitute for it.
+        addWheelGyroReaction(rearContact.wheelAxle, rearWheelOmega, 0f);
+        addWheelGyroReaction(frontContact.wheelAxle, frontWheelOmega, steerRate);
 
         // Rider fore/aft acceleration exchanges angular momentum with the frame.
         // Positive rider acceleration is forward; its reaction above the CG is
@@ -360,12 +361,10 @@ final class PhysicsV3MultibodyPlant {
                     upright,
                     -MAX_LOW_SPEED_BALANCE,
                     MAX_LOW_SPEED_BALANCE) * balanceFade;
-            // Rate-only damper stays on at speed so a pickup does not flop through upright.
-            rollMoment += clamp(-42f * rollRate(), -90f, 90f);
+            // Artificial high-speed roll/yaw damping is deliberately omitted.
+            // At low speed, modest gamepad balance help fades away entirely.
             addAxisMoment(totalMomentWorld, forward,
                     rollMoment * stabilizationScale);
-            addAxisMoment(totalMomentWorld, up,
-                    -YAW_DAMPING * yawRate() * stabilizationScale);
         }
 
         if (rearGrounded()) {
@@ -569,8 +568,9 @@ final class PhysicsV3MultibodyPlant {
         // The tilted wheel axis carries camber information, but contact shear
         // must live in the terrain tangent plane. Otherwise a leaned tire's
         // lateral force injects a spurious vertical force and roll/yaw torque.
+        c.wheelAxle.set(c.wheelRight);
         c.gamma = -(float)Math.asin(
-                clamp(c.wheelRight.dot(c.normal), -1f, 1f));
+                clamp(c.wheelAxle.dot(c.normal), -1f, 1f));
         float normalForward = c.wheelForward.dot(c.normal);
         c.wheelForward.set(
                 c.wheelForward.x - c.normal.x * normalForward,
@@ -638,7 +638,7 @@ final class PhysicsV3MultibodyPlant {
     }
 
     private void addWheelGyroReaction(Vec wheelAxis, float wheelOmega, float steerRateLocal) {
-        float inertia = wheelAxis == rearContact.wheelRight
+        float inertia = wheelAxis == rearContact.wheelAxle
                 ? REAR_WHEEL_INERTIA : FRONT_WHEEL_INERTIA;
         tmpA.set(
                 wheelAxis.x * inertia * wheelOmega,
@@ -967,6 +967,8 @@ final class PhysicsV3MultibodyPlant {
         final Vec normal = new Vec();
         final Vec wheelForward = new Vec();
         final Vec wheelRight = new Vec();
+        // Preserve the unprojected physical wheel-spin axis for gyro reactions.
+        final Vec wheelAxle = new Vec();
         final Vec centerVelocity = new Vec();
         final Vec groundPoint = new Vec();
         final Vec contactPoint = new Vec();

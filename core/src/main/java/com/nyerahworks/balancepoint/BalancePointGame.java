@@ -79,6 +79,9 @@ public final class BalancePointGame extends ApplicationAdapter {
     // PHYSICS_V3_RUNTIME -- physical dimensions live inside the plant; the old constants above
     // remain only because GameScene/DirtBikeVisualRig use the imported GLB's presentation scale.
     private final PhysicsV3MultibodyPlant physicsV3 = new PhysicsV3MultibodyPlant();
+    // 20% of legacy low-speed recovery/anti-loop aid. Physics steering and
+    // tire contact remain fully simulated; no high-speed yaw/roll assist.
+    private static final float RIDE_STABILIZATION_ASSIST = 0.20f;
     private final PhysicsV3MultibodyPlant.Terrain physicsV3Terrain = new PhysicsV3MultibodyPlant.Terrain() {
         @Override public float height(float x, float z) {
             return terrainVisuals == null ? 0f : terrainVisuals.groundHeight(x, z);
@@ -776,6 +779,7 @@ public final class BalancePointGame extends ApplicationAdapter {
         lateralDynamics.reset();
         riderDynamics.reset();
         landingDynamics.reset();
+        physicsV3.setStabilizationScale(RIDE_STABILIZATION_ASSIST);
         physicsV3.reset(physicsV3Terrain);
         frontGrounded = true;
         crashed = false;

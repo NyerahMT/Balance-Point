@@ -117,8 +117,10 @@ public final class PhysicsV3SteeringControlTest {
                 + " lateReversals=" + lateSteerReversals);
         assertTrue("wrong sustained turn direction: " + heldYawChange,
                 heldYawChange > 0.01f);
-        assertTrue("post-release steer weave " + lateMax, lateMax < 0.20f);
-        assertTrue("post-release yaw weave " + lateYawRate, lateYawRate < 0.80f);
+        assertTrue("post-release steer weave " + lateMax, lateMax < 0.12f);
+        assertTrue("post-release yaw weave " + lateYawRate, lateYawRate < 0.55f);
+        assertTrue("post-release repeated steering reversals " + lateSteerReversals,
+                lateSteerReversals <= 3);
     }
 
 }
