@@ -5,6 +5,11 @@ on:
     paths:
       - 'unreal/**'
       - '.github/workflows/chrono-core.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'unreal/**'
+      - '.github/workflows/chrono-core.yml'
   workflow_dispatch:
 
 jobs:
@@ -47,5 +52,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DChrono_DIR="${{ steps.chrono.outputs.dir }}"
           cmake --build "$RUNNER_TEMP/bp-build" --parallel 2
+      - name: Run gameplay steering controller tests
+        run: "$RUNNER_TEMP/bp-build/bp_ride_steering_test"
       - name: Run multibody smoke test
         run: "$RUNNER_TEMP/bp-build/bp_chrono_smoke"

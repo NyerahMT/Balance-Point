@@ -38,13 +38,21 @@ void UBalancePointChronoComponent::TickComponent(float DeltaTime, ELevelTick Tic
     Input.throttle = FMath::Clamp(Throttle, 0.0f, 1.0f);
     Input.frontBrake = FMath::Clamp(FrontBrake, 0.0f, 1.0f);
     Input.rearBrake = FMath::Clamp(RearBrake, 0.0f, 1.0f);
-    Input.steerTorqueNm = FMath::Clamp(Turn, -1.0f, 1.0f) * MaxHandlebarTorqueNm;
+    const float turnRight = FMath::Clamp(Turn, -1.0f, 1.0f);
+    // Unreal Y is right, Chrono Y is left; invert the player turn axis.
+    Input.useLeanControl = UseLeanControl;
+    Input.turnIntent = -turnRight * FMath::Clamp(LeanGain, 0.0f, 1.0f);
+    Input.maxSteeringTorqueNm = FMath::Clamp(MaxHandlebarTorqueNm, 0.0f, 35.0f);
+    Input.steerTorqueNm = -turnRight * Input.maxSteeringTorqueNm;
     Bike->SetInput(Input);
     Bike->Step(FMath::Min(DeltaTime, 0.033333f));
 
     const bp::BikeState S = Bike->State();
     SpeedMps = static_cast<float>(S.speedForward);
     SteerAngleDeg = FMath::RadiansToDegrees(static_cast<float>(S.steerAngle));
+    BikeLeanDeg = FMath::RadiansToDegrees(static_cast<float>(S.roll));
+    TargetLeanDeg = FMath::RadiansToDegrees(static_cast<float>(S.targetLeanAngle));
+    AppliedSteeringTorqueNm = static_cast<float>(S.appliedSteeringTorqueNm);
     FrontNormalLoadN = static_cast<float>(S.frontNormalLoad);
     RearNormalLoadN = static_cast<float>(S.rearNormalLoad);
 

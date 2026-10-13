@@ -1,4 +1,5 @@
 #include "ChronoBike.h"
+#include "RideSteeringController.h"
 
 #include <algorithm>
 #include <array>
@@ -108,6 +109,8 @@ struct ChronoBike::Impl {
 
     BikeParams params;
     BikeInput input;
+    RideSteeringController rideSteering;
+    double appliedSteeringTorqueNm = 0.0;
     bool built = false;
 
     std::unique_ptr<chrono::ChSystemSMC> system;
@@ -332,6 +335,8 @@ struct ChronoBike::Impl {
         frontTire = {};
         rearTire = {};
         frontAlpha = rearAlpha = frontKappa = rearKappa = 0.0;
+        rideSteering.Reset();
+        appliedSteeringTorqueNm = 0.0;
     }
 
     void ApplyTire(std::shared_ptr<ChBody> wheel, std::shared_ptr<ChBody> headingBody,
@@ -402,6 +407,8 @@ struct ChronoBike::Impl {
         s.yawRate = Vdot(omega, bodyZ);
         s.speedForward = Vdot(vel, forward);
         s.steerAngle = steerMotor ? steerMotor->GetMotorAngle() : 0.0;
+        s.targetLeanAngle = input.useLeanControl ? rideSteering.TargetRoll() : 0.0;
+        s.appliedSteeringTorqueNm = appliedSteeringTorqueNm;
         s.frontNormalLoad = std::max(0.0, frontWheel->GetContactForce().z());
         s.rearNormalLoad = std::max(0.0, rearWheel->GetContactForce().z());
         s.frontGrounded = s.frontNormalLoad > 5.0;
@@ -425,7 +432,20 @@ struct ChronoBike::Impl {
             frontWheel->EmptyAccumulator(frontAccumulator);
             rearWheel->EmptyAccumulator(rearAccumulator);
 
-            steerTorqueFunction->SetConstant(Clamp(input.steerTorqueNm, -35.0, 35.0));
+            double torque = input.steerTorqueNm;
+            if (input.useLeanControl) {
+                const BikeState observed = State();
+                RideSteeringController::Observation steerState;
+                steerState.speedForward = observed.speedForward;
+                steerState.roll = observed.roll;
+                steerState.rollRate = observed.rollRate;
+                steerState.steerAngle = observed.steerAngle;
+                steerState.frontGrounded = observed.frontGrounded;
+                torque = rideSteering.Step(input.turnIntent, input.maxSteeringTorqueNm,
+                                            steerState, h);
+            }
+            appliedSteeringTorqueNm = Clamp(torque, -35.0, 35.0);
+            steerTorqueFunction->SetConstant(appliedSteeringTorqueNm);
 
             ApplyTire(frontWheel, forkLower, true, h);
             ApplyTire(rearWheel, frame, false, h);
@@ -456,7 +476,11 @@ ChronoBike::ChronoBike(ChronoBike&&) noexcept = default;
 ChronoBike& ChronoBike::operator=(ChronoBike&&) noexcept = default;
 void ChronoBike::Build() { impl_->Build(); }
 void ChronoBike::Reset(double v) { impl_->Reset(v); }
-void ChronoBike::SetInput(const BikeInput& input) { impl_->input = input; }
+void ChronoBike::SetInput(const BikeInput& input) {
+    if (impl_->input.useLeanControl != input.useLeanControl)
+        impl_->rideSteering.Reset();
+    impl_->input = input;
+}
 void ChronoBike::Step(double dt) { impl_->Step(dt); }
 BikeState ChronoBike::State() const { return impl_->State(); }
 bool ChronoBike::IsBuilt() const { return impl_->built; }

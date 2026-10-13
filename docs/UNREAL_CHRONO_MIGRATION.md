@@ -54,3 +54,27 @@ not Honda-published values.
 - wheelie assists
 
 Those wait until the steering/chassis model proves itself.
+
+## Gameplay steering/lean input (first implementation)
+
+The Unreal-facing component defaults to `UseLeanControl=true`: the turn axis
+requests a speed-dependent bike lean, not a constant handlebar torque. The
+controller countersteers into the requested lean, allows the physics to generate
+cornering yaw via tire contact, and supplies steady-state bar torque to maintain
+the turn. At walking speed, the same stick directly requests bar angle. Releasing
+the stick requests upright without directly changing the frame's orientation.
+It applies only torque to the existing Chrono steering joint.
+
+`UseLeanControl=false` preserves raw handlebar torque for engineering diagnostics.
+Both modes obey `MaxHandlebarTorqueNm` in the Unreal component. The positive
+Unreal turn axis is mapped to Chrono's right-hand/left-positive coordinate system.
+`BikeLeanDeg`, `TargetLeanDeg`, and `AppliedSteeringTorqueNm` are exposed for
+in-game tuning. When the front tire is airborne, only bar-rate damping is used:
+the controller cannot magically roll the bike toward a desired lean.
+
+`bp_ride_steering_test` covers the control mapping independently of the heavy
+Chrono build; `bp_chrono_smoke` exercises lean mode on the physical assembly.
+These checks do not certify game feel: controlled MX-track riding, steering
+polarity, steady-state cornering and timestep/landing validation must pass
+before removing the legacy mobile simulation. Avoid mistaking a stable controller
+unit test for a validated vehicle model.

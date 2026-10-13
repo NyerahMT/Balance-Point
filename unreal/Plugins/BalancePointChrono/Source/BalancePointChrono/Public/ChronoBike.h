@@ -51,7 +51,10 @@ struct BikeInput {
     double throttle = 0.0;
     double frontBrake = 0.0;
     double rearBrake = 0.0;
-    double steerTorqueNm = 0.0;
+    double steerTorqueNm = 0.0;  // Raw torque for diagnostics when lean control is off
+    bool useLeanControl = false;
+    double turnIntent = 0.0;     // +1 requests left, -1 right
+    double maxSteeringTorqueNm = 16.0;
 };
 
 struct BikeState {
@@ -66,6 +69,8 @@ struct BikeState {
     double yawRate = 0.0;
     double speedForward = 0.0;
     double steerAngle = 0.0;
+    double targetLeanAngle = 0.0;
+    double appliedSteeringTorqueNm = 0.0;
     double frontNormalLoad = 0.0;
     double rearNormalLoad = 0.0;
     double frontSlipAngle = 0.0;
