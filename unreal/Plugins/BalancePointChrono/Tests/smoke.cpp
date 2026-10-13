@@ -44,6 +44,24 @@ int main() {
         return 4;
     }
 
+    // Gameplay mode maps player turn to a target lean through physical steering
+    // torque rather than controlling the chassis orientation directly.
+    bike.Reset(8.0);
+    input = {};
+    input.useLeanControl = true;
+    input.turnIntent = 0.5;
+    input.maxSteeringTorqueNm = 16.0;
+    bike.SetInput(input);
+    for (int i = 0; i < 100; ++i)
+        bike.Step(0.001);
+    s = bike.State();
+    if (!finite_state(s) || !(s.targetLeanAngle < -0.02) ||
+        std::abs(s.appliedSteeringTorqueNm) > 16.0001) {
+        std::cerr << "gameplay lean controller failed: target=" << s.targetLeanAngle
+                  << " steering torque=" << s.appliedSteeringTorqueNm << "\n";
+        return 5;
+    }
+
     std::cout << "PASS chrono multibody smoke"
               << " speed=" << s.speedForward
               << " steer=" << s.steerAngle

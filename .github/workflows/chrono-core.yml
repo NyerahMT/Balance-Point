@@ -2,12 +2,32 @@ name: Chrono Core
 
 on:
   push:
+    branches: [ main ]
+    paths:
+      - 'unreal/**'
+      - '.github/workflows/chrono-core.yml'
+  pull_request:
+    branches: [ main ]
     paths:
       - 'unreal/**'
       - '.github/workflows/chrono-core.yml'
   workflow_dispatch:
 
 jobs:
+  gameplay-lean-control:
+    name: Fast steering regression (Release)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile dependency-free steering checks
+        run: |
+          c++ -std=c++17 -O2 -DNDEBUG -Wall -Wextra -Werror -pedantic \
+            -Iunreal/Plugins/BalancePointChrono/Source/BalancePointChrono/Public \
+            unreal/Plugins/BalancePointChrono/Tests/steering.cpp \
+            -o "$RUNNER_TEMP/bp_ride_steering_test"
+      - name: Test MX-style steering control
+        run: "$RUNNER_TEMP/bp_ride_steering_test"
+
   headless-chrono-bike:
     runs-on: ubuntu-latest
     steps:
@@ -47,5 +67,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DChrono_DIR="${{ steps.chrono.outputs.dir }}"
           cmake --build "$RUNNER_TEMP/bp-build" --parallel 2
+      - name: Run gameplay steering controller tests
+        run: "$RUNNER_TEMP/bp-build/bp_ride_steering_test"
       - name: Run multibody smoke test
         run: "$RUNNER_TEMP/bp-build/bp_chrono_smoke"

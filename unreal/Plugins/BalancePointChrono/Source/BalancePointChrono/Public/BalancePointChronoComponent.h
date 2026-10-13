@@ -27,13 +27,28 @@ public:
     float RearBrake = 0.0f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Balance Point|Input")
-    float MaxHandlebarTorqueNm = 12.0f;
+    bool UseLeanControl = true;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Balance Point|Input", meta=(ClampMin="0.0", ClampMax="1.0"))
+    float LeanGain = 1.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Balance Point|Input", meta=(ClampMin="0.0", ClampMax="35.0"))
+    float MaxHandlebarTorqueNm = 16.0f;
 
     UPROPERTY(BlueprintReadOnly, Category="Balance Point|Telemetry")
     float SpeedMps = 0.0f;
 
     UPROPERTY(BlueprintReadOnly, Category="Balance Point|Telemetry")
     float SteerAngleDeg = 0.0f;
+
+    UPROPERTY(BlueprintReadOnly, Category="Balance Point|Telemetry")
+    float BikeLeanDeg = 0.0f;
+
+    UPROPERTY(BlueprintReadOnly, Category="Balance Point|Telemetry")
+    float TargetLeanDeg = 0.0f;
+
+    UPROPERTY(BlueprintReadOnly, Category="Balance Point|Telemetry")
+    float AppliedSteeringTorqueNm = 0.0f;
 
     UPROPERTY(BlueprintReadOnly, Category="Balance Point|Telemetry")
     float FrontNormalLoadN = 0.0f;
