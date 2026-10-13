@@ -101,7 +101,7 @@ final class PhysicsV3MultibodyPlant {
     // a perpetual demand to steer the wheel away from the corner.
     private static final float COUNTERSTEER_KP = 0.04f;
     private static final float COUNTERSTEER_KD = 0.015f;
-    private static final float MAX_COUNTERSTEER = radians(3.5f);
+    private static final float MAX_COUNTERSTEER = radians(6f);
     private static final float COUNTERSTEER_PULSE_TIME = 0.24f;
 
     // Upright assist only while the tires cannot yet balance the bike. An external
@@ -122,6 +122,11 @@ final class PhysicsV3MultibodyPlant {
     private static final float RIDER_KP = 46f;
     private static final float RIDER_KD = 13f;
     private static final float RIDER_HEIGHT_ABOVE_CG = 0.24f;
+    // Rider shifts laterally inside the chassis. The COM changes tire
+    // contact moment arms instead of applying a magic chassis lean torque.
+    private static final float RIDER_LATERAL_TRAVEL = 0.12f;
+    private static final float RIDER_LATERAL_KP = 25f;
+    private static final float RIDER_LATERAL_KD = 10f;
 
     private static final float ROLLING_COEFF = 0.017f;
     private static final float AERO_COEFF = 0.34f;
@@ -175,6 +180,8 @@ final class PhysicsV3MultibodyPlant {
     private float rearWheelSpin;
     private float riderX;
     private float riderXRate;
+    private float riderLateral;
+    private float riderLateralRate;
 
     private final Vec right = new Vec();
     private final Vec up = new Vec();
@@ -219,6 +226,7 @@ final class PhysicsV3MultibodyPlant {
         frontWheelOmega = rearWheelOmega = 0f;
         frontWheelSpin = rearWheelSpin = 0f;
         riderX = riderXRate = 0f;
+        riderLateral = riderLateralRate = 0f;
         rearTireState.reset();
         frontTireState.reset();
         powertrain.reset();
@@ -256,12 +264,23 @@ final class PhysicsV3MultibodyPlant {
 
         float riderCgShift = RIDER_MASS / TOTAL_MASS * riderX;
         float effectiveCgForward = BIKE_CG_FORWARD + riderCgShift;
+        float lateralTarget = clamp(input.steer, -1f, 1f)
+                * RIDER_LATERAL_TRAVEL;
+        float lateralAccel = RIDER_LATERAL_KP
+                * (lateralTarget - riderLateral)
+                - RIDER_LATERAL_KD * riderLateralRate;
+        riderLateralRate += lateralAccel * dt;
+        riderLateral += riderLateralRate * dt;
+        riderLateral = clamp(riderLateral,
+                -RIDER_LATERAL_TRAVEL, RIDER_LATERAL_TRAVEL);
+        float effectiveCgRight = RIDER_MASS / TOTAL_MASS * riderLateral;
 
         sampleContact(
                 rearContact,
                 terrain,
                 false,
                 -effectiveCgForward,
+                -effectiveCgRight,
                 rearSuspension,
                 rearSuspensionRate,
                 dt);
@@ -270,6 +289,7 @@ final class PhysicsV3MultibodyPlant {
                 terrain,
                 true,
                 WHEELBASE - effectiveCgForward,
+                -effectiveCgRight,
                 frontSuspension,
                 frontSuspensionRate,
                 dt);
@@ -532,7 +552,7 @@ final class PhysicsV3MultibodyPlant {
     }
 
     private void sampleContact(Contact c, Terrain terrain, boolean front,
-                               float localForward, float suspension,
+                               float localForward, float localRight, float suspension,
                                float suspensionRate, float dt) {
         PhysicsV3PacejkaTire.Spec spec = front
                 ? PhysicsV3PacejkaTire.FRONT : PhysicsV3PacejkaTire.REAR;
@@ -543,7 +563,7 @@ final class PhysicsV3MultibodyPlant {
         float hubLocalY = spec.radius - staticTireDeflection - CG_HEIGHT
                 + suspension;
 
-        rotateBodyToWorld(0f, hubLocalY, localForward, c.rel);
+        rotateBodyToWorld(localRight, hubLocalY, localForward, c.rel);
         c.center.set(px + c.rel.x, py + c.rel.y, pz + c.rel.z);
 
         float sx = terrain.slopeX(c.center.x, c.center.z);
