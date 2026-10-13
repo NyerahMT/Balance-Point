@@ -2,6 +2,7 @@ name: Chrono Core
 
 on:
   push:
+    branches: [ main ]
     paths:
       - 'unreal/**'
       - '.github/workflows/chrono-core.yml'
