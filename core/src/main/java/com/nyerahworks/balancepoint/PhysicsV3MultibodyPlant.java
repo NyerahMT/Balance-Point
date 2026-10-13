@@ -100,7 +100,7 @@ final class PhysicsV3MultibodyPlant {
     // Countersteer is a transient reaction to *changing* turn intent, not
     // a perpetual demand to steer the wheel away from the corner.
     private static final float COUNTERSTEER_KP = 0.04f;
-    private static final float COUNTERSTEER_KD = 0.015f;
+    private static final float COUNTERSTEER_KD = 0.16f;
     private static final float MAX_COUNTERSTEER = radians(7.5f);
     private static final float COUNTERSTEER_PULSE_TIME = 0.24f;
 
@@ -462,10 +462,13 @@ final class PhysicsV3MultibodyPlant {
                     -dt / COUNTERSTEER_PULSE_TIME);
 
             float speedAuthority = clamp(8f / Math.max(speed, 8f), 0.28f, 1f);
+            float settled = 1f - clamp(
+                    Math.abs(countersteerPulse) * 2f, 0f, 1f);
             float countersteer = clamp(
                     (-MAX_COUNTERSTEER * countersteerPulse
                             -COUNTERSTEER_KP * rollError
-                            -COUNTERSTEER_KD * rollRate()) * speedAuthority,
+                            -COUNTERSTEER_KD * rollRate() * settled)
+                            * speedAuthority,
                     -MAX_COUNTERSTEER * speedAuthority,
                     MAX_COUNTERSTEER * speedAuthority);
             float speedSq = Math.max(speed * speed, 16f);
