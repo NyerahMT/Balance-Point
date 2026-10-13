@@ -13,6 +13,20 @@ on:
   workflow_dispatch:
 
 jobs:
+  gameplay-lean-control:
+    name: Fast steering regression (Release)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile dependency-free steering checks
+        run: |
+          c++ -std=c++17 -O2 -DNDEBUG -Wall -Wextra -Werror -pedantic \
+            -Iunreal/Plugins/BalancePointChrono/Source/BalancePointChrono/Public \
+            unreal/Plugins/BalancePointChrono/Tests/steering.cpp \
+            -o "$RUNNER_TEMP/bp_ride_steering_test"
+      - name: Test MX-style steering control
+        run: "$RUNNER_TEMP/bp_ride_steering_test"
+
   headless-chrono-bike:
     runs-on: ubuntu-latest
     steps:
