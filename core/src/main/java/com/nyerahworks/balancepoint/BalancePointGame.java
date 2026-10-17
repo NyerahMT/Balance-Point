@@ -62,12 +62,7 @@ public final class BalancePointGame extends ApplicationAdapter {
     private final MotorcycleDrivetrain drivetrain = new MotorcycleDrivetrain(WHEEL_RADIUS);
     private final MotorcycleSuspension suspension = new MotorcycleSuspension(
             REAR_STATIC_LOAD, FRONT_STATIC_LOAD, MAX_CONTACT_FORCE);
-    private final MotorcycleLateralDynamics lateralDynamics = new MotorcycleLateralDynamics(
-            MASS, WHEELBASE, COM_FORWARD, GRAVITY);
-    private final MotorcycleRiderDynamics riderDynamics = new MotorcycleRiderDynamics(
-            MASS, GRAVITY);
     private final MotorcycleLandingDynamics landingDynamics = new MotorcycleLandingDynamics();
-    private final MotorcycleBodyContact bodyContact = new MotorcycleBodyContact();
 
     private GameCamera gameCamera;
     private GameScene scene;
@@ -160,24 +155,6 @@ public final class BalancePointGame extends ApplicationAdapter {
     private boolean hasActiveRide;
     private boolean pauseTouchHeld;
     private boolean highQuality = true;
-
-    private static final class WheelContact {
-        float normalForce;
-        float normalForward;
-        float normalUp;
-        float groundY;
-        float gap;
-        float normalVelocity;
-
-        boolean touching() {
-            return normalForce > 12f;
-        }
-    }
-
-    private final WheelContact rearContactState = new WheelContact();
-    private final WheelContact frontContactState = new WheelContact();
-    private final WheelContact rearPostContact = new WheelContact();
-    private final WheelContact frontPostContact = new WheelContact();
 
     @Override
     public void create() {
@@ -557,15 +534,15 @@ public final class BalancePointGame extends ApplicationAdapter {
         }
 
         float previousSpeed = speed;
-        PhysicsV3MultibodyPlant.Input v2Input = physicsV3.input();
-        v2Input.throttle = throttle;
-        v2Input.rearBrake = rearBrake;
-        // Player turn intent is physical steering-torque authority in the V2 plant.
-        v2Input.steer = steer;
-        v2Input.riderForeAft = riderLean;
+        PhysicsV3MultibodyPlant.Input v3Input = physicsV3.input();
+        v3Input.throttle = throttle;
+        v3Input.rearBrake = rearBrake;
+        // Player turn intent is handed to the live V3 steering controller.
+        v3Input.steer = steer;
+        v3Input.riderForeAft = riderLean;
         physicsV3.step(physicsV3Terrain, dt);
 
-        // Dynamic state comes exclusively from the V2 plant. The Y conversion below is only
+        // Dynamic state comes exclusively from the V3 plant. The Y conversion below is only
         // an imported-mesh origin adapter; it does not feed back into Physics V3.
         bikeX = physicsV3.x();
         bikeZ = physicsV3.z();
@@ -598,76 +575,6 @@ public final class BalancePointGame extends ApplicationAdapter {
         } else if (frontGrounded) {
             wheelieTime = 0f;
         }
-    }
-
-    private void sampleWheelSurface(WheelContact out, float worldX, float wheelY, float worldZ,
-                                    float sinYaw, float cosYaw) {
-        final float[] offsets = {-0.90f, -0.60f, -0.30f, 0f, 0.30f, 0.60f, 0.90f};
-        final float slopeProbe = 0.075f;
-        float bestGap = Float.POSITIVE_INFINITY;
-        float bestNormalForward = 0f;
-        float bestNormalUp = 1f;
-        float bestGroundY = WHEEL_RADIUS;
-
-        for (float factor : offsets) {
-            float offset = factor * WHEEL_RADIUS;
-            float sampleX = worldX + sinYaw * offset;
-            float sampleZ = worldZ + cosYaw * offset;
-            float ground = terrainVisuals != null
-                    ? terrainVisuals.groundHeight(sampleX, sampleZ) : 0f;
-            float ahead = terrainVisuals != null
-                    ? terrainVisuals.groundHeight(sampleX + sinYaw * slopeProbe,
-                    sampleZ + cosYaw * slopeProbe) : 0f;
-            float behind = terrainVisuals != null
-                    ? terrainVisuals.groundHeight(sampleX - sinYaw * slopeProbe,
-                    sampleZ - cosYaw * slopeProbe) : 0f;
-            float forwardSlope = (ahead - behind) / (2f * slopeProbe);
-            float invLength = 1f / (float) Math.sqrt(1f + forwardSlope * forwardSlope);
-            float normalForward = -forwardSlope * invLength;
-            float normalUp = invLength;
-
-            float centerFromProbe = -offset;
-            float signedDistance = normalForward * centerFromProbe
-                    + normalUp * (wheelY - ground);
-            float gap = signedDistance - WHEEL_RADIUS;
-            if (gap < bestGap) {
-                bestGap = gap;
-                bestNormalForward = normalForward;
-                bestNormalUp = normalUp;
-                bestGroundY = ground
-                        + (WHEEL_RADIUS - normalForward * centerFromProbe) / normalUp;
-            }
-        }
-
-        out.normalForward = bestNormalForward;
-        out.normalUp = bestNormalUp;
-        out.groundY = bestGroundY;
-        out.gap = bestGap;
-    }
-
-    private void solveWheelContact(WheelContact out, float worldX, float wheelY, float worldZ,
-                                   float pointForwardVelocity, float pointVerticalVelocity,
-                                   float sinYaw, float cosYaw,
-                                   MotorcycleSuspension.Unit suspensionUnit,
-                                   float effectiveMass, float dt) {
-        sampleWheelSurface(out, worldX, wheelY, worldZ, sinYaw, cosYaw);
-
-        float normalVelocity = pointForwardVelocity * out.normalForward
-                + pointVerticalVelocity * out.normalUp;
-        out.normalVelocity = normalVelocity;
-        float demandedCompression = suspensionUnit.staticCompression() - out.gap;
-        float compressionVelocity = -normalVelocity;
-        out.normalForce = suspensionUnit.solve(
-                demandedCompression,
-                compressionVelocity,
-                effectiveMass,
-                dt);
-    }
-
-    private static float wrapAngle(float angle) {
-        while (angle > MathUtils.PI) angle -= MathUtils.PI2;
-        while (angle < -MathUtils.PI) angle += MathUtils.PI2;
-        return angle;
     }
 
     private void beginCrash() {
@@ -773,8 +680,6 @@ public final class BalancePointGame extends ApplicationAdapter {
         shiftDownHeld = shiftUpHeld = false;
         drivetrain.reset();
         suspension.reset();
-        lateralDynamics.reset();
-        riderDynamics.reset();
         landingDynamics.reset();
         physicsV3.reset(physicsV3Terrain);
         frontGrounded = true;

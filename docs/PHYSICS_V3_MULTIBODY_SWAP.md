@@ -1,9 +1,11 @@
 # Physics V3 Multibody Swap
 
-## Decision
+## Current status
 
-Physics V2 is frozen as a reference implementation. The live motorcycle runtime is being
-moved to `PhysicsV3MultibodyPlant` rather than continuing to tune V2.
+`PhysicsV3MultibodyPlant` is the live mobile plant. The superseded V2
+plant, V2 rider controller, and V2 tire were removed from the source tree
+during the legacy cleanup. The historical implementation remains in Git
+history. `PhysicsV2Powertrain` remains live as a dependency of V3.
 
 ## Open-source references
 
@@ -49,6 +51,6 @@ controllers. They are not part of the free-flight plant.
 
 ## Parameter source
 
-The first CRF450R parameter set reuses the documented Physics V2 research values for mass,
+The first CRF450R parameter set reuses documented V2 research values for mass,
 wheelbase, CG, inertia, suspension travel/rates, drivetrain ratios and MX33 effective radii.
-Those values are independent from the discarded V2 equations.
+Relevant calibration documents are retained; obsolete V2 equations are not.
