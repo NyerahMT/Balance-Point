@@ -24,6 +24,16 @@ public final class DirtBikePhysicsSteeringVisualTest {
     }
 
     @Test
+    public void positiveSteerStaysPositiveEvenWithOpposingBodyRoll() {
+        GameScene.BikeState bike = new GameScene.BikeState();
+        bike.physicsSteerAngle = 0.1f;
+        bike.roll = -0.45f;
+        bike.speed = 25f;
+        assertEquals(0.1f * 57.29578f,
+                DirtBikeVisualRig.physicalSteerDegrees(bike), 0.0001f);
+    }
+
+    @Test
     public void neutralPhysicsSteeringDoesNotInventTurnFromLean() {
         GameScene.BikeState bike = new GameScene.BikeState();
         bike.physicsSteerAngle = 0f;
