@@ -123,6 +123,7 @@ final class PhysicsV3MultibodyPlant {
     private static final float AERO_COEFF = 0.34f;
     private static final float MAX_INTERNAL_DT = 1f / 960f;
 
+    private final PhysicsTuning tuning = new PhysicsTuning();
     private final Input input = new Input();
     private final Telemetry telemetry = new Telemetry();
     private final PhysicsV2Powertrain powertrain = new PhysicsV2Powertrain();
@@ -185,6 +186,10 @@ final class PhysicsV3MultibodyPlant {
         return input;
     }
 
+    PhysicsTuning tuning() {
+        return tuning;
+    }
+
     Telemetry telemetry() {
         return telemetry;
     }
@@ -238,7 +243,8 @@ final class PhysicsV3MultibodyPlant {
         float speedHorizontal = (float)Math.sqrt(vx * vx + vz * vz);
 
         float riderTarget = clamp(input.riderForeAft, -1f, 1f) * RIDER_TRAVEL;
-        float riderAccel = RIDER_KP * (riderTarget - riderX) - RIDER_KD * riderXRate;
+        float riderAccel = tuning.get(PhysicsTuning.RIDER_KP) * (riderTarget - riderX)
+                - tuning.get(PhysicsTuning.RIDER_KD) * riderXRate;
         riderXRate += riderAccel * dt;
         riderX += riderXRate * dt;
         riderX = clamp(riderX, -RIDER_TRAVEL, RIDER_TRAVEL);
@@ -348,8 +354,8 @@ final class PhysicsV3MultibodyPlant {
         boolean anyGround = rearGrounded() || frontGrounded();
         if (anyGround) {
             float balanceFade = 1f - smoothstep(1.4f, 4.2f, Math.abs(speedForward));
-            float upright = -LOW_SPEED_BALANCE_KP * roll()
-                    - LOW_SPEED_BALANCE_KD * rollRate();
+            float upright = -tuning.get(PhysicsTuning.BALANCE_KP) * roll()
+                    - tuning.get(PhysicsTuning.BALANCE_KD) * rollRate();
             float rollMoment = clamp(
                     upright,
                     -MAX_LOW_SPEED_BALANCE,
@@ -366,10 +372,10 @@ final class PhysicsV3MultibodyPlant {
                     CG_HEIGHT);
             float catchStart = balancePitch + WHEELIE_CATCH_OFFSET;
             if (pitch() > catchStart || pitchRate() > 1.6f) {
-                float catchTorque = WHEELIE_CATCH_KP
+                float catchTorque = tuning.get(PhysicsTuning.CATCH_KP)
                         * Math.max(0f, pitch() - catchStart)
-                        + WHEELIE_CATCH_KD * Math.max(0f, pitchRate() - 0.8f);
-                catchTorque = clamp(catchTorque, 0f, MAX_WHEELIE_CATCH);
+                        + tuning.get(PhysicsTuning.CATCH_KD) * Math.max(0f, pitchRate() - 0.8f);
+                catchTorque = clamp(catchTorque, 0f, tuning.get(PhysicsTuning.CATCH_MAX));
                 // Positive body-X is nose-down.
                 addAxisMoment(totalMomentWorld, right, catchTorque);
             }
@@ -418,7 +424,8 @@ final class PhysicsV3MultibodyPlant {
             // is only the steady term, taken from the lean that already exists.
             float rollError = roll() - targetRoll;
             float countersteer = clamp(
-                    -COUNTERSTEER_KP * rollError - COUNTERSTEER_KD * rollRate(),
+                    -tuning.get(PhysicsTuning.COUNTER_KP) * rollError
+                            - tuning.get(PhysicsTuning.COUNTER_KD) * rollRate(),
                     -MAX_COUNTERSTEER,
                     MAX_COUNTERSTEER);
             float speedSq = Math.max(speed * speed, 16f);
@@ -432,8 +439,8 @@ final class PhysicsV3MultibodyPlant {
                     -MAX_STEER_ANGLE,
                     MAX_STEER_ANGLE);
 
-            controllerTorque = STEER_SERVO_KP * (desiredSteer - steerAngle)
-                    - STEER_SERVO_KD * steerRate;
+            controllerTorque = tuning.get(PhysicsTuning.STEER_KP) * (desiredSteer - steerAngle)
+                    - tuning.get(PhysicsTuning.STEER_KD) * steerRate;
         } else {
             // Airborne behavior intentionally unchanged: no steering recenter servo.
             controllerTorque = -2.2f * steerRate;
@@ -467,8 +474,9 @@ final class PhysicsV3MultibodyPlant {
         float qd = front ? frontSuspensionRate : rearSuspensionRate;
         float rate = front ? FRONT_WHEEL_RATE : REAR_WHEEL_RATE;
         float mass = front ? FRONT_SUSPENSION_MASS : REAR_SUSPENSION_MASS;
-        float comp = front ? FRONT_COMP_DAMP : REAR_COMP_DAMP;
-        float rebound = front ? FRONT_REBOUND_DAMP : REAR_REBOUND_DAMP;
+        float comp = tuning.get(front ? PhysicsTuning.FRONT_COMP : PhysicsTuning.REAR_COMP);
+        float rebound = tuning.get(front ? PhysicsTuning.FRONT_REBOUND
+                : PhysicsTuning.REAR_REBOUND);
         float damping = qd >= 0f ? comp : rebound;
 
         float qdd = (normalForce - staticLoad - rate * q - damping * qd) / mass;
