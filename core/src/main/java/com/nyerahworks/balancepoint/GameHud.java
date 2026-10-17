@@ -61,6 +61,8 @@ final class GameHud {
             drawMainMenu(width, height, min);
         } else if (state.gameState == GameState.PAUSED) {
             drawPauseMenu(width, height, min);
+        } else if (state.gameState == GameState.PHYSICS_DEV) {
+            // The standalone developer menu draws after the ordinary HUD.
         } else {
             drawTouchControls(width, height, min);
             drawRideStatus(width, height);
@@ -168,9 +170,9 @@ final class GameHud {
 
     private void drawPauseMenu(int width, int height, float min) {
         float panelX = width * 0.29f;
-        float panelY = height * 0.17f;
+        float panelY = height * 0.07f;
         float panelW = width * 0.42f;
-        float panelH = height * 0.64f;
+        float panelH = height * 0.76f;
         float buttonX = width * 0.34f;
         float buttonW = width * 0.32f;
         float buttonH = height * 0.075f;
@@ -191,6 +193,7 @@ final class GameHud {
         drawButton(buttonX, height * 0.45f, buttonW, buttonH, false);
         drawButton(buttonX, height * 0.34f, buttonW, buttonH, false);
         drawButton(buttonX, height * 0.23f, buttonW, buttonH, false);
+        drawButton(buttonX, height * 0.115f, buttonW, buttonH, false);
         shapes.end();
 
         batch.setProjectionMatrix(camera.combined);
@@ -219,12 +222,14 @@ final class GameHud {
                 "MAIN MENU",
                 buttonX + buttonW * 0.10f,
                 height * 0.23f + buttonH * 0.61f);
+        font.draw(batch, "PHYSICS DEV", buttonX + buttonW * 0.10f,
+                height * 0.115f + buttonH * 0.61f);
 
         font.getData().setScale(Math.max(0.60f, height / 720f * 0.72f));
         font.setColor(1f, 1f, 1f, 0.52f);
         String rideStats = String.format(
                 Locale.US, "BEST WHEELIE  %.1fs", state.bestWheelieTime);
-        font.draw(batch, rideStats, buttonX + buttonW * 0.10f, height * 0.195f);
+        font.draw(batch, rideStats, buttonX + buttonW * 0.10f, height * 0.085f);
         batch.end();
     }
 
