@@ -26,9 +26,9 @@ calibration, and measurement documents remain useful references.
 - **Unreal + Project Chrono:** a separate manually run prototype, not
   linked into the current libGDX mobile runtime. Do not delete this separate
   development effort without explicitly retiring that direction.
-- **BalancePointGame:** contains older motorcycle simulation fields and
-  helper logic alongside its V3 integration. Requires a proper call-graph
-  and behavioral refactor rather than unsafe mass deletion.
+- **BalancePointGame:** dead wheel-contact helper methods and orphaned old subsystem
+  instances were removed. Remaining crash/recovery and presentation-coupling
+  code needs a dedicated behavior-preserving refactor.
 - **Older Motorcycle* components:** the core still refers to several such
   components; their actual execution paths need runtime instrumentation.
 - **Generated track assets and validators:** remain required by packaging
@@ -44,3 +44,12 @@ calibration, and measurement documents remain useful references.
    diagnostic capture before changing ride behavior.
 4. Tune All Out-inspired steering and independent rider lean, with manual
    throttle/rear-brake-driven wheelie balance.
+
+## Second-pass targeted source hygiene
+
+- Removed three orphaned legacy components (`MotorcycleBodyContact`,
+  `MotorcycleLateralDynamics`, and `MotorcycleRiderDynamics`) and their tests.
+- Removed unused V2-era wheel-surface/contact helper methods, four unused
+  contact snapshots, and unused component construction/reset from `BalancePointGame`.
+- Renamed stale local `v2Input` to `v3Input` and corrected V3-facing comments.
+- Kept active suspension, drivetrain, crash/recovery, render and audio paths intact.

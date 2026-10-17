@@ -19,7 +19,7 @@ import com.badlogic.gdx.utils.Array;
 
 /**
  * Presentation-only rider built from Kenney's CC0 Graveyard Kit skeleton OBJ.
- * Rider physics remains in MotorcycleRiderDynamics; this class only presents the pose.
+ * Rider physics is handled by the active plant; this class only presents the pose.
  */
 final class SkeletonRider {
     private static final String ASSET = "models/character-skeleton.obj";
