@@ -53,3 +53,15 @@ calibration, and measurement documents remain useful references.
   contact snapshots, and unused component construction/reset from `BalancePointGame`.
 - Renamed stale local `v2Input` to `v3Input` and corrected V3-facing comments.
 - Kept active suspension, drivetrain, crash/recovery, render and audio paths intact.
+
+## Third pass — coordinator shadow-state cleanup
+
+Removed constructed but unused legacy drivetrain/suspension/landing systems and
+unobservable reset/update calls, old hardcoded physics coefficients, write-only
+shadow state, and the unused throttle-snap calculation. Active V3 solver and
+presentation/crash recovery behavior were preserved.
+
+`beginCrash` is currently an uncalled entry point; changing how crashes
+trigger is reserved for the gameplay/physics redesign, not silent cleanup.
+
+Next: developer menu and telemetry should connect directly to the V3 plant.

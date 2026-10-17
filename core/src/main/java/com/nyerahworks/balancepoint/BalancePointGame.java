@@ -12,57 +12,9 @@ public final class BalancePointGame extends ApplicationAdapter {
     private static final float PHYSICS_DT = 1f / 120f;
     private static final float WHEELBASE = 1.403232f;
     private static final float WHEEL_RADIUS = 0.334978f;
-    // Approx. 247 lb wet 450 + 190 lb rider = 198 kg combined system mass.
-    private static final float MASS = 198f;
-    private static final float GRAVITY = 9.81f;
-    private static final float PITCH_INERTIA = 168f;
-    private static final float MAX_CONTACT_FORCE = MASS * GRAVITY * 5f;
-    private static final float PITCH_DAMPING_GROUNDED = 2.85f;
-    private static final float PITCH_DAMPING_WHEELIE = 1.20f;
-    private static final float PITCH_DAMPING_AIR = 0.38f;
-    private static final float TERRAIN_ROLL_NATURAL_FREQUENCY = 5.5f;
-    private static final float TERRAIN_ROLL_DAMPING_RATIO = 1.15f;
+    // Presentation constants; live physical parameters are owned by the V3 plant.
     private static final float COM_FORWARD = 0.636107f;
-    private static final float AIRBORNE_COM_FORWARD = 1.00f;
-    private static final float AIRBORNE_COM_SHIFT_START = 25f * MathUtils.degreesToRadians;
-    private static final float AIRBORNE_COM_SHIFT_END = 55f * MathUtils.degreesToRadians;
     private static final float COM_HEIGHT = 0.36f;
-    private static final float REAR_STATIC_LOAD = MASS * GRAVITY
-            * (WHEELBASE - COM_FORWARD) / WHEELBASE;
-    private static final float FRONT_STATIC_LOAD = MASS * GRAVITY
-            * COM_FORWARD / WHEELBASE;
-    private static final float TIRE_SLIP_SPEED_AT_PEAK = 0.65f;
-    private static final float TIRE_HIGH_SLIP_START = 3.0f;
-    private static final float TIRE_HIGH_SLIP_FULL = 10.0f;
-    private static final float TIRE_HIGH_SLIP_GRIP = 0.86f;
-    private static final float MAX_ENGINE_FORCE = 2500f;
-    private static final float MAX_REAR_BRAKE_FORCE = 3800f;
-    private static final float ROLLING_RESISTANCE = 0.017f;
-    private static final float AERO_DRAG = 0.34f;
-    private static final float PITCH_DAMPING = 30f;
-    private static final float MAX_PITCH_RATE = 5.4f;
-    private static final float REAR_WHEEL_INERTIA = 1.05f;
-    private static final float AIR_WHEEL_DRIVE_ACCEL = 150f;
-    private static final float AIR_WHEEL_BRAKE_ACCEL = 260f;
-    private static final float AIR_WHEEL_DRAG = 0.22f;
-    private static final float AIR_PITCH_DAMPING = 0.08f;
-    private static final float AIR_MAX_PITCH_RATE = 5.2f;
-    private static final float AIR_WHEEL_REACTION_GAIN = 1.32f;
-    private static final float AIR_RIDER_TORQUE_GAIN = 1.30f;
-    private static final float AIR_CONTROL_BLEND_TIME = 0.055f;
-    private static final float CONTACT_PITCH_SPRING = 38f;
-    private static final float CONTACT_PITCH_DAMPING = 11f;
-    private static final float LIFT_SEED_RATE = 0.08f;
-    private static final float LIFT_MARGIN_FOR_FULL_SEED = 0.25f;
-    private static final float THROTTLE_SNAP_RATE = 12f;
-    private static final float THROTTLE_SNAP_IMPULSE = 0.52f;
-    private static final float TAKEOFF_PITCH_RATE_LIMIT = 2.2f;
-    private static final float TAKEOFF_PITCH_RATE_BLEND = 0.55f;
-
-    private final MotorcycleDrivetrain drivetrain = new MotorcycleDrivetrain(WHEEL_RADIUS);
-    private final MotorcycleSuspension suspension = new MotorcycleSuspension(
-            REAR_STATIC_LOAD, FRONT_STATIC_LOAD, MAX_CONTACT_FORCE);
-    private final MotorcycleLandingDynamics landingDynamics = new MotorcycleLandingDynamics();
 
     private GameCamera gameCamera;
     private GameScene scene;
@@ -71,8 +23,7 @@ public final class BalancePointGame extends ApplicationAdapter {
     private EngineAudio engineAudio;
     private TerrainVisuals terrainVisuals;
 
-    // PHYSICS_V3_RUNTIME -- physical dimensions live inside the plant; the old constants above
-    // remain only because GameScene/DirtBikeVisualRig use the imported GLB's presentation scale.
+    // Physics V3 is the single authoritative active motorcycle simulation.
     private final PhysicsV3MultibodyPlant physicsV3 = new PhysicsV3MultibodyPlant();
     private final PhysicsV3MultibodyPlant.Terrain physicsV3Terrain = new PhysicsV3MultibodyPlant.Terrain() {
         @Override public float height(float x, float z) {
@@ -90,7 +41,6 @@ public final class BalancePointGame extends ApplicationAdapter {
     };
 
     private float speed;
-    private float lateralSpeed;
     private float bikeZ;
     private float bikeX;
     private float bikeY = WHEEL_RADIUS;
@@ -101,26 +51,14 @@ public final class BalancePointGame extends ApplicationAdapter {
     private float pitch;
     private float pitchVelocity;
     private float roll;
-    private float rollVelocity;
     private float yaw;
-    private float yawVelocity;
     private float terrainRoll;
-    private float terrainRollVelocity;
     private float wheelSpin;
-    private float rearWheelAngularSpeed;
-    private float lastGroundSupportPitch;
-    private float groundSupportPitchRate;
     // Horizontal translation becomes a world-space ballistic vector at takeoff. This prevents
     // yaw/sideslip changes in the air from bending the actual flight path.
-    private float airborneVelocityX;
-    private float airborneVelocityZ;
-    private float longitudinalAcceleration;
-    private float frontNormalLoad;
 
     private float throttle;
     private float throttleTarget;
-    private float previousThrottleTarget;
-    private float throttleSnap;
     private float rearBrake;
     private float rearBrakeTarget;
     private float steer;
@@ -337,12 +275,7 @@ public final class BalancePointGame extends ApplicationAdapter {
         shiftDownHeld = shiftDownTouch;
 
         float newThrottleTarget = crashed ? 0f : (throttleTouch ? requestedThrottle : 0f);
-        float throttleRiseRate = Math.max(0f, newThrottleTarget - previousThrottleTarget)
-                / Math.max(dt, 0.001f);
-        float snap = MathUtils.clamp(throttleRiseRate / THROTTLE_SNAP_RATE, 0f, 1f);
-        throttleSnap = Math.max(throttleSnap * Math.max(0f, 1f - dt * 3.5f), snap);
         throttleTarget = newThrottleTarget;
-        previousThrottleTarget = newThrottleTarget;
         rearBrakeTarget = crashed ? 0f : (brakeTouch ? requestedBrake : 0f);
 
         steerTarget = crashed || !controlBoxTouch ? 0f : requestedSteer;
@@ -533,7 +466,6 @@ public final class BalancePointGame extends ApplicationAdapter {
             return;
         }
 
-        float previousSpeed = speed;
         PhysicsV3MultibodyPlant.Input v3Input = physicsV3.input();
         v3Input.throttle = throttle;
         v3Input.rearBrake = rearBrake;
@@ -552,21 +484,15 @@ public final class BalancePointGame extends ApplicationAdapter {
         pitch = physicsV3.pitch();
         pitchVelocity = physicsV3.pitchRate();
         roll = physicsV3.roll();
-        rollVelocity = physicsV3.rollRate();
         yaw = physicsV3.yaw();
-        yawVelocity = physicsV3.yawRate();
         terrainRoll = 0f;
-        terrainRollVelocity = 0f;
         wheelSpin = physicsV3.rearWheelSpin();
         frontGrounded = physicsV3.frontGrounded();
         terrainAirborne = physicsV3.airborne();
-        frontNormalLoad = physicsV3.telemetry().frontFz;
-        longitudinalAcceleration = (speed - previousSpeed) / Math.max(dt, 0.0001f);
 
         // Presentation-only legacy values. They do not feed back into PhysicsV3MultibodyPlant.
         effectiveComForward = COM_FORWARD;
         riderLean += (riderLeanTarget - riderLean) * Math.min(1f, dt * 6f);
-        rearWheelAngularSpeed = wheelSpin / Math.max(dt, 0.0001f);
         bikeY = chassisY - COM_HEIGHT;
 
         if (physicsV3.rearGrounded() && !frontGrounded && speed > 3f) {
@@ -582,12 +508,6 @@ public final class BalancePointGame extends ApplicationAdapter {
         crashed = true;
         crashSettled = false;
         crashTimer = 0f;
-        lateralSpeed = 0f;
-        rollVelocity = 0f;
-        yawVelocity = 0f;
-        terrainRollVelocity = 0f;
-        suspension.reset();
-        landingDynamics.reset();
         crashSide = roll < -0.05f ? -1f : (roll > 0.05f ? 1f : (steer < 0f ? -1f : 1f));
         crashPitchRate = MathUtils.clamp(pitchVelocity + 0.75f, -1.2f, 3.2f);
         crashRollRate = crashSide * (1.4f + MathUtils.clamp(speed * 0.045f, 0f, 1.5f));
@@ -602,7 +522,6 @@ public final class BalancePointGame extends ApplicationAdapter {
         crashTimer += dt;
         throttle = approach(throttle, 0f, 14f * dt);
         rearBrake = 0f;
-        drivetrain.update(speed, 0f, dt);
 
         float slideDecel = 6.5f + speed * 0.95f;
         speed = Math.max(0f, speed - slideDecel * dt);
@@ -645,7 +564,6 @@ public final class BalancePointGame extends ApplicationAdapter {
 
     private void resetBike() {
         speed = 0f;
-        lateralSpeed = 0f;
         bikeX = 0f;
         chassisY = WHEEL_RADIUS + COM_HEIGHT;
         bikeY = WHEEL_RADIUS;
@@ -655,21 +573,10 @@ public final class BalancePointGame extends ApplicationAdapter {
         pitch = 0f;
         pitchVelocity = 0f;
         roll = 0f;
-        rollVelocity = 0f;
         yaw = 0f;
-        yawVelocity = 0f;
         terrainRoll = 0f;
-        terrainRollVelocity = 0f;
         wheelSpin = 0f;
-        rearWheelAngularSpeed = 0f;
-        lastGroundSupportPitch = 0f;
-        groundSupportPitchRate = 0f;
-        airborneVelocityX = 0f;
-        airborneVelocityZ = 0f;
-        longitudinalAcceleration = 0f;
-        frontNormalLoad = FRONT_STATIC_LOAD;
-        throttle = throttleTarget = previousThrottleTarget = 0f;
-        throttleSnap = 0f;
+        throttle = throttleTarget = 0f;
         rearBrake = rearBrakeTarget = 0f;
         steer = steerTarget = 0f;
         riderLean = riderLeanTarget = 0f;
@@ -678,9 +585,6 @@ public final class BalancePointGame extends ApplicationAdapter {
         lookYaw = lookPitch = 0f;
         if (gameCamera != null) gameCamera.resetRide();
         shiftDownHeld = shiftUpHeld = false;
-        drivetrain.reset();
-        suspension.reset();
-        landingDynamics.reset();
         physicsV3.reset(physicsV3Terrain);
         frontGrounded = true;
         crashed = false;

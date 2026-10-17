@@ -26,7 +26,7 @@ The coordinator is intentionally capped by the repository quality gate. New rend
 
 ### Motorcycle drivetrain
 
-`MotorcycleDrivetrain` owns engine RPM coupling, gear ratios, shifting, torque output, clutch behavior, and limiter state. Callers provide driven-wheel linear speed, throttle, and fixed-step `dt`; callers do not duplicate gearbox math.
+The live mobile simulation uses `PhysicsV3MultibodyPlant` and its `PhysicsV2Powertrain` dependency for engine RPM, gear ratios, shifting, torque and limiter state. The older `MotorcycleDrivetrain`, `MotorcycleSuspension`, and `MotorcycleLandingDynamics` implementations remain isolated test/reference utilities; they are not live simulation systems.
 
 ### Terrain
 
