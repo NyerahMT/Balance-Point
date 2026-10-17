@@ -182,6 +182,7 @@ public final class BalancePointGame extends ApplicationAdapter {
                 saveDiagnostics();
             } else if (action == PhysicsDevMenu.REPLAY) {
                 if (diagnostics.hasCapture()) {
+                    diagnostics.stopCapture();
                     resetBike();
                     if (diagnostics.startReplay()) {
                         hasActiveRide = true;
