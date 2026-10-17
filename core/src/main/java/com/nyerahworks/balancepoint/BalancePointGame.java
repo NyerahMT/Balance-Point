@@ -99,7 +99,8 @@ public final class BalancePointGame extends ApplicationAdapter {
 
     @Override
     public void create() {
-        Gdx.graphics.setForegroundFPS(30);
+        // Higher visual/input sampling frequency; simulation remains fixed at 120 Hz.
+        Gdx.graphics.setForegroundFPS(60);
         hud = new GameHud();
         physicsDevMenu = new PhysicsDevMenu(physicsV3, diagnostics);
         instrumentDisplay = new InstrumentDisplay();
@@ -331,8 +332,10 @@ public final class BalancePointGame extends ApplicationAdapter {
         rearBrake = approach(rearBrake, rearBrakeTarget,
                 (rearBrakeTarget > rearBrake ? 24f : 22f) * dt);
 
-        float steerResponse = 5.8f + Math.min(Math.abs(speed) * 0.035f, 1.4f);
-        steer += (steerTarget - steer) * Math.min(1f, dt * steerResponse);
+        // Input intent is immediate. The actual bars already have inertia,
+        // steering servo damping, and tire relaxation in Physics V3.
+        // An extra input low-pass filter made the controller feel disconnected.
+        steer = steerTarget;
 
         if (!looking) {
             lookYaw *= Math.max(0f, 1f - dt * 1.65f);
@@ -552,6 +555,9 @@ public final class BalancePointGame extends ApplicationAdapter {
             v3Input.throttle = throttle;
             v3Input.rearBrake = rearBrake;
             v3Input.steer = steer;
+            // Keep input direct; the V3 generalized rider coordinate is damped
+            // by the physical mass-shift controller.
+            riderLean = riderLeanTarget;
             v3Input.riderForeAft = riderLean;
         }
         physicsV3.step(physicsV3Terrain, dt);
@@ -579,7 +585,6 @@ public final class BalancePointGame extends ApplicationAdapter {
 
         // Presentation-only legacy values. They do not feed back into PhysicsV3MultibodyPlant.
         effectiveComForward = COM_FORWARD;
-        riderLean += (riderLeanTarget - riderLean) * Math.min(1f, dt * 6f);
         bikeY = chassisY - COM_HEIGHT;
 
         if (physicsV3.rearGrounded() && !frontGrounded && speed > 3f) {
@@ -697,7 +702,8 @@ public final class BalancePointGame extends ApplicationAdapter {
         state.terrainRoll = terrainRoll;
         state.wheelSpin = wheelSpin;
         state.speed = speed;
-        state.steer = steer;
+        // Drive fork visual from the REAL physics steering DOF, not filtered input.
+        state.physicsSteerAngle = physicsV3.steerAngle();
         state.riderLean = riderLean;
         state.rearSuspensionTravel = physicsV3.rearCompression() - 0.111f;
         state.frontSuspensionTravel = physicsV3.frontCompression() - 0.095f;
