@@ -18,11 +18,12 @@ five seconds on both right and left releases. The previous short endpoint test
 could not see the intermediate oscillation. For the same deterministic turn,
 a parameter sweep found materially better decay with:
 - countersteer proportional gain: `0.85 → 0.20`
-- countersteer roll-rate gain: `0.95 → 0.05`
+- countersteer roll-rate gain: `0.95 → 0.15`
 - steer servo rate damping: `15 → 25`
 
-The candidate preserved a ~10° lean at held input and eliminated large
-post-release reversals in the diagnostic trial. Unit tests now protect
+The selected calibration preserved ~14° of lean with a positive into-turn
+steer angle after two seconds and eliminated large post-release reversals
+in the deterministic trial. Unit tests now protect
 **the full turn-to-neutral transient**, not just a final roll measurement.
 This is a controller calibration change, not a modified tire or suspension
 model. Real-device handling and slower/faster-speed tests are still required.

@@ -58,7 +58,7 @@ final class PhysicsTuning {
             new Parameter(0, 0, "Steering response", "gain", 0f, 100f, 46f),
             new Parameter(0, 0, "Steering damping", "gain", 0f, 40f, 25f),
             new Parameter(0, 1, "Countersteer response", "gain", 0f, 2f, 0.20f),
-            new Parameter(0, 1, "Countersteer damping", "gain", 0f, 2f, 0.05f),
+            new Parameter(0, 1, "Countersteer damping", "gain", 0f, 2f, 0.15f),
             new Parameter(0, 2, "Upright assist", "gain", 0f, 400f, 160f),
             new Parameter(0, 2, "Upright damping", "gain", 0f, 220f, 85f),
             new Parameter(1, 0, "Weight-shift response", "gain", 0f, 100f, 46f),
