@@ -12,7 +12,7 @@ builds; it should be build-gated before publishing a public release.
 - Wheelies → Wheelie catch
 
 The initial editor has fifteen bounded, live physics parameters with raw
-numeric values, original-V3 defaults, and a two-step category/subsystem menu.
+numeric values, validated-V3 defaults, and a two-step category/subsystem menu.
 These are actual solver coefficients, not visual-only UI settings.
 
 ## Behavior

@@ -3,8 +3,9 @@ package com.nyerahworks.balancepoint;
 import com.badlogic.gdx.math.MathUtils;
 
 /**
- * Live V3 physics tuning parameters. Defaults exactly match the original V3
- * controller and suspension equations; the editor does not introduce forces.
+ * Live V3 physics tuning parameters. Defaults preserve the V3 suspension and
+ * wheelie equations while using regression-validated turn-release steering gains.
+ * The editor does not introduce forces.
  */
 final class PhysicsTuning {
     static final String[] CATEGORIES = {

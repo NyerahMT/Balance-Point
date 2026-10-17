@@ -46,6 +46,8 @@ public final class PhysicsDiagnosticsTest {
         assertTrue("roll diverged: " + diag.maxRollError(),
                 diag.maxRollError() < 0.00001f);
         assertTrue(diag.toCsv().contains("wheelie_catch_nm"));
+        assertTrue(diag.toCsv().contains("roll_rate_rad_s"));
+        assertTrue(diag.toCsv().contains("requested_roll_rad"));
         assertTrue(diag.toCsv().contains("# frames,150"));
     }
 

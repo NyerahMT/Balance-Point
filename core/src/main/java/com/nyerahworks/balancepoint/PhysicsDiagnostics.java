@@ -34,7 +34,10 @@ final class PhysicsDiagnostics {
             "front_grounded",
             "rear_grounded",
             "engine_rpm",
-            "shift_event"
+            "shift_event",
+            "roll_rate_rad_s",
+            "yaw_rate_rad_s",
+            "requested_roll_rad"
     };
     private final float[][] values = new float[COLUMNS.length][MAX_FRAMES];
     private final float[] capturedParameters = new float[PhysicsTuning.PARAMETERS.length];
@@ -127,6 +130,9 @@ final class PhysicsDiagnostics {
         values[23][f] = t.rearGrounded ? 1f : 0f;
         values[24][f] = t.engineRpm;
         values[25][f] = shiftEvent;
+        values[26][f] = plant.rollRate();
+        values[27][f] = plant.yawRate();
+        values[28][f] = t.requestedRoll;
         if (frames == MAX_FRAMES) capturing = false;
     }
 

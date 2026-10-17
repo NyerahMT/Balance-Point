@@ -20,7 +20,7 @@ record/replay path uses the same 120 Hz physics solver as the mobile game.
 6. Modify a tuning value and **REPLAY** again to compare the same rider inputs
    against new steering/suspension/wheelie corrections.
 
-Recording is bounded to 90 seconds (10,800 fixed steps) and includes 26
+Recording is bounded to 90 seconds (10,800 fixed steps) and includes 29
 telemetry columns plus the tuning settings used at capture start. Gear shifts
 are captured as events and reproduced. The editor locks tuning changes while
 a recording is active to avoid invalid comparisons.
@@ -30,6 +30,8 @@ a recording is active to avoid invalid comparisons.
 - **Position error** is the largest distance between replay and original
   captured position at corresponding fixed steps, in metres.
 - **Roll error** is the largest absolute roll-angle deviation, in radians.
+- **Roll/yaw rate** and **requested roll** capture the angular-momentum
+  overshoot and controller request during turn release.
 - The CSV exposes applied steering-controller torque, requested countersteer,
   low-speed roll assistance and wheelie-catch torque, as well as rider commands,
   contact loads, tire utilization, suspension compression and vehicle motion.
