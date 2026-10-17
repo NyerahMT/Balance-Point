@@ -1,6 +1,7 @@
 package com.nyerahworks.balancepoint;
 
 import com.badlogic.gdx.Gdx;
+import com.badlogic.gdx.Preferences;
 import com.badlogic.gdx.graphics.GL20;
 import com.badlogic.gdx.graphics.OrthographicCamera;
 import com.badlogic.gdx.graphics.g2d.BitmapFont;
@@ -15,6 +16,7 @@ import java.util.Locale;
  */
 final class PhysicsDevMenu {
     private final PhysicsTuning tuning;
+    private final Preferences preferences;
     private final OrthographicCamera camera = new OrthographicCamera();
     private final SpriteBatch batch = new SpriteBatch();
     private final ShapeRenderer shapes = new ShapeRenderer();
@@ -27,6 +29,40 @@ final class PhysicsDevMenu {
 
     PhysicsDevMenu(PhysicsTuning tuning) {
         this.tuning = tuning;
+        this.preferences = Gdx.app.getPreferences("balance-point-physics-dev");
+        restoreSavedSettings();
+    }
+
+    private void restoreSavedSettings() {
+        for (int slot = 0; slot < 2; slot++) {
+            if (!preferences.getBoolean("preset-saved-" + slot, false)) continue;
+            for (int id = 0; id < PhysicsTuning.PARAMETERS.length; id++) {
+                tuning.set(id, preferences.getFloat("preset-" + slot + "-" + id,
+                        tuning.get(id)));
+            }
+            tuning.savePreset(slot);
+        }
+        tuning.resetDefaults();
+        for (int id = 0; id < PhysicsTuning.PARAMETERS.length; id++) {
+            String key = "active-" + id;
+            if (preferences.contains(key)) tuning.set(id, preferences.getFloat(key));
+        }
+    }
+
+    private void persistActive() {
+        for (int id = 0; id < PhysicsTuning.PARAMETERS.length; id++) {
+            preferences.putFloat("active-" + id, tuning.get(id));
+        }
+        preferences.flush();
+    }
+
+    private void persistPreset(int slot) {
+        tuning.savePreset(slot);
+        for (int id = 0; id < PhysicsTuning.PARAMETERS.length; id++) {
+            preferences.putFloat("preset-" + slot + "-" + id, tuning.get(id));
+        }
+        preferences.putBoolean("preset-saved-" + slot, true);
+        preferences.flush();
     }
 
     void resize(int width, int height) {
@@ -42,7 +78,10 @@ final class PhysicsDevMenu {
             float x = Gdx.input.getX() / width;
             float y = 1f - Gdx.input.getY() / height;
             dragging = -1;
-            if (inside(x, y, 0.03f, 0.86f, 0.15f, 0.11f)) return true;
+            if (inside(x, y, 0.03f, 0.86f, 0.15f, 0.11f)) {
+                persistActive();
+                return true;
+            }
 
             for (int i = 0; i < PhysicsTuning.CATEGORIES.length; i++) {
                 if (inside(x, y, 0.03f, 0.74f - 0.13f * i,
@@ -74,12 +113,12 @@ final class PhysicsDevMenu {
                 tuning.resetDefaults();
                 status = "DEFAULTS RESTORED";
             } else if (inside(x, y, 0.40f, 0.07f, 0.13f, 0.10f)) {
-                tuning.savePreset(0);
+                persistPreset(0);
                 status = "PRESET A SAVED";
             } else if (inside(x, y, 0.54f, 0.07f, 0.13f, 0.10f)) {
                 status = tuning.loadPreset(0) ? "PRESET A LOADED" : "SAVE A FIRST";
             } else if (inside(x, y, 0.69f, 0.07f, 0.13f, 0.10f)) {
-                tuning.savePreset(1);
+                persistPreset(1);
                 status = "PRESET B SAVED";
             } else if (inside(x, y, 0.83f, 0.07f, 0.13f, 0.10f)) {
                 status = tuning.loadPreset(1) ? "PRESET B LOADED" : "SAVE B FIRST";

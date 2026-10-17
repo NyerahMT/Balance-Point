@@ -70,10 +70,6 @@ final class PhysicsV3MultibodyPlant {
     private static final float REAR_SUSPENSION_MASS = 18f;
     private static final float FRONT_WHEEL_RATE = 10_000f;
     private static final float REAR_WHEEL_RATE = 10_600f;
-    private static final float FRONT_COMP_DAMP = 1_450f;
-    private static final float FRONT_REBOUND_DAMP = 2_150f;
-    private static final float REAR_COMP_DAMP = 1_650f;
-    private static final float REAR_REBOUND_DAMP = 2_450f;
 
     private static final float FRONT_TIRE_K = 170_000f;
     private static final float REAR_TIRE_K = 190_000f;
@@ -89,34 +85,23 @@ final class PhysicsV3MultibodyPlant {
     private static final float STEER_INERTIA = 0.24f;
     // Player input is turn intent. Above walking speed the bars countersteer to
     // create lean, then hold the bicycle-model steer for the lean that exists.
-    private static final float STEER_SERVO_KP = 46f;
-    private static final float STEER_SERVO_KD = 15f;
     private static final float STEER_ALIGNING_GAIN = 0.25f;
     private static final float MAX_STEER_TORQUE = 26f;
     private static final float MAX_STEER_ANGLE = radians(32f);
     private static final float MAX_TARGET_LEAN = radians(36f);
-    private static final float COUNTERSTEER_KP = 0.85f;
-    private static final float COUNTERSTEER_KD = 0.95f;
     private static final float MAX_COUNTERSTEER = radians(6f);
 
     // Upright assist only while the tires cannot yet balance the bike. An external
     // roll moment at speed has to be cancelled by lateral force and saturates the
     // front tire before the bike can yaw.
-    private static final float LOW_SPEED_BALANCE_KP = 160f;
-    private static final float LOW_SPEED_BALANCE_KD = 85f;
     private static final float MAX_LOW_SPEED_BALANCE = 140f;
     private static final float YAW_DAMPING = 4f;
 
     // Grounded anti-loop catch. It is deliberately above the geometric balance
     // point and contributes nothing when the rear contact is gone.
     private static final float WHEELIE_CATCH_OFFSET = radians(5f);
-    private static final float WHEELIE_CATCH_KP = 480f;
-    private static final float WHEELIE_CATCH_KD = 120f;
-    private static final float MAX_WHEELIE_CATCH = 520f;
 
     private static final float RIDER_TRAVEL = 0.16f;
-    private static final float RIDER_KP = 46f;
-    private static final float RIDER_KD = 13f;
     private static final float RIDER_HEIGHT_ABOVE_CG = 0.24f;
 
     private static final float ROLLING_COEFF = 0.017f;
