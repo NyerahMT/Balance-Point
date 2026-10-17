@@ -19,6 +19,7 @@ public final class BalancePointGame extends ApplicationAdapter {
     private GameCamera gameCamera;
     private GameScene scene;
     private GameHud hud;
+    private PhysicsDevMenu physicsDevMenu;
     private InstrumentDisplay instrumentDisplay;
     private EngineAudio engineAudio;
     private TerrainVisuals terrainVisuals;
@@ -98,6 +99,7 @@ public final class BalancePointGame extends ApplicationAdapter {
     public void create() {
         Gdx.graphics.setForegroundFPS(30);
         hud = new GameHud();
+        physicsDevMenu = new PhysicsDevMenu(physicsV3);
         instrumentDisplay = new InstrumentDisplay();
         scene = new GameScene(
                 instrumentDisplay, WHEELBASE, WHEEL_RADIUS, COM_FORWARD, COM_HEIGHT);
@@ -152,6 +154,7 @@ public final class BalancePointGame extends ApplicationAdapter {
                 bikeX,
                 bikeY);
         drawHud();
+        if (gameState == GameState.PHYSICS_DEV) physicsDevMenu.draw();
     }
 
     private void readInput(float dt) {
@@ -162,6 +165,10 @@ public final class BalancePointGame extends ApplicationAdapter {
             riderControlPointer = -1;
             throttleControlPointer = -1;
             readMainMenuInput(w, h);
+            return;
+        }
+        if (gameState == GameState.PHYSICS_DEV) {
+            if (physicsDevMenu.readInput()) gameState = GameState.PAUSED;
             return;
         }
         if (gameState == GameState.PAUSED) {
@@ -335,6 +342,8 @@ public final class BalancePointGame extends ApplicationAdapter {
             toggleQuality();
         } else if (inside(x, y, bx, h * 0.23f, bw, bh)) {
             enterMainMenu();
+        } else if (inside(x, y, bx, h * 0.115f, bw, bh)) {
+            gameState = GameState.PHYSICS_DEV;
         }
     }
 
@@ -669,6 +678,7 @@ public final class BalancePointGame extends ApplicationAdapter {
     public void resize(int width, int height) {
         if (gameCamera != null) gameCamera.resize(width, height);
         if (hud != null) hud.resize(width, height);
+        if (physicsDevMenu != null) physicsDevMenu.resize(width, height);
     }
 
     @Override
@@ -687,6 +697,7 @@ public final class BalancePointGame extends ApplicationAdapter {
         if (engineAudio != null) engineAudio.dispose();
         if (scene != null) scene.dispose();
         if (hud != null) hud.dispose();
+        if (physicsDevMenu != null) physicsDevMenu.dispose();
         if (instrumentDisplay != null) instrumentDisplay.dispose();
     }
 }

@@ -4,5 +4,6 @@ package com.nyerahworks.balancepoint;
 enum GameState {
     MAIN_MENU,
     PLAYING,
-    PAUSED
+    PAUSED,
+    PHYSICS_DEV
 }
