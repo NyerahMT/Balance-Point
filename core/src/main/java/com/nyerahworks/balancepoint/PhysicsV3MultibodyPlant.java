@@ -47,6 +47,11 @@ final class PhysicsV3MultibodyPlant {
         float speed;
         boolean rearGrounded;
         boolean frontGrounded;
+        float steerControllerTorque;
+        float requestedRoll;
+        float countersteerRequest;
+        float lowSpeedBalanceTorque;
+        float wheelieCatchTorque;
     }
 
     private static final float G = 9.80665f;
@@ -205,6 +210,11 @@ final class PhysicsV3MultibodyPlant {
         input.rearBrake = 0f;
         input.steer = 0f;
         input.riderForeAft = 0f;
+        telemetry.steerControllerTorque = 0f;
+        telemetry.requestedRoll = 0f;
+        telemetry.countersteerRequest = 0f;
+        telemetry.lowSpeedBalanceTorque = 0f;
+        telemetry.wheelieCatchTorque = 0f;
         basis();
         updateTelemetry();
     }
@@ -337,6 +347,8 @@ final class PhysicsV3MultibodyPlant {
         addAxisMoment(totalMomentWorld, right, riderPitchReaction);
 
         boolean anyGround = rearGrounded() || frontGrounded();
+        telemetry.lowSpeedBalanceTorque = 0f;
+        telemetry.wheelieCatchTorque = 0f;
         if (anyGround) {
             float balanceFade = 1f - smoothstep(1.4f, 4.2f, Math.abs(speedForward));
             float upright = -tuning.get(PhysicsTuning.BALANCE_KP) * roll()
@@ -347,6 +359,7 @@ final class PhysicsV3MultibodyPlant {
                     MAX_LOW_SPEED_BALANCE) * balanceFade;
             // Rate-only damper stays on at speed so a pickup does not flop through upright.
             rollMoment += clamp(-42f * rollRate(), -90f, 90f);
+            telemetry.lowSpeedBalanceTorque = rollMoment;
             addAxisMoment(totalMomentWorld, forward, rollMoment);
             addAxisMoment(totalMomentWorld, up, -YAW_DAMPING * yawRate());
         }
@@ -362,6 +375,7 @@ final class PhysicsV3MultibodyPlant {
                         + tuning.get(PhysicsTuning.CATCH_KD) * Math.max(0f, pitchRate() - 0.8f);
                 catchTorque = clamp(catchTorque, 0f, tuning.get(PhysicsTuning.CATCH_MAX));
                 // Positive body-X is nose-down.
+                telemetry.wheelieCatchTorque = catchTorque;
                 addAxisMoment(totalMomentWorld, right, catchTorque);
             }
         }
@@ -402,6 +416,7 @@ final class PhysicsV3MultibodyPlant {
             float command = clamp(input.steer, -1f, 1f);
             float authority = smoothstep(1.2f, 5.5f, speed);
             float targetRoll = -command * MAX_TARGET_LEAN * authority;
+            telemetry.requestedRoll = targetRoll;
 
             // Right lean is negative roll. A positive roll error means the bike is not
             // leaned into the requested turn yet, so the bars steer the other way.
@@ -413,6 +428,7 @@ final class PhysicsV3MultibodyPlant {
                             - tuning.get(PhysicsTuning.COUNTER_KD) * rollRate(),
                     -MAX_COUNTERSTEER,
                     MAX_COUNTERSTEER);
+            telemetry.countersteerRequest = countersteer;
             float speedSq = Math.max(speed * speed, 16f);
             float steadySteer = -(float) Math.atan(
                     WHEELBASE * G * (float) Math.tan(roll()) / speedSq);
@@ -428,9 +444,12 @@ final class PhysicsV3MultibodyPlant {
                     - tuning.get(PhysicsTuning.STEER_KD) * steerRate;
         } else {
             // Airborne behavior intentionally unchanged: no steering recenter servo.
+            telemetry.requestedRoll = 0f;
+            telemetry.countersteerRequest = 0f;
             controllerTorque = -2.2f * steerRate;
         }
 
+        telemetry.steerControllerTorque = controllerTorque;
         float tireAligning = frontGrounded()
                 ? STEER_ALIGNING_GAIN * frontTireForce.mz : 0f;
         float steerTorque = clamp(
