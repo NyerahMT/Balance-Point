@@ -51,7 +51,6 @@ final class DirtBikeVisualRig {
 
     private final ModelInstance swingarm;
     private final ModelInstance frontSliders;
-    private float visualSteerDegrees;
 
     DirtBikeVisualRig(DirtBikeMeshLoader.LoadedBike bike,
                       float wheelbase,
@@ -140,11 +139,10 @@ final class DirtBikeVisualRig {
                     .rotate(Vector3.X, importedSpinDeg);
         }
 
-        float targetVisualSteer = targetVisualSteerDegrees(state);
-        float visualResponse = state.frontGrounded ? 11.5f : 8.0f;
-        visualSteerDegrees += (targetVisualSteer - visualSteerDegrees)
-                * Math.min(1f, Gdx.graphics.getDeltaTime() * visualResponse);
-        float visualSteerDeg = visualSteerDegrees;
+        // No independent steering animation: use the physics-generated angle.
+        // This preserves real countersteer, into-turn tracking and steering
+        // inertia instead of visually synthesizing a different steering motion.
+        float visualSteerDeg = physicalSteerDegrees(state);
         steeringRoot.set(bikeRoot)
                 .translate(bike.steeringHead)
                 .rotate(bike.steeringAxis, visualSteerDeg);
@@ -181,28 +179,8 @@ final class DirtBikeVisualRig {
         if (frontSliders != null) batch.render(frontSliders);
     }
 
-    private static float targetVisualSteerDegrees(GameScene.BikeState state) {
-        float absSpeed = Math.abs(state.speed);
-
-        if (!state.frontGrounded) {
-            float airborneMax = state.terrainAirborne ? 9f : 13f;
-            return state.steer * airborneMax;
-        }
-
-        float roadBlend = MathUtils.clamp((absSpeed - 2.5f) / 10.5f, 0f, 1f);
-        roadBlend = roadBlend * roadBlend * (3f - 2f * roadBlend);
-
-        float lowSpeedSteer = state.steer * 28f;
-        float rollDeg = state.roll * MathUtils.radiansToDegrees;
-        float settledSteer = MathUtils.clamp(rollDeg * 0.070f, -4.0f, 4.0f);
-
-        // At turn-in the bars briefly show a small countersteer cue; once the bike is leaned,
-        // steering visually settles with the chassis instead of oscillating between two poses.
-        float uprightBlend = 1f - MathUtils.clamp(Math.abs(rollDeg) / 16f, 0f, 1f);
-        float counterSteerCue = -state.steer * 1.5f * uprightBlend;
-        float highSpeedSteer = settledSteer + counterSteerCue;
-
-        return MathUtils.lerp(lowSpeedSteer, highSpeedSteer, roadBlend);
+    static float physicalSteerDegrees(GameScene.BikeState state) {
+        return state.physicsSteerAngle * MathUtils.radiansToDegrees;
     }
 
     private ObjectSet<String> findSwingarmParts(Array<PartBounds> parts) {

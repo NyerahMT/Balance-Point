@@ -35,7 +35,8 @@ final class GameScene {
         float terrainRoll;
         float wheelSpin;
         float speed;
-        float steer;
+        // Radians, physical V3 front-fork generalized steering coordinate.
+        float physicsSteerAngle;
         float riderLean;
         // Signed axle travel from the normal loaded ride position. Positive is compression;
         // negative is extension. Physics owns these values and the visual rig only consumes them.

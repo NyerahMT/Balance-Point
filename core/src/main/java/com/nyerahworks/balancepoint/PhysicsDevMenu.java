@@ -15,7 +15,13 @@ import java.util.Locale;
  * not visual transforms or an unused legacy simulation.
  */
 final class PhysicsDevMenu {
+    static final int NONE = 0;
+    static final int BACK = 1;
+    static final int RECORD = 2;
+    static final int SAVE = 3;
+    static final int REPLAY = 4;
     private final PhysicsV3MultibodyPlant plant;
+    private final PhysicsDiagnostics diagnostics;
     private final PhysicsTuning tuning;
     private final Preferences preferences;
     private final OrthographicCamera camera = new OrthographicCamera();
@@ -28,8 +34,9 @@ final class PhysicsDevMenu {
     private int dragging = -1;
     private String status = "LIVE V3 TUNING";
 
-    PhysicsDevMenu(PhysicsV3MultibodyPlant plant) {
+    PhysicsDevMenu(PhysicsV3MultibodyPlant plant, PhysicsDiagnostics diagnostics) {
         this.plant = plant;
+        this.diagnostics = diagnostics;
         this.tuning = plant.tuning();
         this.preferences = Gdx.app.getPreferences("balance-point-physics-dev");
         restoreSavedSettings();
@@ -72,7 +79,11 @@ final class PhysicsDevMenu {
         camera.update();
     }
 
-    boolean readInput() {
+    void setStatus(String message) {
+        status = message;
+    }
+
+    int readInput() {
         float width = Math.max(1, Gdx.graphics.getWidth());
         float height = Math.max(1, Gdx.graphics.getHeight());
         if (!Gdx.input.isTouched()) dragging = -1;
@@ -82,32 +93,39 @@ final class PhysicsDevMenu {
             dragging = -1;
             if (inside(x, y, 0.03f, 0.86f, 0.15f, 0.11f)) {
                 persistActive();
-                return true;
+                return BACK;
             }
+            if (inside(x, y, 0.59f, 0.86f, 0.12f, 0.11f)) return RECORD;
+            if (inside(x, y, 0.72f, 0.86f, 0.12f, 0.11f)) return SAVE;
+            if (inside(x, y, 0.85f, 0.86f, 0.12f, 0.11f)) return REPLAY;
 
             for (int i = 0; i < PhysicsTuning.CATEGORIES.length; i++) {
                 if (inside(x, y, 0.03f, 0.74f - 0.13f * i,
                         0.26f, 0.085f)) {
                     category = i;
                     subcategory = 0;
-                    return false;
+                    return NONE;
                 }
             }
             for (int i = 0; i < PhysicsTuning.SUBCATEGORIES[category].length; i++) {
                 if (inside(x, y, 0.32f, 0.74f - 0.13f * i,
                         0.23f, 0.085f)) {
                     subcategory = i;
-                    return false;
+                    return NONE;
                 }
             }
 
             int visible = PhysicsTuning.count(category, subcategory);
+            if (diagnostics.capturing()) {
+                status = "STOP/EXPORT BEFORE CHANGING TUNING";
+                return NONE;
+            }
             for (int i = 0; i < visible; i++) {
                 float sliderY = 0.70f - i * 0.17f;
                 if (inside(x, y, 0.60f, sliderY - 0.06f, 0.35f, 0.13f)) {
                     dragging = PhysicsTuning.parameterAt(category, subcategory, i);
                     setFromTouch(x);
-                    return false;
+                    return NONE;
                 }
             }
 
@@ -126,10 +144,10 @@ final class PhysicsDevMenu {
                 status = tuning.loadPreset(1) ? "PRESET B LOADED" : "SAVE B FIRST";
             }
         }
-        if (dragging >= 0 && Gdx.input.isTouched()) {
+        if (dragging >= 0 && Gdx.input.isTouched() && !diagnostics.capturing()) {
             setFromTouch(Gdx.input.getX() / width);
         }
-        return false;
+        return NONE;
     }
 
     private void setFromTouch(float x) {
@@ -159,6 +177,9 @@ final class PhysicsDevMenu {
         shapes.setColor(0.92f, 0.40f, 0.12f, 1f);
         shapes.rect(0f, height * 0.98f, width, height * 0.02f);
         button(width, height, 0.03f, 0.86f, 0.15f, 0.11f, true);
+        button(width, height, 0.59f, 0.86f, 0.12f, 0.11f, diagnostics.capturing());
+        button(width, height, 0.72f, 0.86f, 0.12f, 0.11f, false);
+        button(width, height, 0.85f, 0.86f, 0.12f, 0.11f, diagnostics.replaying());
 
         for (int i = 0; i < PhysicsTuning.CATEGORIES.length; i++) {
             button(width, height, 0.03f, 0.74f - 0.13f * i,
@@ -197,6 +218,10 @@ final class PhysicsDevMenu {
         label("BACK", width * 0.066f, height * 0.929f);
         font.getData().setScale(Math.max(1.0f, height / 720f * 1.3f));
         label("PHYSICS LAB", width * 0.28f, height * 0.93f);
+        font.getData().setScale(Math.max(0.75f, height / 720f * 0.90f));
+        label("RECORD", width * 0.607f, height * 0.929f);
+        label("EXPORT", width * 0.737f, height * 0.929f);
+        label("REPLAY", width * 0.867f, height * 0.929f);
         font.getData().setScale(Math.max(0.7f, height / 720f * 0.87f));
         for (int i = 0; i < PhysicsTuning.CATEGORIES.length; i++) {
             label(PhysicsTuning.CATEGORIES[i], width * 0.041f,
@@ -223,6 +248,13 @@ final class PhysicsDevMenu {
         label("LOAD B", width * 0.850f, height * 0.13f);
         font.setColor(1f, 1f, 1f, 0.65f);
         label(status, width * 0.04f, height * 0.29f);
+        String captureState = diagnostics.capturing() ? "RECORDING" :
+                diagnostics.replaying() ? "REPLAYING" : "READY";
+        String captured = String.format(Locale.US,
+                "%s   %.1f s / 90.0 s   REPLAY ERROR %.3f m",
+                captureState, diagnostics.frameCount() * PhysicsDiagnostics.FIXED_DT,
+                diagnostics.maxPositionError());
+        label(captured, width * 0.04f, height * 0.335f);
         PhysicsV3MultibodyPlant.Telemetry telemetry = plant.telemetry();
         font.setColor(1f, 1f, 1f, 0.60f);
         font.getData().setScale(Math.max(0.66f, height / 720f * 0.76f));

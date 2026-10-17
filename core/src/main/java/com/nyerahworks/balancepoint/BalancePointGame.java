@@ -26,6 +26,7 @@ public final class BalancePointGame extends ApplicationAdapter {
 
     // Physics V3 is the single authoritative active motorcycle simulation.
     private final PhysicsV3MultibodyPlant physicsV3 = new PhysicsV3MultibodyPlant();
+    private final PhysicsDiagnostics diagnostics = new PhysicsDiagnostics();
     private final PhysicsV3MultibodyPlant.Terrain physicsV3Terrain = new PhysicsV3MultibodyPlant.Terrain() {
         @Override public float height(float x, float z) {
             return terrainVisuals == null ? 0f : terrainVisuals.groundHeight(x, z);
@@ -89,6 +90,7 @@ public final class BalancePointGame extends ApplicationAdapter {
     private float wheelieTime;
     private float bestWheelieTime;
     private double physicsAccumulator;
+    private int pendingDiagnosticShift;
 
     private GameState gameState = GameState.MAIN_MENU;
     private boolean hasActiveRide;
@@ -97,9 +99,10 @@ public final class BalancePointGame extends ApplicationAdapter {
 
     @Override
     public void create() {
-        Gdx.graphics.setForegroundFPS(30);
+        // Higher visual/input sampling frequency; simulation remains fixed at 120 Hz.
+        Gdx.graphics.setForegroundFPS(60);
         hud = new GameHud();
-        physicsDevMenu = new PhysicsDevMenu(physicsV3);
+        physicsDevMenu = new PhysicsDevMenu(physicsV3, diagnostics);
         instrumentDisplay = new InstrumentDisplay();
         scene = new GameScene(
                 instrumentDisplay, WHEELBASE, WHEEL_RADIUS, COM_FORWARD, COM_HEIGHT);
@@ -125,6 +128,7 @@ public final class BalancePointGame extends ApplicationAdapter {
             int steps = 0;
             while (physicsAccumulator >= PHYSICS_DT && steps < 8) {
                 simulate(PHYSICS_DT);
+                if (gameState != GameState.PLAYING) break;
                 physicsAccumulator -= PHYSICS_DT;
                 steps++;
             }
@@ -168,13 +172,43 @@ public final class BalancePointGame extends ApplicationAdapter {
             return;
         }
         if (gameState == GameState.PHYSICS_DEV) {
-            if (physicsDevMenu.readInput()) gameState = GameState.PAUSED;
+            int action = physicsDevMenu.readInput();
+            if (action == PhysicsDevMenu.BACK) {
+                gameState = GameState.PAUSED;
+            } else if (action == PhysicsDevMenu.RECORD) {
+                startNewRide();
+                pendingDiagnosticShift = 0;
+                diagnostics.startCapture(physicsV3.tuning());
+            } else if (action == PhysicsDevMenu.SAVE) {
+                saveDiagnostics();
+            } else if (action == PhysicsDevMenu.REPLAY) {
+                if (diagnostics.hasCapture()) {
+                    diagnostics.stopCapture();
+                    resetBike();
+                    if (diagnostics.startReplay()) {
+                        hasActiveRide = true;
+                        gameState = GameState.PLAYING;
+                        if (engineAudio != null) engineAudio.setActive(true);
+                    }
+                } else {
+                    physicsDevMenu.setStatus("NO CAPTURE TO REPLAY");
+                }
+            }
             return;
         }
         if (gameState == GameState.PAUSED) {
             riderControlPointer = -1;
             throttleControlPointer = -1;
             readPauseMenuInput(w, h);
+            return;
+        }
+        if (diagnostics.replaying()) {
+            if (Gdx.input.justTouched()
+                    && Gdx.input.getX() < w * 0.14f
+                    && Gdx.input.getY() < h * 0.16f) {
+                diagnostics.stopReplay();
+                enterPause();
+            }
             return;
         }
 
@@ -275,8 +309,14 @@ public final class BalancePointGame extends ApplicationAdapter {
         looking = lookTouch;
 
         if (!crashed) {
-            if (shiftUpTouch && !shiftUpHeld) physicsV3.shiftUp();
-            if (shiftDownTouch && !shiftDownHeld) physicsV3.shiftDown();
+            if (shiftUpTouch && !shiftUpHeld) {
+                physicsV3.shiftUp();
+                if (diagnostics.capturing()) pendingDiagnosticShift = 1;
+            }
+            if (shiftDownTouch && !shiftDownHeld) {
+                physicsV3.shiftDown();
+                if (diagnostics.capturing()) pendingDiagnosticShift = -1;
+            }
         }
         shiftUpHeld = shiftUpTouch;
         shiftDownHeld = shiftDownTouch;
@@ -292,8 +332,10 @@ public final class BalancePointGame extends ApplicationAdapter {
         rearBrake = approach(rearBrake, rearBrakeTarget,
                 (rearBrakeTarget > rearBrake ? 24f : 22f) * dt);
 
-        float steerResponse = 5.8f + Math.min(Math.abs(speed) * 0.035f, 1.4f);
-        steer += (steerTarget - steer) * Math.min(1f, dt * steerResponse);
+        // Input intent is immediate. The actual bars already have inertia,
+        // steering servo damping, and tire relaxation in Physics V3.
+        // An extra input low-pass filter made the controller feel disconnected.
+        steer = steerTarget;
 
         if (!looking) {
             lookYaw *= Math.max(0f, 1f - dt * 1.65f);
@@ -360,6 +402,8 @@ public final class BalancePointGame extends ApplicationAdapter {
     }
 
     private void startNewRide() {
+        diagnostics.stopReplay();
+        diagnostics.stopCapture();
         resetBike();
         hasActiveRide = true;
         gameState = GameState.PLAYING;
@@ -369,6 +413,8 @@ public final class BalancePointGame extends ApplicationAdapter {
     }
 
     private void restartRide() {
+        diagnostics.stopReplay();
+        diagnostics.stopCapture();
         resetBike();
         hasActiveRide = true;
         gameState = GameState.PLAYING;
@@ -401,6 +447,8 @@ public final class BalancePointGame extends ApplicationAdapter {
     }
 
     private void enterMainMenu() {
+        diagnostics.stopReplay();
+        diagnostics.stopCapture();
         gameState = GameState.MAIN_MENU;
         riderControlPointer = -1;
         throttleControlPointer = -1;
@@ -464,6 +512,22 @@ public final class BalancePointGame extends ApplicationAdapter {
                 pan, dist, rear, closing);
     }
 
+    private void saveDiagnostics() {
+        diagnostics.stopCapture();
+        if (!diagnostics.hasCapture()) {
+            physicsDevMenu.setStatus("NO CAPTURE TO EXPORT");
+            return;
+        }
+        try {
+            String filename = "BalancePoint-Capture-" + System.currentTimeMillis() + ".csv";
+            Gdx.files.local(filename).writeString(diagnostics.toCsv(), false, "UTF-8");
+            physicsDevMenu.setStatus("SAVED IN FILES: " + filename);
+        } catch (RuntimeException exception) {
+            Gdx.app.error("PhysicsDiagnostics", "CSV export failed", exception);
+            physicsDevMenu.setStatus("EXPORT FAILED: " + exception.getClass().getSimpleName());
+        }
+    }
+
     private static float approach(float value, float target, float amount) {
         if (value < target) return Math.min(value + amount, target);
         return Math.max(value - amount, target);
@@ -476,12 +540,32 @@ public final class BalancePointGame extends ApplicationAdapter {
         }
 
         PhysicsV3MultibodyPlant.Input v3Input = physicsV3.input();
-        v3Input.throttle = throttle;
-        v3Input.rearBrake = rearBrake;
-        // Player turn intent is handed to the live V3 steering controller.
-        v3Input.steer = steer;
-        v3Input.riderForeAft = riderLean;
+        boolean replayStep = diagnostics.replaying();
+        if (replayStep) {
+            if (!diagnostics.applyReplayInput(v3Input)) {
+                enterPause();
+                return;
+            }
+            diagnostics.applyReplayShift(physicsV3);
+            throttle = v3Input.throttle;
+            rearBrake = v3Input.rearBrake;
+            steer = v3Input.steer;
+            riderLean = riderLeanTarget = v3Input.riderForeAft;
+        } else {
+            v3Input.throttle = throttle;
+            v3Input.rearBrake = rearBrake;
+            v3Input.steer = steer;
+            // Keep input direct; the V3 generalized rider coordinate is damped
+            // by the physical mass-shift controller.
+            riderLean = riderLeanTarget;
+            v3Input.riderForeAft = riderLean;
+        }
         physicsV3.step(physicsV3Terrain, dt);
+        if (diagnostics.capturing()) {
+            diagnostics.capture(v3Input, physicsV3, pendingDiagnosticShift);
+            pendingDiagnosticShift = 0;
+        }
+        if (replayStep) diagnostics.compareReplayStep(physicsV3);
 
         // Dynamic state comes exclusively from the V3 plant. The Y conversion below is only
         // an imported-mesh origin adapter; it does not feed back into Physics V3.
@@ -501,7 +585,6 @@ public final class BalancePointGame extends ApplicationAdapter {
 
         // Presentation-only legacy values. They do not feed back into PhysicsV3MultibodyPlant.
         effectiveComForward = COM_FORWARD;
-        riderLean += (riderLeanTarget - riderLean) * Math.min(1f, dt * 6f);
         bikeY = chassisY - COM_HEIGHT;
 
         if (physicsV3.rearGrounded() && !frontGrounded && speed > 3f) {
@@ -510,6 +593,7 @@ public final class BalancePointGame extends ApplicationAdapter {
         } else if (frontGrounded) {
             wheelieTime = 0f;
         }
+        if (replayStep && !diagnostics.replaying()) enterPause();
     }
 
     private void beginCrash() {
@@ -595,6 +679,7 @@ public final class BalancePointGame extends ApplicationAdapter {
         if (gameCamera != null) gameCamera.resetRide();
         shiftDownHeld = shiftUpHeld = false;
         physicsV3.reset(physicsV3Terrain);
+        pendingDiagnosticShift = 0;
         frontGrounded = true;
         crashed = false;
         crashSettled = false;
@@ -617,7 +702,8 @@ public final class BalancePointGame extends ApplicationAdapter {
         state.terrainRoll = terrainRoll;
         state.wheelSpin = wheelSpin;
         state.speed = speed;
-        state.steer = steer;
+        // Drive fork visual from the REAL physics steering DOF, not filtered input.
+        state.physicsSteerAngle = physicsV3.steerAngle();
         state.riderLean = riderLean;
         state.rearSuspensionTravel = physicsV3.rearCompression() - 0.111f;
         state.frontSuspensionTravel = physicsV3.frontCompression() - 0.095f;
