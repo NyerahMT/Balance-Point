@@ -19,6 +19,8 @@ public final class PhysicsV3TurnReleaseTest {
 
     private static final class Response {
         float heldRoll;
+        float heldSteer;
+        float turnYawDelta;
         float releasePeakRoll;
         float latePeakRoll;
         float finalRoll;
@@ -29,7 +31,8 @@ public final class PhysicsV3TurnReleaseTest {
         int substantialReversals;
 
         String report() {
-            return "heldRoll=" + heldRoll + ", peak=" + releasePeakRoll
+            return "heldRoll=" + heldRoll + ", heldSteer=" + heldSteer
+                    + ", turnYawDelta=" + turnYawDelta + ", peak=" + releasePeakRoll
                     + ", latePeak=" + latePeakRoll
                     + ", finalRoll=" + finalRoll
                     + ", finalRollRate=" + finalRollRate
@@ -41,17 +44,29 @@ public final class PhysicsV3TurnReleaseTest {
     }
 
     private static Response driveAndRelease(float steerCommand) {
+        return driveAndRelease(steerCommand, 0.20f, 0.05f, 25f);
+    }
+
+    private static Response driveAndRelease(float steerCommand,
+                                            float counterP, float counterD,
+                                            float steerDamping) {
         FlatTerrain terrain = new FlatTerrain();
         PhysicsV3MultibodyPlant plant = new PhysicsV3MultibodyPlant();
         plant.reset(terrain);
+        plant.tuning().set(PhysicsTuning.COUNTER_KP, counterP);
+        plant.tuning().set(PhysicsTuning.COUNTER_KD, counterD);
+        plant.tuning().set(PhysicsTuning.STEER_KD, steerDamping);
         plant.input().throttle = 0.55f;
         for (int i = 0; i < 420; i++) plant.step(terrain, DT);
 
+        float yawBeforeTurn = plant.yaw();
         plant.input().steer = steerCommand;
-        for (int i = 0; i < 180; i++) plant.step(terrain, DT);
+        for (int i = 0; i < 240; i++) plant.step(terrain, DT);
 
         Response result = new Response();
         result.heldRoll = plant.roll();
+        result.heldSteer = plant.steerAngle();
+        result.turnYawDelta = plant.yaw() - yawBeforeTurn;
         plant.input().steer = 0f;
         float earlyMin = Float.POSITIVE_INFINITY;
         float earlyMax = Float.NEGATIVE_INFINITY;
@@ -91,7 +106,31 @@ public final class PhysicsV3TurnReleaseTest {
     @Test
     public void rightTurnReleaseSettlesRatherThanWeaving() {
         Response result = driveAndRelease(0.5f);
-        assertTrue("Right-turn response: " + result.report(),
+        String bestValid = "NONE";
+        float bestScore = Float.POSITIVE_INFINITY;
+        float[] kps = {0.20f, 0.40f, 0.55f, 0.70f, 0.85f, 1.10f};
+        float[] kds = {0f, 0.05f, 0.15f, 0.30f, 0.55f};
+        float[] steerDs = {15f, 25f, 35f};
+        for (float kp : kps) {
+            for (float kd : kds) {
+                for (float sd : steerDs) {
+                    Response trial = driveAndRelease(0.5f, kp, kd, sd);
+                    if (trial.heldRoll >= -0.05f
+                            || trial.heldSteer <= 0f
+                            || trial.turnYawDelta <= 0.015f) continue;
+                    float score = trial.substantialReversals * 5f
+                            + trial.latePeakRoll * 80f
+                            + Math.abs(trial.finalRollRate) * 10f
+                            + trial.lateRollRange * 5f;
+                    if (score < bestScore) {
+                        bestScore = score;
+                        bestValid = "kp=" + kp + " kd=" + kd + " servoD=" + sd
+                                + " score=" + score + ": " + trial.report();
+                    }
+                }
+            }
+        }
+        assertTrue("Right-turn response: " + result.report() + "; bestValid=" + bestValid,
                 Math.abs(result.heldRoll) > 0.05f
                 && result.latePeakRoll < 0.14f
                 && Math.abs(result.finalRollRate) < 0.25f
