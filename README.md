@@ -60,7 +60,9 @@ On Windows, use `gradlew.bat` instead of `./gradlew`.
 - `GameCamera` — menu, chase, and helmet-camera state and smoothing.
 - `GameHud` — touch controls, menu/HUD presentation, and overlay rendering.
 - `InstrumentDisplay` — in-world instrument display state and drawing.
-- `MotorcycleDrivetrain` — gearbox, clutch coupling, torque curve, and limiter behavior.
+- `PhysicsV3MultibodyPlant` — active handling, suspension, steering and rider dynamics.
+- `PhysicsV2Powertrain` — live RPM/gearbox implementation used by V3 (retained historical name).
+- `MotorcycleDrivetrain` / `MotorcycleSuspension` — tested legacy reference components, not active in gameplay.
 - `TerrainVisuals` — streamed terrain plus the shared render/collision surface and traction classification.
 - `EngineAudio` — procedural engine/exhaust audio synthesis and audio-thread ownership.
 - `DirtBikeMeshLoader` / `ViewerFaithfulDirtBikeLoader` — validated model loading and topology-derived steering rig.
