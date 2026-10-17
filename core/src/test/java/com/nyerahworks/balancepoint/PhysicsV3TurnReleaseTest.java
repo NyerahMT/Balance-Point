@@ -41,9 +41,18 @@ public final class PhysicsV3TurnReleaseTest {
     }
 
     private static Response driveAndRelease(float steerCommand) {
+        return driveAndRelease(steerCommand, 0.85f, 0.95f, 15f);
+    }
+
+    private static Response driveAndRelease(float steerCommand,
+                                            float counterP, float counterD,
+                                            float steerDamping) {
         FlatTerrain terrain = new FlatTerrain();
         PhysicsV3MultibodyPlant plant = new PhysicsV3MultibodyPlant();
         plant.reset(terrain);
+        plant.tuning().set(PhysicsTuning.COUNTER_KP, counterP);
+        plant.tuning().set(PhysicsTuning.COUNTER_KD, counterD);
+        plant.tuning().set(PhysicsTuning.STEER_KD, steerDamping);
         plant.input().throttle = 0.55f;
         for (int i = 0; i < 420; i++) plant.step(terrain, DT);
 
@@ -91,7 +100,29 @@ public final class PhysicsV3TurnReleaseTest {
     @Test
     public void rightTurnReleaseSettlesRatherThanWeaving() {
         Response result = driveAndRelease(0.5f);
-        assertTrue("Right-turn response: " + result.report(),
+        String best = "";
+        float bestScore = Float.POSITIVE_INFINITY;
+        float[] counterPs = {0.20f, 0.45f, 0.65f, 0.85f, 1.15f};
+        float[] counterDs = {0.05f, 0.20f, 0.45f, 0.70f, 0.95f};
+        float[] steerDs = {15f, 25f};
+        for (float kp : counterPs) {
+            for (float kd : counterDs) {
+                for (float sd : steerDs) {
+                    Response trial = driveAndRelease(0.5f, kp, kd, sd);
+                    if (Math.abs(trial.heldRoll) < 0.05f) continue;
+                    float score = trial.substantialReversals * 5f
+                            + trial.latePeakRoll * 80f
+                            + Math.abs(trial.finalRollRate) * 10f
+                            + trial.lateRollRange * 5f;
+                    if (score < bestScore) {
+                        bestScore = score;
+                        best = "best kp=" + kp + " kd=" + kd + " steerD=" + sd
+                                + " score=" + score + ": " + trial.report();
+                    }
+                }
+            }
+        }
+        assertTrue("Right-turn response: " + result.report() + "; " + best,
                 Math.abs(result.heldRoll) > 0.05f
                 && result.latePeakRoll < 0.14f
                 && Math.abs(result.finalRollRate) < 0.25f
