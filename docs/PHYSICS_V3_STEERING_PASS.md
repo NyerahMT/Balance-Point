@@ -10,3 +10,19 @@ Grounded behavior:
 - no artificial steering-head yaw kick is injected. Yaw comes from the front contact force.
 
 Airborne steering/attitude behavior is unchanged.
+
+## 2026-10-17 turn-release stability regression
+
+Turn-to-neutral regression tests exposed a sustained ~12-cycle roll weave over
+five seconds on both right and left releases. The previous short endpoint test
+could not see the intermediate oscillation. For the same deterministic turn,
+a parameter sweep found materially better decay with:
+- countersteer proportional gain: `0.85 → 0.20`
+- countersteer roll-rate gain: `0.95 → 0.05`
+- steer servo rate damping: `15 → 25`
+
+The candidate preserved a ~10° lean at held input and eliminated large
+post-release reversals in the diagnostic trial. Unit tests now protect
+**the full turn-to-neutral transient**, not just a final roll measurement.
+This is a controller calibration change, not a modified tire or suspension
+model. Real-device handling and slower/faster-speed tests are still required.

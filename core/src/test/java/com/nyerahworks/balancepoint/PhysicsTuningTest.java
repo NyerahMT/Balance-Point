@@ -8,11 +8,13 @@ import org.junit.Test;
 
 public final class PhysicsTuningTest {
     @Test
-    public void defaultsPreserveTheOriginalSteeringAndWheelieCoefficients() {
+    public void defaultsUseValidatedSteeringAndOriginalWheelieCoefficients() {
         PhysicsV3MultibodyPlant plant = new PhysicsV3MultibodyPlant();
         PhysicsTuning tuning = plant.tuning();
         assertEquals(46f, tuning.get(PhysicsTuning.STEER_KP), 0.0001f);
-        assertEquals(15f, tuning.get(PhysicsTuning.STEER_KD), 0.0001f);
+        assertEquals(25f, tuning.get(PhysicsTuning.STEER_KD), 0.0001f);
+        assertEquals(0.20f, tuning.get(PhysicsTuning.COUNTER_KP), 0.0001f);
+        assertEquals(0.05f, tuning.get(PhysicsTuning.COUNTER_KD), 0.0001f);
         assertEquals(160f, tuning.get(PhysicsTuning.BALANCE_KP), 0.0001f);
         assertEquals(520f, tuning.get(PhysicsTuning.CATCH_MAX), 0.0001f);
     }
