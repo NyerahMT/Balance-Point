@@ -90,6 +90,7 @@ public final class BalancePointGame extends ApplicationAdapter {
     private float wheelieTime;
     private float bestWheelieTime;
     private double physicsAccumulator;
+    private int pendingDiagnosticShift;
 
     private GameState gameState = GameState.MAIN_MENU;
     private boolean hasActiveRide;
@@ -175,6 +176,7 @@ public final class BalancePointGame extends ApplicationAdapter {
                 gameState = GameState.PAUSED;
             } else if (action == PhysicsDevMenu.RECORD) {
                 startNewRide();
+                pendingDiagnosticShift = 0;
                 diagnostics.startCapture(physicsV3.tuning());
             } else if (action == PhysicsDevMenu.SAVE) {
                 saveDiagnostics();
@@ -305,8 +307,14 @@ public final class BalancePointGame extends ApplicationAdapter {
         looking = lookTouch;
 
         if (!crashed) {
-            if (shiftUpTouch && !shiftUpHeld) physicsV3.shiftUp();
-            if (shiftDownTouch && !shiftDownHeld) physicsV3.shiftDown();
+            if (shiftUpTouch && !shiftUpHeld) {
+                physicsV3.shiftUp();
+                if (diagnostics.capturing()) pendingDiagnosticShift = 1;
+            }
+            if (shiftDownTouch && !shiftDownHeld) {
+                physicsV3.shiftDown();
+                if (diagnostics.capturing()) pendingDiagnosticShift = -1;
+            }
         }
         shiftUpHeld = shiftUpTouch;
         shiftDownHeld = shiftDownTouch;
@@ -534,6 +542,7 @@ public final class BalancePointGame extends ApplicationAdapter {
                 enterPause();
                 return;
             }
+            diagnostics.applyReplayShift(physicsV3);
             throttle = v3Input.throttle;
             rearBrake = v3Input.rearBrake;
             steer = v3Input.steer;
@@ -545,7 +554,10 @@ public final class BalancePointGame extends ApplicationAdapter {
             v3Input.riderForeAft = riderLean;
         }
         physicsV3.step(physicsV3Terrain, dt);
-        if (diagnostics.capturing()) diagnostics.capture(v3Input, physicsV3);
+        if (diagnostics.capturing()) {
+            diagnostics.capture(v3Input, physicsV3, pendingDiagnosticShift);
+            pendingDiagnosticShift = 0;
+        }
         if (replayStep) diagnostics.compareReplayStep(physicsV3);
 
         // Dynamic state comes exclusively from the V3 plant. The Y conversion below is only
@@ -661,6 +673,7 @@ public final class BalancePointGame extends ApplicationAdapter {
         if (gameCamera != null) gameCamera.resetRide();
         shiftDownHeld = shiftUpHeld = false;
         physicsV3.reset(physicsV3Terrain);
+        pendingDiagnosticShift = 0;
         frontGrounded = true;
         crashed = false;
         crashSettled = false;

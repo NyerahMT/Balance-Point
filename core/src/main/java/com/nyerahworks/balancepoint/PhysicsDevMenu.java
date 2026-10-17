@@ -116,6 +116,10 @@ final class PhysicsDevMenu {
             }
 
             int visible = PhysicsTuning.count(category, subcategory);
+            if (diagnostics.capturing()) {
+                status = "STOP/EXPORT BEFORE CHANGING TUNING";
+                return NONE;
+            }
             for (int i = 0; i < visible; i++) {
                 float sliderY = 0.70f - i * 0.17f;
                 if (inside(x, y, 0.60f, sliderY - 0.06f, 0.35f, 0.13f)) {
@@ -140,7 +144,7 @@ final class PhysicsDevMenu {
                 status = tuning.loadPreset(1) ? "PRESET B LOADED" : "SAVE B FIRST";
             }
         }
-        if (dragging >= 0 && Gdx.input.isTouched()) {
+        if (dragging >= 0 && Gdx.input.isTouched() && !diagnostics.capturing()) {
             setFromTouch(Gdx.input.getX() / width);
         }
         return NONE;

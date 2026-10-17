@@ -33,7 +33,8 @@ final class PhysicsDiagnostics {
             "wheelie_catch_nm",
             "front_grounded",
             "rear_grounded",
-            "engine_rpm"
+            "engine_rpm",
+            "shift_event"
     };
     private final float[][] values = new float[COLUMNS.length][MAX_FRAMES];
     private final float[] capturedParameters = new float[PhysicsTuning.PARAMETERS.length];
@@ -88,6 +89,11 @@ final class PhysicsDiagnostics {
     }
 
     void capture(PhysicsV3MultibodyPlant.Input input, PhysicsV3MultibodyPlant plant) {
+        capture(input, plant, 0);
+    }
+
+    void capture(PhysicsV3MultibodyPlant.Input input, PhysicsV3MultibodyPlant plant,
+                 int shiftEvent) {
         if (!capturing) return;
         if (frames == MAX_FRAMES) {
             capturing = false;
@@ -120,6 +126,7 @@ final class PhysicsDiagnostics {
         values[22][f] = t.frontGrounded ? 1f : 0f;
         values[23][f] = t.rearGrounded ? 1f : 0f;
         values[24][f] = t.engineRpm;
+        values[25][f] = shiftEvent;
         if (frames == MAX_FRAMES) capturing = false;
     }
 
@@ -145,6 +152,15 @@ final class PhysicsDiagnostics {
         out.steer = values[2][playback];
         out.riderForeAft = values[3][playback];
         return true;
+    }
+
+    void applyReplayShift(PhysicsV3MultibodyPlant plant) {
+        if (!replaying || playback >= frames) return;
+        if (values[25][playback] > 0.5f) {
+            plant.shiftUp();
+        } else if (values[25][playback] < -0.5f) {
+            plant.shiftDown();
+        }
     }
 
     void compareReplayStep(PhysicsV3MultibodyPlant plant) {

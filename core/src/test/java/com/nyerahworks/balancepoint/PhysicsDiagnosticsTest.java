@@ -49,6 +49,33 @@ public final class PhysicsDiagnosticsTest {
         assertTrue(diag.toCsv().contains("# frames,150"));
     }
 
+
+    @Test
+    public void shiftEventsAreReproducedDuringReplay() {
+        Flat ground = new Flat();
+        PhysicsV3MultibodyPlant bike = new PhysicsV3MultibodyPlant();
+        PhysicsDiagnostics recording = new PhysicsDiagnostics();
+        bike.reset(ground);
+        recording.startCapture(bike.tuning());
+        for (int i = 0; i < 100; i++) {
+            if (i == 30) bike.shiftUp();
+            bike.input().throttle = 0.50f;
+            bike.step(ground, PhysicsDiagnostics.FIXED_DT);
+            recording.capture(bike.input(), bike, i == 30 ? 1 : 0);
+        }
+        recording.stopCapture();
+        bike.reset(ground);
+        assertTrue(recording.startReplay());
+        while (recording.applyReplayInput(bike.input())) {
+            recording.applyReplayShift(bike);
+            bike.step(ground, PhysicsDiagnostics.FIXED_DT);
+            recording.compareReplayStep(bike);
+        }
+        assertTrue("shift replay drift: " + recording.maxPositionError(),
+                recording.maxPositionError() < 0.00001f);
+        assertTrue(recording.toCsv().contains("shift_event"));
+    }
+
     @Test
     public void emptyCaptureCannotReplay() {
         PhysicsDiagnostics d = new PhysicsDiagnostics();
