@@ -23,6 +23,8 @@ These are actual solver coefficients, not visual-only UI settings.
 - SAVE / LOAD A and B manage two comparison presets.
 - Active values and both presets persist in app preferences across restarts.
 - The menu pauses the ride so controls are not competing for touch inputs.
+- A read-only snapshot displays speed, front/rear contact load, roll angle,
+  steering angle, and both tire-utilization measurements from V3 telemetry.
 
 ## Testing and remaining work
 
@@ -30,6 +32,6 @@ These are actual solver coefficients, not visual-only UI settings.
 category lookup, and preset isolation. Mobile CI must pass before merging.
 Device testing is still needed for touch targets, layout and readability.
 
-Telemetry recordings and input replay, advanced tire/air parameters,
+Time-series telemetry recording and input replay, advanced tire/air parameters,
 individual parameter explanations, exportable config files, and actual
 release-build gating remain separate development tasks.

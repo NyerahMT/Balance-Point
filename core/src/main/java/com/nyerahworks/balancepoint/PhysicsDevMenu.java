@@ -15,6 +15,7 @@ import java.util.Locale;
  * not visual transforms or an unused legacy simulation.
  */
 final class PhysicsDevMenu {
+    private final PhysicsV3MultibodyPlant plant;
     private final PhysicsTuning tuning;
     private final Preferences preferences;
     private final OrthographicCamera camera = new OrthographicCamera();
@@ -27,8 +28,9 @@ final class PhysicsDevMenu {
     private int dragging = -1;
     private String status = "LIVE V3 TUNING";
 
-    PhysicsDevMenu(PhysicsTuning tuning) {
-        this.tuning = tuning;
+    PhysicsDevMenu(PhysicsV3MultibodyPlant plant) {
+        this.plant = plant;
+        this.tuning = plant.tuning();
         this.preferences = Gdx.app.getPreferences("balance-point-physics-dev");
         restoreSavedSettings();
     }
@@ -220,7 +222,21 @@ final class PhysicsDevMenu {
         label("SAVE B", width * 0.710f, height * 0.13f);
         label("LOAD B", width * 0.850f, height * 0.13f);
         font.setColor(1f, 1f, 1f, 0.65f);
-        label(status, width * 0.04f, height * 0.23f);
+        label(status, width * 0.04f, height * 0.29f);
+        PhysicsV3MultibodyPlant.Telemetry telemetry = plant.telemetry();
+        font.setColor(1f, 1f, 1f, 0.60f);
+        font.getData().setScale(Math.max(0.66f, height / 720f * 0.76f));
+        String loads = String.format(Locale.US,
+                "SPEED %.1f mph   FRONT LOAD %.0f N   REAR LOAD %.0f N",
+                plant.speed() * 2.23694f, telemetry.frontFz, telemetry.rearFz);
+        String stability = String.format(Locale.US,
+                "ROLL %.1f deg   STEER %.1f deg   TIRE USE F %.0f%% / R %.0f%%",
+                plant.roll() * MathUtils.radiansToDegrees,
+                plant.steerAngle() * MathUtils.radiansToDegrees,
+                telemetry.frontUtilization * 100f,
+                telemetry.rearUtilization * 100f);
+        label(loads, width * 0.04f, height * 0.248f);
+        label(stability, width * 0.04f, height * 0.205f);
         batch.end();
         Gdx.gl.glDisable(GL20.GL_BLEND);
         Gdx.gl.glEnable(GL20.GL_DEPTH_TEST);

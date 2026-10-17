@@ -99,7 +99,7 @@ public final class BalancePointGame extends ApplicationAdapter {
     public void create() {
         Gdx.graphics.setForegroundFPS(30);
         hud = new GameHud();
-        physicsDevMenu = new PhysicsDevMenu(physicsV3.tuning());
+        physicsDevMenu = new PhysicsDevMenu(physicsV3);
         instrumentDisplay = new InstrumentDisplay();
         scene = new GameScene(
                 instrumentDisplay, WHEELBASE, WHEEL_RADIUS, COM_FORWARD, COM_HEIGHT);
